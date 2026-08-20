@@ -1,0 +1,65 @@
+# Dependencies
+node_modules/
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Runtime files
+pids/
+*.pid
+*.seed
+*.pid.lock
+*.tsbuildinfo
+
+# Test and coverage output
+coverage/
+.nyc_output/
+test-results/
+
+# Build output and caches
+dist/
+build/
+out/
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.vite/
+
+# Local database and uploads
+*.sqlite
+*.sqlite3
+uploads/
+
+# OS files
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# IDE and editor files
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.swp
+*.swo
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.temp
