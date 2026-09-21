@@ -17,6 +17,7 @@ const options = {
     tags: [
       { name: 'Health', description: 'Server health check' },
       { name: 'Authentication', description: 'Register, login and current user' },
+      { name: 'Auth OTP', description: 'Email OTP registration and password flows' },
       { name: 'Users', description: 'Authenticated user resources' },
     ],
     components: {

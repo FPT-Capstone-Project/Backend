@@ -15,3 +15,40 @@ function me(req, res) {
 }
 
 module.exports = { register, login, me };
+
+async function registerOtp(req, res) {
+  const result = await authService.registerOtp(req.body);
+  res.json(result);
+}
+
+async function verifyRegistrationOtp(req, res) {
+  const result = await authService.verifyRegistrationOtp(req.body);
+  res.json(result);
+}
+
+async function forgotPassword(req, res) {
+  const result = await authService.forgotPassword(req.body);
+  res.json(result);
+}
+
+async function resetPasswordOtp(req, res) {
+  const result = await authService.resetPasswordOtp(req.body);
+  res.json(result);
+}
+
+async function requestChangePasswordOtp(req, res) {
+  const result = await authService.requestChangePasswordOtp(req.user.user_id);
+  res.json(result);
+}
+
+async function changePasswordOtp(req, res) {
+  const result = await authService.changePasswordOtp(req.user.user_id, req.body);
+  res.json(result);
+}
+
+module.exports.registerOtp = registerOtp;
+module.exports.verifyRegistrationOtp = verifyRegistrationOtp;
+module.exports.forgotPassword = forgotPassword;
+module.exports.resetPasswordOtp = resetPasswordOtp;
+module.exports.requestChangePasswordOtp = requestChangePasswordOtp;
+module.exports.changePasswordOtp = changePasswordOtp;
