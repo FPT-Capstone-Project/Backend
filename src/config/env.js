@@ -14,11 +14,11 @@ const env = {
   dbPassword: process.env.DB_PASSWORD || '',
   jwtSecret: process.env.JWT_SECRET || 'change-this-development-secret',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
-<<<<<<< HEAD
+
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || '',
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || '',
-=======
+
   smtpHost: process.env.SMTP_HOST || '',
   smtpPort: Number(process.env.SMTP_PORT || 587),
   smtpUser: process.env.SMTP_USER || '',
@@ -27,7 +27,7 @@ const env = {
   otpExpiryMinutes: Number(process.env.OTP_EXPIRY_MINUTES || 10),
   otpMaxAttempts: Number(process.env.OTP_MAX_ATTEMPTS || 5),
   otpResendCooldownSeconds: Number(process.env.OTP_RESEND_COOLDOWN_SECONDS || 60),
->>>>>>> origin/main
+
 };
 
 if (env.nodeEnv === 'production' && env.jwtSecret === 'change-this-development-secret') {
