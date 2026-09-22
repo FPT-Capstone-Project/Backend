@@ -14,6 +14,9 @@ const env = {
   dbPassword: process.env.DB_PASSWORD || '',
   jwtSecret: process.env.JWT_SECRET || 'change-this-development-secret',
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || '1d',
+  cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
+  cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || '',
+  cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || '',
 };
 
 if (env.nodeEnv === 'production' && env.jwtSecret === 'change-this-development-secret') {

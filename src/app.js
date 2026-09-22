@@ -20,6 +20,13 @@ app.use((req, res) => {
 
 app.use((error, req, res, next) => {
   const statusCode = error.statusCode || 500;
+
+  if (error && error.name === 'MulterError') {
+    return res.status(400).json({
+      message: error.code === 'LIMIT_FILE_SIZE' ? 'Image file size must be under 5MB' : error.message,
+    });
+  }
+
   if (statusCode >= 500) console.error(error);
   res.status(statusCode).json({
     message: error.isOperational ? error.message : 'Internal server error',
