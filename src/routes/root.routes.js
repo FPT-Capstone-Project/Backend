@@ -6,6 +6,7 @@ const mushroomConditionRoutes = require('./mushroomCondition.routes');
 const rentalPackageRoutes = require('./rentalPackage.routes');
 const cultivationRoomRoutes = require('./cultivationRoom.routes');
 const cultivationTrayRoutes = require('./cultivationTray.routes');
+const orderRoutes = require('./order.routes');
 
 const rootRouter = express.Router();
 
@@ -16,5 +17,6 @@ rootRouter.use('/mushroom-conditions', mushroomConditionRoutes);
 rootRouter.use('/rental-packages', rentalPackageRoutes);
 rootRouter.use('/cultivation-rooms', cultivationRoomRoutes);
 rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
+rootRouter.use('/orders', orderRoutes);
 
 module.exports = rootRouter;

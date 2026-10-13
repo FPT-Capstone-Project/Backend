@@ -179,8 +179,6 @@ CREATE TABLE mushroom_conditions (
 CREATE TABLE rental_packages (
     package_id SERIAL PRIMARY KEY,
 
-    mushroom_type_id INT NOT NULL,
-
     package_name VARCHAR(100) NOT NULL,
     description TEXT,
 
@@ -188,11 +186,6 @@ CREATE TABLE rental_packages (
     price NUMERIC(12,2) NOT NULL,
 
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
-
-    CONSTRAINT fk_rental_packages_mushroom
-        FOREIGN KEY (mushroom_type_id)
-        REFERENCES mushroom_types(mushroom_type_id)
-        ON DELETE RESTRICT,
 
     CONSTRAINT chk_package_duration
         CHECK (duration_days > 0),
@@ -288,6 +281,7 @@ CREATE TABLE orders (
     total_amount NUMERIC(12,2) NOT NULL DEFAULT 0,
 
     status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    payment_status VARCHAR(30) NOT NULL DEFAULT 'UNPAID',
 
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -313,6 +307,18 @@ CREATE TABLE orders (
                 'PROCESSING',
                 'COMPLETED',
                 'CANCELLED'
+            )
+        ),
+
+    CONSTRAINT chk_orders_payment_status
+        CHECK (
+            payment_status IN (
+                'UNPAID',
+                'PENDING',
+                'PAID',
+                'FAILED',
+                'REFUND_PENDING',
+                'REFUNDED'
             )
         )
 );
@@ -809,10 +815,6 @@ CREATE INDEX idx_role_permissions_permission_id
 -- MUSHROOM
 CREATE INDEX idx_mushroom_conditions_type
     ON mushroom_conditions(mushroom_type_id);
-
-
-CREATE INDEX idx_rental_packages_mushroom_type
-    ON rental_packages(mushroom_type_id);
 
 
 -- ROOMS / TRAYS

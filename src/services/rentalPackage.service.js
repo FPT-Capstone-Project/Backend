@@ -1,5 +1,4 @@
 const rentalPackageModel = require('../models/rentalPackage.model');
-const mushroomTypeModel = require('../models/mushroomType.model');
 const AppError = require('../utils/app-error');
 
 const VALID_STATUS = ['ACTIVE', 'INACTIVE'];
@@ -39,23 +38,14 @@ function normalizePackageName(value, fieldName = 'packageName') {
   return packageName;
 }
 
-async function ensureMushroomTypeExists(mushroomTypeId) {
-  const mushroomType = await mushroomTypeModel.findById(mushroomTypeId);
-  if (!mushroomType) throw new AppError('Mushroom type not found', 404);
-}
-
 async function getAllRentalPackages(filters = {}) {
   let status;
-  let mushroomTypeId;
 
   if (filters.status !== undefined && String(filters.status).trim() !== '') {
     status = normalizeStatus(filters.status);
   }
-  if (filters.mushroomTypeId !== undefined && String(filters.mushroomTypeId).trim() !== '') {
-    mushroomTypeId = parseId(filters.mushroomTypeId, 'mushroomTypeId');
-  }
 
-  return rentalPackageModel.findAll({ status, mushroomTypeId });
+  return rentalPackageModel.findAll({ status });
 }
 
 async function getRentalPackageById(packageId) {
@@ -66,7 +56,6 @@ async function getRentalPackageById(packageId) {
 }
 
 async function createRentalPackage(payload = {}) {
-  const mushroomTypeId = parseId(payload.mushroomTypeId ?? payload.mushroom_type_id, 'mushroomTypeId');
   const packageName = normalizePackageName(payload.packageName ?? payload.package_name);
   const description = payload.description == null || payload.description === ''
     ? null
@@ -75,8 +64,7 @@ async function createRentalPackage(payload = {}) {
   const price = parseNonNegativeNumber(payload.price, 'price');
   const status = normalizeStatus(payload.status ?? 'ACTIVE');
 
-  await ensureMushroomTypeExists(mushroomTypeId);
-  return rentalPackageModel.create({ mushroomTypeId, packageName, description, durationDays, price, status });
+  return rentalPackageModel.create({ packageName, description, durationDays, price, status });
 }
 
 async function updateRentalPackage(packageId, payload = {}) {
@@ -86,11 +74,6 @@ async function updateRentalPackage(packageId, payload = {}) {
   if (!payload || Object.keys(payload).length === 0) throw new AppError('No update data provided', 400);
 
   const updateData = {};
-  if (payload.mushroomTypeId !== undefined || payload.mushroom_type_id !== undefined) {
-    const mushroomTypeId = parseId(payload.mushroomTypeId ?? payload.mushroom_type_id, 'mushroomTypeId');
-    await ensureMushroomTypeExists(mushroomTypeId);
-    updateData.mushroom_type_id = mushroomTypeId;
-  }
   if (payload.packageName !== undefined || payload.package_name !== undefined) {
     updateData.package_name = normalizePackageName(payload.packageName ?? payload.package_name, 'packageName');
   }
