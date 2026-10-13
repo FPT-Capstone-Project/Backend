@@ -2,7 +2,6 @@ const pool = require('../config/db');
 
 const rentalPackageColumns = `
   package_id,
-  mushroom_type_id,
   package_name,
   description,
   duration_days,
@@ -10,18 +9,13 @@ const rentalPackageColumns = `
   status
 `;
 
-async function findAll({ status, mushroomTypeId } = {}) {
+async function findAll({ status } = {}) {
   const conditions = [];
   const params = [];
 
   if (status) {
     params.push(status);
     conditions.push(`status = $${params.length}`);
-  }
-
-  if (mushroomTypeId !== undefined && mushroomTypeId !== null) {
-    params.push(mushroomTypeId);
-    conditions.push(`mushroom_type_id = $${params.length}`);
   }
 
   let query = `SELECT ${rentalPackageColumns} FROM rental_packages`;
@@ -40,12 +34,12 @@ async function findById(packageId) {
   return result.rows[0] || null;
 }
 
-async function create({ mushroomTypeId, packageName, description, durationDays, price, status }) {
+async function create({ packageName, description, durationDays, price, status }) {
   const result = await pool.query(
-    `INSERT INTO rental_packages (mushroom_type_id, package_name, description, duration_days, price, status)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO rental_packages (package_name, description, duration_days, price, status)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING ${rentalPackageColumns}`,
-    [mushroomTypeId, packageName, description, durationDays, price, status],
+    [packageName, description, durationDays, price, status],
   );
   return result.rows[0];
 }

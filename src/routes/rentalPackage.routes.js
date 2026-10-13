@@ -18,10 +18,6 @@ const router = express.Router();
  *         schema:
  *           type: string
  *           enum: [ACTIVE, INACTIVE]
- *       - in: query
- *         name: mushroomTypeId
- *         schema:
- *           type: integer
  *     responses:
  *       200:
  *         description: Rental package list
@@ -71,8 +67,6 @@ router.get('/:id', authenticate, rentalPackageController.getById);
  *         description: Rental package created successfully
  *       400:
  *         description: Validation failed
- *       404:
- *         description: Mushroom type not found
  */
 router.post('/', authenticate, rentalPackageController.create);
 
@@ -102,7 +96,7 @@ router.post('/', authenticate, rentalPackageController.create);
  *       400:
  *         description: Validation failed
  *       404:
- *         description: Rental package or mushroom type not found
+ *         description: Rental package not found
  */
 router.put('/:id', authenticate, rentalPackageController.update);
 

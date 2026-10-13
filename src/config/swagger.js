@@ -24,6 +24,7 @@ const options = {
       { name: 'Rental Packages', description: 'CRUD for rental packages' },
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
+      { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
     ],
     components: {
       securitySchemes: {
@@ -108,7 +109,6 @@ const options = {
           type: 'object',
           properties: {
             package_id: { type: 'integer', example: 1 },
-            mushroom_type_id: { type: 'integer', example: 1 },
             package_name: { type: 'string', example: 'Standard 30-day package' },
             description: { type: 'string', nullable: true, example: 'Includes one cultivation tray' },
             duration_days: { type: 'integer', example: 30 },
@@ -118,9 +118,8 @@ const options = {
         },
         CreateRentalPackageRequest: {
           type: 'object',
-          required: ['mushroomTypeId', 'packageName', 'durationDays', 'price'],
+          required: ['packageName', 'durationDays', 'price'],
           properties: {
-            mushroomTypeId: { type: 'integer', example: 1 },
             packageName: { type: 'string', example: 'Standard 30-day package' },
             description: { type: 'string', example: 'Includes one cultivation tray' },
             durationDays: { type: 'integer', example: 30 },
@@ -131,12 +130,19 @@ const options = {
         UpdateRentalPackageRequest: {
           type: 'object',
           properties: {
-            mushroomTypeId: { type: 'integer', example: 1 },
             packageName: { type: 'string', example: 'Premium 30-day package' },
             description: { type: 'string', example: 'Updated package details' },
             durationDays: { type: 'integer', example: 30 },
             price: { type: 'number', example: 550000 },
             status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'INACTIVE' },
+          },
+        },
+        CreateRentalOrderRequest: {
+          type: 'object',
+          required: ['packageId', 'mushroomTypeId'],
+          properties: {
+            packageId: { type: 'integer', example: 1, description: 'Selected rental package ID' },
+            mushroomTypeId: { type: 'integer', example: 2, description: 'Selected mushroom type ID' },
           },
         },
         CultivationRoom: {

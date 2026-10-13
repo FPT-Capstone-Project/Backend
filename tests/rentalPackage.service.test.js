@@ -1,9 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-function loadService({ mushroomTypeExists = true, deleteError = null } = {}) {
+function loadService({ deleteError = null } = {}) {
   const packageModelPath = require.resolve('../src/models/rentalPackage.model');
-  const typeModelPath = require.resolve('../src/models/mushroomType.model');
   const servicePath = require.resolve('../src/services/rentalPackage.service');
 
   const packageModel = {
@@ -16,22 +15,15 @@ function loadService({ mushroomTypeExists = true, deleteError = null } = {}) {
       return { package_id: 1 };
     },
   };
-  const typeModel = {
-    findById: async () => (mushroomTypeExists ? { mushroom_type_id: 1 } : null),
-  };
-
   delete require.cache[packageModelPath];
-  delete require.cache[typeModelPath];
   delete require.cache[servicePath];
   require.cache[packageModelPath] = { exports: packageModel };
-  require.cache[typeModelPath] = { exports: typeModel };
   return require('../src/services/rentalPackage.service');
 }
 
-test('creates a rental package for an existing mushroom type', async () => {
+test('creates a rental package without a mushroom type dependency', async () => {
   const service = loadService();
   const result = await service.createRentalPackage({
-    mushroomTypeId: 1,
     packageName: ' Standard ',
     durationDays: 30,
     price: 500000,
@@ -42,18 +34,13 @@ test('creates a rental package for an existing mushroom type', async () => {
   assert.equal(result.status, 'ACTIVE');
 });
 
-test('rejects invalid duration and unknown mushroom type', async () => {
+test('rejects an invalid duration', async () => {
   const service = loadService();
   await assert.rejects(
-    () => service.createRentalPackage({ mushroomTypeId: 1, packageName: 'Standard', durationDays: 0, price: 1 }),
+    () => service.createRentalPackage({ packageName: 'Standard', durationDays: 0, price: 1 }),
     { statusCode: 400 },
   );
 
-  const missingTypeService = loadService({ mushroomTypeExists: false });
-  await assert.rejects(
-    () => missingTypeService.createRentalPackage({ mushroomTypeId: 1, packageName: 'Standard', durationDays: 30, price: 1 }),
-    { statusCode: 404, message: 'Mushroom type not found' },
-  );
 });
 
 test('returns conflict when deleting a package referenced by an order or rental', async () => {
