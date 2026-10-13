@@ -28,6 +28,12 @@ const env = {
   otpMaxAttempts: Number(process.env.OTP_MAX_ATTEMPTS || 5),
   otpResendCooldownSeconds: Number(process.env.OTP_RESEND_COOLDOWN_SECONDS || 60),
 
+  sepayBankCode: process.env.SEPAY_BANK_CODE || '',
+  sepayAccountNumber: process.env.SEPAY_ACCOUNT_NUMBER || '',
+  sepayQrTemplate: process.env.SEPAY_QR_TEMPLATE || 'compact',
+  sepayWebhookSecret: process.env.SEPAY_WEBHOOK_SECRET || '',
+  sepayWebhookMaxAgeSeconds: Number(process.env.SEPAY_WEBHOOK_MAX_AGE_SECONDS || 300),
+
 };
 
 if (env.nodeEnv === 'production' && env.jwtSecret === 'change-this-development-secret') {

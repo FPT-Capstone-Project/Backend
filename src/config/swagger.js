@@ -25,6 +25,7 @@ const options = {
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
       { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
+      { name: 'Payments', description: 'SePay QR payments for customer orders' },
     ],
     components: {
       securitySchemes: {
@@ -143,6 +144,26 @@ const options = {
           properties: {
             packageId: { type: 'integer', example: 1, description: 'Selected rental package ID' },
             mushroomTypeId: { type: 'integer', example: 2, description: 'Selected mushroom type ID' },
+          },
+        },
+        SepayQrPaymentResponse: {
+          type: 'object',
+          properties: {
+            message: { type: 'string', example: 'SePay payment QR created successfully' },
+            data: {
+              type: 'object',
+              properties: {
+                payment_id: { type: 'integer', example: 34 },
+                order_id: { type: 'integer', example: 12 },
+                amount: { type: 'integer', example: 530000 },
+                payment_method: { type: 'string', example: 'SEPAY_QR' },
+                payment_status: { type: 'string', example: 'PENDING' },
+                payment_code: { type: 'string', example: 'SP12P34' },
+                bank_code: { type: 'string', example: 'MB' },
+                account_number: { type: 'string', example: '0123456789' },
+                qr_url: { type: 'string', format: 'uri', example: 'https://vietqr.app/img?acc=0123456789&bank=MB&amount=530000&des=SP12P34&template=compact' },
+              },
+            },
           },
         },
         CultivationRoom: {

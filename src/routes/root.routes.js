@@ -7,6 +7,7 @@ const rentalPackageRoutes = require('./rentalPackage.routes');
 const cultivationRoomRoutes = require('./cultivationRoom.routes');
 const cultivationTrayRoutes = require('./cultivationTray.routes');
 const orderRoutes = require('./order.routes');
+const paymentRoutes = require('./payment.routes');
 
 const rootRouter = express.Router();
 
@@ -18,5 +19,6 @@ rootRouter.use('/rental-packages', rentalPackageRoutes);
 rootRouter.use('/cultivation-rooms', cultivationRoomRoutes);
 rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
 rootRouter.use('/orders', orderRoutes);
+rootRouter.use('/payments', paymentRoutes);
 
 module.exports = rootRouter;
