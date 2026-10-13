@@ -98,6 +98,14 @@ router.get('/:id', authenticate, mushroomConditionController.getById);
  *         description: Missing or invalid JWT token
  *       404:
  *         description: Mushroom type not found
+ *       409:
+ *         description: This mushroom type already has a condition. Each mushroom type can only have one condition.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: Nấm này đã có condition rồi
  */
 router.post('/', authenticate, mushroomConditionController.create);
 
@@ -139,6 +147,14 @@ router.post('/', authenticate, mushroomConditionController.create);
  *         description: Missing or invalid JWT token
  *       404:
  *         description: Mushroom condition not found
+ *       409:
+ *         description: Cannot assign this condition to a mushroom type that already has a condition.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               message: Nấm này đã có condition rồi
  */
 router.put('/:id', authenticate, mushroomConditionController.update);
 

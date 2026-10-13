@@ -31,6 +31,16 @@ function validateRange(minValue, maxValue, fieldLabel) {
   }
 }
 
+async function ensureSingleConditionPerMushroomType(mushroomTypeId, ignoreConditionId = null) {
+  const existingConditions = await mushroomConditionModel.findByMushroomTypeId(mushroomTypeId);
+
+  const hasOtherCondition = existingConditions.some((condition) => String(condition.condition_id) !== String(ignoreConditionId));
+
+  if (hasOtherCondition) {
+    throw new AppError('Nấm này đã có condition rồi', 409);
+  }
+}
+
 function buildRangeUpdate(payload, fieldPrefix) {
   const minKey = `${fieldPrefix}Min`;
   const maxKey = `${fieldPrefix}Max`;
@@ -75,6 +85,8 @@ async function createMushroomCondition(payload = {}) {
     throw new AppError('Mushroom type not found', 404);
   }
 
+  await ensureSingleConditionPerMushroomType(mushroomTypeId);
+
   const data = {
     mushroomTypeId,
     temperatureMin: parseNullableNumber(payload.temperatureMin ?? payload.temperature_min, 'temperatureMin'),
@@ -117,6 +129,7 @@ async function updateMushroomCondition(conditionId, payload = {}) {
       throw new AppError('Mushroom type not found', 404);
     }
 
+    await ensureSingleConditionPerMushroomType(mushroomTypeId, id);
     updateData.mushroom_type_id = mushroomTypeId;
   }
 

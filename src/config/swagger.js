@@ -21,6 +21,9 @@ const options = {
       { name: 'Users', description: 'Authenticated user resources' },
       { name: 'Mushroom Types', description: 'CRUD for mushroom types catalog' },
       { name: 'Mushroom Conditions', description: 'CRUD for mushroom growth conditions per mushroom type' },
+      { name: 'Rental Packages', description: 'CRUD for rental packages' },
+      { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
+      { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
     ],
     components: {
       securitySchemes: {
@@ -101,6 +104,106 @@ const options = {
             status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'INACTIVE' },
           },
         },
+        RentalPackage: {
+          type: 'object',
+          properties: {
+            package_id: { type: 'integer', example: 1 },
+            mushroom_type_id: { type: 'integer', example: 1 },
+            package_name: { type: 'string', example: 'Standard 30-day package' },
+            description: { type: 'string', nullable: true, example: 'Includes one cultivation tray' },
+            duration_days: { type: 'integer', example: 30 },
+            price: { type: 'number', format: 'double', example: 500000 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'ACTIVE' },
+          },
+        },
+        CreateRentalPackageRequest: {
+          type: 'object',
+          required: ['mushroomTypeId', 'packageName', 'durationDays', 'price'],
+          properties: {
+            mushroomTypeId: { type: 'integer', example: 1 },
+            packageName: { type: 'string', example: 'Standard 30-day package' },
+            description: { type: 'string', example: 'Includes one cultivation tray' },
+            durationDays: { type: 'integer', example: 30 },
+            price: { type: 'number', example: 500000 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'ACTIVE' },
+          },
+        },
+        UpdateRentalPackageRequest: {
+          type: 'object',
+          properties: {
+            mushroomTypeId: { type: 'integer', example: 1 },
+            packageName: { type: 'string', example: 'Premium 30-day package' },
+            description: { type: 'string', example: 'Updated package details' },
+            durationDays: { type: 'integer', example: 30 },
+            price: { type: 'number', example: 550000 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'INACTIVE' },
+          },
+        },
+        CultivationRoom: {
+          type: 'object',
+          properties: {
+            room_id: { type: 'integer', example: 1 },
+            room_code: { type: 'string', example: 'ROOM-01' },
+            room_name: { type: 'string', example: 'Growing room 1' },
+            description: { type: 'string', nullable: true, example: 'Main cultivation room' },
+            capacity: { type: 'integer', example: 20 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'MAINTENANCE'], example: 'ACTIVE' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateCultivationRoomRequest: {
+          type: 'object',
+          required: ['roomCode', 'roomName'],
+          properties: {
+            roomCode: { type: 'string', example: 'ROOM-01' },
+            roomName: { type: 'string', example: 'Growing room 1' },
+            description: { type: 'string', example: 'Main cultivation room' },
+            capacity: { type: 'integer', example: 20 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'MAINTENANCE'], example: 'ACTIVE' },
+          },
+        },
+        UpdateCultivationRoomRequest: {
+          type: 'object',
+          properties: {
+            roomCode: { type: 'string', example: 'ROOM-01' },
+            roomName: { type: 'string', example: 'Growing room 1' },
+            description: { type: 'string', nullable: true },
+            capacity: { type: 'integer', example: 24 },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'MAINTENANCE'] },
+          },
+        },
+        CultivationTray: {
+          type: 'object',
+          properties: {
+            tray_id: { type: 'integer', example: 1 },
+            room_id: { type: 'integer', example: 1 },
+            tray_code: { type: 'string', example: 'TRAY-01' },
+            tray_name: { type: 'string', nullable: true, example: 'Rack A, level 1' },
+            status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'], example: 'AVAILABLE' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateCultivationTrayRequest: {
+          type: 'object',
+          required: ['roomId', 'trayCode'],
+          properties: {
+            roomId: { type: 'integer', example: 1 },
+            trayCode: { type: 'string', example: 'TRAY-01' },
+            trayName: { type: 'string', example: 'Rack A, level 1' },
+            status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'], example: 'AVAILABLE' },
+          },
+        },
+        UpdateCultivationTrayRequest: {
+          type: 'object',
+          properties: {
+            roomId: { type: 'integer', example: 1 },
+            trayCode: { type: 'string', example: 'TRAY-01' },
+            trayName: { type: 'string', nullable: true },
+            status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'] },
+          },
+        },
         MushroomCondition: {
           type: 'object',
           properties: {
@@ -158,7 +261,11 @@ const options = {
         Error: {
           type: 'object',
           properties: {
-            message: { type: 'string', example: 'Invalid email or password' },
+            message: {
+              type: 'string',
+              example: 'Nấm này đã có condition rồi',
+              description: 'Business validation error. Each mushroom type can only have one condition.',
+            },
           },
         },
       },
