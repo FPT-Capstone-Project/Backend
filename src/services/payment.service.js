@@ -112,6 +112,28 @@ async function createSepayQrPayment(userId, orderId) {
   };
 }
 
+async function getSepayPaymentStatus(userId, orderId) {
+  const customerId = parseId(userId, 'userId');
+  const id = parseId(orderId, 'orderId');
+  const result = await paymentModel.findSepayPaymentStatus(id, customerId);
+
+  if (!result || !result.order) throw new AppError('Order not found', 404);
+  if (!result.payment) throw new AppError('Payment not found for this order', 404);
+
+  const amount = Number(result.payment.amount);
+  if (!Number.isFinite(amount) || amount < 0) {
+    throw new AppError('Payment amount is invalid', 500);
+  }
+
+  return {
+    orderId: result.order.order_id,
+    orderStatus: result.order.status,
+    paymentStatus: result.payment.status,
+    paymentCode: result.payment.transaction_code,
+    amount,
+  };
+}
+
 async function handleSepayWebhook({ rawBody, signature, timestamp }) {
   verifyWebhookSignature(rawBody, signature, timestamp);
   const payload = parseWebhookPayload(rawBody);
@@ -130,5 +152,6 @@ async function handleSepayWebhook({ rawBody, signature, timestamp }) {
 
 module.exports = {
   createSepayQrPayment,
+  getSepayPaymentStatus,
   handleSepayWebhook,
 };

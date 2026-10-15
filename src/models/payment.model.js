@@ -38,8 +38,8 @@ async function createOrGetSepayPayment(orderId, userId) {
     const order = orderResult.rows[0];
 
     if (!order) throw new AppError('Order not found', 404);
-    if (order.status !== 'PENDING') throw new AppError('Only pending orders can be paid', 409);
     if (order.payment_status === 'PAID') throw new AppError('Order has already been paid', 409);
+    if (order.status !== 'PENDING') throw new AppError('Only pending orders can be paid', 409);
     if (!['UNPAID', 'PENDING', 'FAILED'].includes(order.payment_status)) {
       throw new AppError('Order is not eligible for payment', 409);
     }
@@ -121,7 +121,8 @@ async function markSepayPaymentAsPaid(paymentCode, transferAmount) {
       payment.status !== 'PENDING'
       || payment.order_status !== 'PENDING'
       || payment.order_payment_status === 'PAID'
-      || Number(payment.amount) !== transferAmount
+      || !Number.isSafeInteger(transferAmount)
+      || transferAmount < Number(payment.amount)
     ) {
       await client.query('COMMIT');
       return null;
@@ -143,7 +144,7 @@ async function markSepayPaymentAsPaid(paymentCode, transferAmount) {
 
     await client.query(
       `UPDATE orders
-       SET payment_status = 'PAID'
+       SET payment_status = 'PAID', status = 'PAID'
        WHERE order_id = $1`,
       [payment.order_id],
     );
@@ -158,8 +159,37 @@ async function markSepayPaymentAsPaid(paymentCode, transferAmount) {
   }
 }
 
+async function findSepayPaymentStatus(orderId, userId) {
+  const orderResult = await pool.query(
+    `SELECT order_id, status, payment_status, total_amount
+     FROM orders
+     WHERE order_id = $1 AND user_id = $2
+     LIMIT 1`,
+    [orderId, userId],
+  );
+  const order = orderResult.rows[0] || null;
+
+  if (!order) return { order: null, payment: null };
+
+  const paymentResult = await pool.query(
+    `SELECT payment_id, order_id, amount, payment_method,
+            transaction_code, status, paid_at
+     FROM payments
+     WHERE order_id = $1 AND payment_method = $2
+     ORDER BY payment_id DESC
+     LIMIT 1`,
+    [orderId, SEPAY_PAYMENT_METHOD],
+  );
+
+  return {
+    order,
+    payment: paymentResult.rows[0] || null,
+  };
+}
+
 module.exports = {
   SEPAY_PAYMENT_METHOD,
   createOrGetSepayPayment,
   markSepayPaymentAsPaid,
+  findSepayPaymentStatus,
 };

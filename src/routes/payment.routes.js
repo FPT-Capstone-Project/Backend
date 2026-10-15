@@ -6,6 +6,65 @@ const router = express.Router();
 
 /**
  * @openapi
+ * /api/payments/orders/{orderId}/status:
+ *   get:
+ *     tags: [Payments]
+ *     summary: Get the current payment status for an order
+ *     description: Reads the authenticated customer's order and its SePay payment from the database. This endpoint never changes payment or order state.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         description: ID of the order owned by the authenticated customer
+ *         schema:
+ *           type: integer
+ *           example: 12
+ *     responses:
+ *       200:
+ *         description: Current order and payment status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/PaymentStatusResponse'
+ *             example:
+ *               success: true
+ *               data:
+ *                 orderId: 12
+ *                 orderStatus: PENDING
+ *                 paymentStatus: PENDING
+ *                 paymentCode: SP12P34
+ *                 amount: 530000
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: Order or payment not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: Order not found
+ *             examples:
+ *               orderNotFound:
+ *                 value:
+ *                   success: false
+ *                   message: Order not found
+ *               paymentNotFound:
+ *                 value:
+ *                   success: false
+ *                   message: Payment not found for this order
+ */
+router.get('/orders/:orderId/status', authenticate, paymentController.getSepayPaymentStatus);
+
+/**
+ * @openapi
  * /api/payments/orders/{orderId}/sepay-qr:
  *   post:
  *     tags: [Payments]

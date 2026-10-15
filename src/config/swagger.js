@@ -166,6 +166,24 @@ const options = {
             },
           },
         },
+        PaymentStatusResponse: {
+          type: 'object',
+          required: ['success', 'data'],
+          properties: {
+            success: { type: 'boolean', example: true },
+            data: {
+              type: 'object',
+              required: ['orderId', 'orderStatus', 'paymentStatus', 'paymentCode', 'amount'],
+              properties: {
+                orderId: { type: 'integer', example: 12 },
+                orderStatus: { type: 'string', example: 'PENDING' },
+                paymentStatus: { type: 'string', example: 'PENDING' },
+                paymentCode: { type: 'string', example: 'SP12P34' },
+                amount: { type: 'number', example: 530000 },
+              },
+            },
+          },
+        },
         CultivationRoom: {
           type: 'object',
           properties: {
