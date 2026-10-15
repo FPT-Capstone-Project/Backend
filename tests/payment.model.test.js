@@ -88,6 +88,7 @@ function loadPaymentModel() {
 
       if (statement.startsWith("UPDATE orders SET payment_status = 'PAID'")) {
         state.order.payment_status = 'PAID';
+        state.order.status = 'PAID';
         state.orderPaidUpdates += 1;
         return { rows: [] };
       }
@@ -97,7 +98,28 @@ function loadPaymentModel() {
     release: () => {},
   };
 
-  const pool = { connect: async () => client };
+  const pool = {
+    connect: async () => client,
+    query: async (query, values = []) => {
+      const statement = query.trim().replace(/\s+/g, ' ');
+      statements.push({ statement, values });
+
+      if (statement.startsWith('SELECT order_id, status, payment_status, total_amount')) {
+        return {
+          rows: values[0] === state.order.order_id && values[1] === state.order.user_id ? [state.order] : [],
+        };
+      }
+
+      if (statement.startsWith('SELECT payment_id, order_id, amount, payment_method,')) {
+        const found = state.payment
+          && state.payment.order_id === values[0]
+          && state.payment.payment_method === values[1];
+        return { rows: found ? [state.payment] : [] };
+      }
+
+      throw new Error(`Unexpected SQL: ${statement}`);
+    },
+  };
   delete require.cache[dbPath];
   delete require.cache[modelPath];
   require.cache[dbPath] = { exports: pool };
@@ -118,17 +140,61 @@ test('creates one reusable pending SePay payment for an owned order', async () =
   assert.equal(state.order.payment_status, 'PENDING');
 });
 
-test('marks a matching SePay payment paid exactly once when its webhook is retried', async () => {
+test('marks a matching SePay payment paid exactly once, including an overpayment', async () => {
   const { model, state, statements } = loadPaymentModel();
   await model.createOrGetSepayPayment(11, 3);
 
-  const first = await model.markSepayPaymentAsPaid('SP11P21', 530000);
-  const replay = await model.markSepayPaymentAsPaid('SP11P21', 530000);
+  const first = await model.markSepayPaymentAsPaid('SP11P21', 530001);
+  const replay = await model.markSepayPaymentAsPaid('SP11P21', 530001);
 
   assert.equal(first.status, 'PAID');
   assert.equal(replay.status, 'PAID');
   assert.equal(state.paymentPaidUpdates, 1);
   assert.equal(state.orderPaidUpdates, 1);
   assert.equal(state.order.payment_status, 'PAID');
+  assert.equal(state.order.status, 'PAID');
+  assert.ok(statements.some(({ statement }) => statement.includes("status = 'PAID'")));
   assert.ok(statements.some(({ statement }) => statement.includes('FOR UPDATE OF p, o')));
+});
+
+test('reads only the owned order payment and reflects a webhook payment update', async () => {
+  const { model, state, statements } = loadPaymentModel();
+
+  const withoutPayment = await model.findSepayPaymentStatus(11, 3);
+  assert.equal(withoutPayment.order.order_id, 11);
+  assert.equal(withoutPayment.payment, null);
+  assert.deepEqual(await model.findSepayPaymentStatus(11, 4), { order: null, payment: null });
+
+  await model.createOrGetSepayPayment(11, 3);
+  const pending = await model.findSepayPaymentStatus(11, 3);
+  const stateBeforePolling = {
+    paymentInserts: state.paymentInserts,
+    paymentPaidUpdates: state.paymentPaidUpdates,
+    orderPaidUpdates: state.orderPaidUpdates,
+    paymentStatus: state.payment.status,
+    orderStatus: state.order.status,
+  };
+  await model.findSepayPaymentStatus(11, 3);
+  await model.findSepayPaymentStatus(11, 3);
+
+  assert.equal(pending.order.status, 'PENDING');
+  assert.equal(pending.payment.status, 'PENDING');
+  assert.deepEqual({
+    paymentInserts: state.paymentInserts,
+    paymentPaidUpdates: state.paymentPaidUpdates,
+    orderPaidUpdates: state.orderPaidUpdates,
+    paymentStatus: state.payment.status,
+    orderStatus: state.order.status,
+  }, stateBeforePolling);
+
+  await model.markSepayPaymentAsPaid('SP11P21', 530000);
+  const paid = await model.findSepayPaymentStatus(11, 3);
+
+  assert.equal(paid.order.status, 'PAID');
+  assert.equal(paid.payment.status, 'PAID');
+  assert.ok(statements.some(({ statement, values }) => (
+    statement.includes('WHERE order_id = $1 AND user_id = $2')
+    && values[0] === 11
+    && values[1] === 3
+  )));
 });

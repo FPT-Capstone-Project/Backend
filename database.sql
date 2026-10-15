@@ -303,6 +303,7 @@ CREATE TABLE orders (
         CHECK (
             status IN (
                 'PENDING',
+                'PAID',
                 'CONFIRMED',
                 'PROCESSING',
                 'COMPLETED',
