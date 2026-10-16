@@ -1,4 +1,4 @@
-require('dotenv').config({ override: true });
+require('dotenv').config();
 process.env.TZ = 'Asia/Ho_Chi_Minh';
 
 const app = require('./app');
