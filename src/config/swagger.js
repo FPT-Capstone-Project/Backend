@@ -333,4 +333,9 @@ const options = {
   apis: ['src/routes/*.js'],
 };
 
-module.exports = swaggerJSDoc(options);
+const specification = swaggerJSDoc(options);
+const iot = require('./iot-swagger');
+Object.assign(specification.components.schemas, iot.schemas);
+Object.assign(specification.paths, iot.paths);
+specification.tags.push({ name: 'IoT', description: 'SmartMush telemetry and manual SSR commands' });
+module.exports = specification;
