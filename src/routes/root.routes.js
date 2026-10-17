@@ -20,5 +20,6 @@ rootRouter.use('/cultivation-rooms', cultivationRoomRoutes);
 rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
 rootRouter.use('/orders', orderRoutes);
 rootRouter.use('/payments', paymentRoutes);
+rootRouter.use('/iot', require('./iot.routes'));
 
 module.exports = rootRouter;
