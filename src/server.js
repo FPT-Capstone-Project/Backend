@@ -5,8 +5,10 @@ const app = require('./app');
 const env = require('./config/env');
 const iotMqtt = require('./services/iotMqtt.service');
 const pool = require('./config/db');
+const autoMisting = require('./services/autoMisting.worker');
 // One MQTT connection per process; importing Express does not open a connection.
 iotMqtt.start();
+autoMisting.start();
 const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const server = app.listen(env.port, () => {
@@ -28,6 +30,7 @@ async function shutdown(signal) {
   const deadline = setTimeout(() => process.exit(1), 10000);
   deadline.unref();
   try {
+    await autoMisting.stop();
     await Promise.all([
       new Promise((resolve) => server.close(resolve)),
       iotMqtt.stop(),

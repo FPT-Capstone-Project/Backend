@@ -9,7 +9,8 @@ async function transaction(work, diagnostics) {
     if (diagnostics) trace(diagnostics.logger, event, { ...diagnostics.context, ...fields });
   };
   if (diagnostics) log('ssr.db.pool.wait', { total: pool.totalCount, idle: pool.idleCount, waiting: pool.waitingCount });
-  const client = await pool.connect();
+  const inherited = require('./autoMisting.model').currentConnection();
+  const client = inherited || await pool.connect();
   log('ssr.db.pool.acquired', { poolWaitMs: performance.now() - started });
   const db = diagnostics ? { query: async (sql, values) => {
     const queryStarted = performance.now();
@@ -27,7 +28,7 @@ async function transaction(work, diagnostics) {
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
-  } finally { client.release(); }
+  } finally { if (!inherited) client.release(); }
 }
 
 const masterColumns = `id, master_identifier AS "masterId", cultivation_room_id AS "cultivationRoomId",
@@ -44,7 +45,7 @@ async function findMasters() {
   return (await pool.query(`SELECT ${masterColumns} FROM iot_masters ORDER BY master_identifier`)).rows;
 }
 async function findMaster(identifier) {
-  return (await pool.query(`SELECT ${masterColumns} FROM iot_masters WHERE master_identifier=$1`, [identifier])).rows[0];
+  return (await (require('./autoMisting.model').currentConnection() || pool).query(`SELECT ${masterColumns} FROM iot_masters WHERE master_identifier=$1`, [identifier])).rows[0];
 }
 async function findSensors(id) {
   return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest WHERE master_id=$1
@@ -74,6 +75,33 @@ async function findSsr(id) {
 // Serialize transactions per master across ingestion lanes. Timestamp guards below
 // preserve latest values when SSR overtakes telemetry; last_seen_at uses GREATEST.
 async function receive(message, receivedAt, retained, diagnostics) {
+  if (message.type === 'sensor') {
+    // One atomic statement instead of six sequential database round trips per
+    // reading. Preserve every history sample and the original MQTT arrival time.
+    const db = require('./autoMisting.model').currentConnection() || pool;
+    const result = await db.query(`WITH master AS (
+      UPDATE iot_masters SET last_seen_at=CASE WHEN $8::boolean THEN last_seen_at
+        ELSE GREATEST(last_seen_at,$7::timestamptz) END, updated_at=now()
+      WHERE master_identifier=$1 RETURNING id
+    ), reading AS (
+      INSERT INTO iot_sensor_readings(master_id,node_address,sensor_address,temperature,humidity,is_valid,received_at,retained)
+      SELECT id,$2,$3,$4,$5,$6,$7,$8 FROM master
+      RETURNING master_id,node_address,sensor_address,temperature,humidity,is_valid,received_at,retained
+    ), latest AS (
+      INSERT INTO iot_sensor_latest(master_id,node_address,sensor_address,temperature,humidity,is_valid,last_received_at,last_valid_at,retained)
+      SELECT master_id,node_address,sensor_address,temperature,humidity,is_valid,received_at,
+        CASE WHEN is_valid THEN received_at ELSE NULL END,retained FROM reading
+      ON CONFLICT (master_id,node_address,sensor_address) DO UPDATE SET
+        temperature=CASE WHEN EXCLUDED.is_valid THEN EXCLUDED.temperature ELSE iot_sensor_latest.temperature END,
+        humidity=CASE WHEN EXCLUDED.is_valid THEN EXCLUDED.humidity ELSE iot_sensor_latest.humidity END,
+        is_valid=EXCLUDED.is_valid, last_received_at=EXCLUDED.last_received_at,
+        last_valid_at=COALESCE(EXCLUDED.last_valid_at,iot_sensor_latest.last_valid_at), retained=EXCLUDED.retained
+      WHERE iot_sensor_latest.last_received_at <= EXCLUDED.last_received_at
+      RETURNING master_id
+    ) SELECT id FROM master`,
+    [message.master, message.node, message.sensor, message.temperature, message.humidity, message.ok, receivedAt, retained]);
+    return result.rows.length > 0;
+  }
   return transaction(async (db) => {
     const master = (await db.query('SELECT id FROM iot_masters WHERE master_identifier=$1 FOR UPDATE', [message.master])).rows[0];
     if (!master) return false; // Devices are provisioned explicitly, never by untrusted MQTT traffic.
@@ -90,18 +118,6 @@ async function receive(message, receivedAt, retained, diagnostics) {
         reported_retained=EXCLUDED.reported_retained, updated_at=now()
         WHERE iot_ssr_states.state_reported_at IS NULL OR iot_ssr_states.state_reported_at <= EXCLUDED.state_reported_at`,
       [master.id, message.channel, message.state, receivedAt, retained]);
-    } else {
-      const values = [master.id, message.node, message.sensor, message.temperature, message.humidity, message.ok, receivedAt, retained];
-      await db.query(`INSERT INTO iot_sensor_readings(master_id,node_address,sensor_address,temperature,humidity,is_valid,received_at,retained)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`, values);
-      await db.query(`INSERT INTO iot_sensor_latest(master_id,node_address,sensor_address,temperature,humidity,is_valid,last_received_at,last_valid_at,retained)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6 THEN $7::timestamptz ELSE NULL END,$8)
-        ON CONFLICT (master_id,node_address,sensor_address) DO UPDATE SET
-        temperature=CASE WHEN EXCLUDED.is_valid THEN EXCLUDED.temperature ELSE iot_sensor_latest.temperature END,
-        humidity=CASE WHEN EXCLUDED.is_valid THEN EXCLUDED.humidity ELSE iot_sensor_latest.humidity END,
-        is_valid=EXCLUDED.is_valid, last_received_at=EXCLUDED.last_received_at,
-        last_valid_at=COALESCE(EXCLUDED.last_valid_at,iot_sensor_latest.last_valid_at), retained=EXCLUDED.retained
-        WHERE iot_sensor_latest.last_received_at <= EXCLUDED.last_received_at`, values);
     }
     return true;
   }, diagnostics);
@@ -125,18 +141,18 @@ async function createCommand(master, channel, action, userId) {
   });
 }
 async function finishCommand(id, status, error = null) {
-  await pool.query(`UPDATE iot_device_commands SET status=$2::varchar,
+  await (require('./autoMisting.model').currentConnection() || pool).query(`UPDATE iot_device_commands SET status=$2::varchar,
     published_at=CASE WHEN $2::varchar='PUBLISHED' THEN now() ELSE NULL END, completed_at=now(), error_message=$3
     WHERE id=$1 AND status='PENDING'`, [id, status, error]);
 }
 async function expireCommands() {
-  await pool.query(`UPDATE iot_device_commands SET status='TIMED_OUT', completed_at=now(),
+  await (require('./autoMisting.model').currentConnection() || pool).query(`UPDATE iot_device_commands SET status='TIMED_OUT', completed_at=now(),
     error_message='Publication deadline elapsed; delivery may be unknown'
     WHERE status='PENDING' AND expires_at < now()`);
 }
 async function findCommand(id) {
   await expireCommands();
-  return (await pool.query(`SELECT ${commandColumns} FROM iot_device_commands c
+  return (await (require('./autoMisting.model').currentConnection() || pool).query(`SELECT ${commandColumns} FROM iot_device_commands c
     JOIN iot_masters m ON m.id=c.master_id WHERE c.id=$1`, [id])).rows[0];
 }
 

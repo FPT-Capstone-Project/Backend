@@ -41,7 +41,7 @@ test('JWT protects IoT routes; all active users can control SSR without role or 
 
 test('Swagger documents all seven APIs, JWT, schemas and command errors', () => {
   const spec = require('../src/config/swagger');
-  const entries = Object.entries(spec.paths).filter(([key]) => key.startsWith('/api/iot/'));
+  const entries = Object.entries(spec.paths).filter(([key]) => key.startsWith('/api/iot/') && !key.startsWith('/api/iot/floors'));
   assert.equal(entries.length, 7);
   for (const [, path] of entries) for (const operation of Object.values(path)) {
     assert.deepEqual(operation.security, [{ bearerAuth: [] }]);

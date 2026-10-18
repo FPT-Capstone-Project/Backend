@@ -339,3 +339,7 @@ Object.assign(specification.components.schemas, iot.schemas);
 Object.assign(specification.paths, iot.paths);
 specification.tags.push({ name: 'IoT', description: 'SmartMush telemetry and manual SSR commands' });
 module.exports = specification;
+const autoMisting = require('./autoMisting-swagger');
+Object.assign(specification.components.schemas, autoMisting.schemas);
+Object.assign(specification.paths, autoMisting.paths);
+specification.tags.push({ name: 'Automatic misting', description: 'Explicit per-floor Save, Start and Stop control' });
