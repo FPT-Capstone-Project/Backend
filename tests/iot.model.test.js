@@ -101,6 +101,22 @@ test('IoT migration and model SQL against isolated PostgreSQL', async (t) => {
       assert.equal((await model.findSsr(1))[0].reportedState, 'OFF');
       assert.equal((await model.findMaster('master01')).lastSeenAt.toISOString(), receivedAt.toISOString());
     });
+    await t.test('sensor write failure rolls back master freshness and history together', async () => {
+      const before = await model.findMaster('master01');
+      const count = (await db.query('SELECT count(*) AS n FROM iot_sensor_readings')).rows[0].n;
+      await assert.rejects(model.receive({ ...message, sensor: 99 }, new Date('2026-10-16T13:00:00Z'), false));
+      assert.equal((await model.findMaster('master01')).lastSeenAt.toISOString(), before.lastSeenAt.toISOString());
+      assert.equal((await db.query('SELECT count(*) AS n FROM iot_sensor_readings')).rows[0].n, count);
+    });
+    await t.test('retained sensor preserves arrival time and retained flag without advancing master freshness', async () => {
+      const before = await model.findMaster('master01');
+      const at = new Date('2026-10-16T13:00:00Z');
+      assert.equal(await model.receive(message, at, true), true);
+      const latest = await model.findSensor(1, 1, 1);
+      assert.equal(latest.retained, true);
+      assert.equal(latest.lastReceivedAt.toISOString(), at.toISOString());
+      assert.equal((await model.findMaster('master01')).lastSeenAt.toISOString(), before.lastSeenAt.toISOString());
+    });
     await t.test('crash-left pending commands expire without replay', async () => {
       const record = await model.createCommand(await model.findMaster('master01'), 2, 'OFF', null);
       await db.query("UPDATE iot_device_commands SET expires_at=now()-interval '1 second' WHERE id=$1", [record.commandId]);

@@ -150,7 +150,7 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
     }
     await drain();
   }
-  return { start, stop, publish, drain };
+  return { start, stop, publish, drain, isReady: () => !!(ready && client?.connected && !client.disconnecting && !stopping) };
 }
 
 module.exports = { ...createMqttService(), createMqttService, TOPICS };

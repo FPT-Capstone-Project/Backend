@@ -62,21 +62,28 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
       if (!found) throw new AppError('IoT command not found', 404);
       return found;
     },
-    async control(id, channel, body, userId) {
+    async control(id, channel, body, userId, internal = {}) {
       const number = validate.integer(channel, 'channel', 1, 8);
       const value = validate.action(body?.action);
       const m = await master(id);
+      const execute = async () => {
+      if (repository === model && !internal.automatic) {
+        await require('./autoMisting.service').manual(m.id, number, value, userId);
+      }
       const key = `${id}/${number}`;
       if (activeChannels.has(key)) throw new AppError('A command is already being published for this channel', 409);
       activeChannels.add(key);
       try {
         // Include persistence time without comparing database and host wall clocks.
-        const publicationDeadline = now() + 5000;
+        const publicationDeadline = now() + (internal.maxPublishMs || 5000);
+        if (internal.beforePublish) await internal.beforePublish();
         const record = await repository.createCommand(m, number, value, userId);
         const context = { commandId: record.commandId, masterId: id, channel: number, action: value };
         trace(logger, 'ssr.command.publish.start', context);
         const publishStarted = now();
         try {
+          if (repository === model) require('../models/autoMisting.model').assertLockHealthy();
+          if (internal.authorizePublish) internal.authorizePublish();
           await publisher.publish(id, number, value, publicationDeadline);
           trace(logger, 'ssr.command.publish.acked', { ...context, durationMs: now() - publishStarted });
         }
@@ -88,6 +95,10 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
         await repository.finishCommand(record.commandId, 'PUBLISHED');
         return repository.findCommand(record.commandId);
       } finally { activeChannels.delete(key); }
+      };
+      return repository === model && !internal.lockHeld
+        ? require('../models/autoMisting.model').lockChannel(m.id, number, execute)
+        : execute();
     },
   };
 }
