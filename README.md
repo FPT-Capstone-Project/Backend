@@ -124,6 +124,20 @@ Khi có `DATABASE_URL`, ứng dụng sẽ ưu tiên connection string này và b
 
 Nếu password database có ký tự đặc biệt như `@`, `:`, `/`, `#` hoặc khoảng trắng, cần URL-encode password trước khi đưa vào `DATABASE_URL`.
 
+### Gửi OTP bằng Gmail API
+
+OTP được gửi qua Gmail API (HTTPS), không dùng SMTP. Trong Google Cloud, bật Gmail API, tạo OAuth client loại Web application và đăng ký redirect URI khớp chính xác với `GOOGLE_REDIRECT_URI`. Cấu hình trên máy local và Render:
+
+```env
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+GOOGLE_REDIRECT_URI=https://<backend-domain>/api/auth/google/callback
+GMAIL_REFRESH_TOKEN=
+GMAIL_SENDER=sender@gmail.com
+```
+
+Để cấp quyền cho hộp thư gửi OTP, mở `/api/auth/google` trên backend đã deploy, đăng nhập đúng tài khoản gửi thư và chấp thuận quyền gửi email. Callback trả refresh token một lần trong response không-cache; lưu giá trị đó vào `GMAIL_REFRESH_TOKEN` trong Environment của Render. `GMAIL_SENDER` phải là chính hộp thư đã cấp quyền. Không ghi refresh token vào log hoặc chia sẻ công khai. Sau khi cấu hình, các API OTP hiện tại sẽ gửi qua Gmail API.
+
 ## 6. Chuẩn bị database
 
 Bảng `users` cần tồn tại trước khi gọi API đăng ký. Bảng `users` có foreign key tới bảng `roles`, vì vậy bảng `roles` và role tương ứng cũng phải tồn tại trước.
