@@ -25,7 +25,7 @@ const options = {
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
       { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
-      { name: 'Payments', description: 'SePay QR payments for customer orders' },
+      { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
     ],
     components: {
       securitySchemes: {
@@ -146,22 +146,28 @@ const options = {
             mushroomTypeId: { type: 'integer', example: 2, description: 'Selected mushroom type ID' },
           },
         },
-        SepayQrPaymentResponse: {
+        PayosPaymentResponse: {
           type: 'object',
+          required: ['success', 'message', 'data'],
           properties: {
-            message: { type: 'string', example: 'SePay payment QR created successfully' },
+            success: { type: 'boolean', example: true },
+            message: { type: 'string', example: 'PayOS payment created successfully' },
             data: {
               type: 'object',
+              required: ['paymentId', 'orderCode', 'orderId', 'amount', 'checkoutUrl', 'expiresAt', 'paymentStatus'],
               properties: {
-                payment_id: { type: 'integer', example: 34 },
-                order_id: { type: 'integer', example: 12 },
+                paymentId: { type: 'integer', example: 34 },
+                orderCode: { type: 'integer', example: 34, description: 'PayOS order code' },
+                orderId: { type: 'integer', example: 12 },
                 amount: { type: 'integer', example: 530000 },
-                payment_method: { type: 'string', example: 'SEPAY_QR' },
-                payment_status: { type: 'string', example: 'PENDING' },
-                payment_code: { type: 'string', example: 'SP12P34' },
-                bank_code: { type: 'string', example: 'MB' },
-                account_number: { type: 'string', example: '0123456789' },
-                qr_url: { type: 'string', format: 'uri', example: 'https://vietqr.app/img?acc=0123456789&bank=MB&amount=530000&des=SP12P34&template=compact' },
+                checkoutUrl: { type: 'string', format: 'uri', example: 'https://pay.payos.vn/web/abc123' },
+                qrCode: { type: 'string', nullable: true, example: '000201010212...' },
+                expiresAt: { type: 'integer', format: 'int64', example: 1735689600, description: 'Unix timestamp in seconds' },
+                paymentStatus: {
+                  type: 'string',
+                  enum: ['PENDING', 'PAID', 'FAILED', 'REFUNDED', 'CANCELLED'],
+                  example: 'PENDING',
+                },
               },
             },
           },
@@ -176,9 +182,18 @@ const options = {
               required: ['orderId', 'orderStatus', 'paymentStatus', 'paymentCode', 'amount'],
               properties: {
                 orderId: { type: 'integer', example: 12 },
-                orderStatus: { type: 'string', example: 'PENDING' },
-                paymentStatus: { type: 'string', example: 'PENDING' },
-                paymentCode: { type: 'string', example: 'SP12P34' },
+                orderStatus: {
+                  type: 'string',
+                  enum: ['PENDING', 'CONFIRMED', 'PROCESSING', 'COMPLETED', 'CANCELLED'],
+                  description: 'Becomes CONFIRMED after a successful PayOS payment.',
+                  example: 'PENDING',
+                },
+                paymentStatus: {
+                  type: 'string',
+                  enum: ['UNPAID', 'PENDING', 'PAID', 'FAILED', 'REFUND_PENDING', 'REFUNDED'],
+                  example: 'PENDING',
+                },
+                paymentCode: { type: 'string', example: '34', description: 'PayOS order code for the latest payment' },
                 amount: { type: 'number', example: 530000 },
               },
             },

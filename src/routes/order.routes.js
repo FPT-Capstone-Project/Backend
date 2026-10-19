@@ -26,7 +26,7 @@ router.get('/', authenticate, orderController.list);
  *   patch:
  *     tags: [Orders]
  *     summary: Cancel a pending order belonging to the authenticated customer
- *     description: Cancellation is allowed only while the order is pending and its payment status is unpaid or failed.
+ *     description: Cancellation is allowed only while the order is pending and its payment status is unpaid, pending, or failed. Pending payments are cancelled and the order payment status becomes failed.
  *     security:
  *       - bearerAuth: []
  *     parameters:

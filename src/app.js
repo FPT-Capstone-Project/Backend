@@ -4,8 +4,6 @@ const swaggerRoutes = require('./routes/swagger.routes');
 
 const app = express();
 
-// SePay signs the exact request bytes, so this path must be parsed before JSON middleware.
-app.use('/api/payments/sepay/webhook', express.raw({ type: 'application/json', limit: '100kb' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

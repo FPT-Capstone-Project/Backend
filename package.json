@@ -7,6 +7,7 @@
     "dev": "nodemon src/server.js",
     "rundev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "payos:confirm-webhook": "node scripts/payos-confirm-webhook.js",
     "test": "node --test tests/*.test.js"
   },
   "keywords": [],

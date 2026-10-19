@@ -468,6 +468,10 @@ CREATE TABLE payments (
 
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
+    payos_payment_link_id TEXT,
+    payos_checkout_url TEXT,
+    payos_qr_code TEXT,
+
     CONSTRAINT fk_payments_order
         FOREIGN KEY (order_id)
         REFERENCES orders(order_id)
@@ -865,6 +869,10 @@ CREATE INDEX idx_rentals_status
 -- PAYMENTS
 CREATE INDEX idx_payments_order_id
     ON payments(order_id);
+
+CREATE INDEX idx_payments_payos_payment_link_id
+    ON payments(payos_payment_link_id)
+    WHERE payos_payment_link_id IS NOT NULL;
 
 CREATE UNIQUE INDEX uq_payments_transaction_code
     ON payments(transaction_code)

@@ -76,13 +76,22 @@ async function cancelOrderForUser(orderId, userId) {
     if (order.status !== 'PENDING') {
       throw new AppError('Only pending orders can be cancelled', 409);
     }
-    if (!['UNPAID', 'FAILED'].includes(order.payment_status)) {
+    if (!['UNPAID', 'PENDING', 'FAILED'].includes(order.payment_status)) {
       throw new AppError('Only unpaid orders or orders with failed payment can be cancelled', 409);
+    }
+
+    if (order.payment_status === 'PENDING') {
+      await client.query(
+        `UPDATE payments
+         SET status = 'CANCELLED'
+         WHERE order_id = $1 AND status = 'PENDING'`,
+        [orderId],
+      );
     }
 
     const updateResult = await client.query(
       `UPDATE orders
-       SET status = 'CANCELLED'
+       SET status = 'CANCELLED'${order.payment_status === 'PENDING' ? ", payment_status = 'FAILED'" : ''}
        WHERE order_id = $1 AND user_id = $2
        RETURNING order_id, user_id, subtotal, discount, shipping_fee,
                  total_amount, status, payment_status, created_at, updated_at`,

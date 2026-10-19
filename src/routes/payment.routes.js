@@ -9,18 +9,16 @@ const router = express.Router();
  * /api/payments/orders/{orderId}/status:
  *   get:
  *     tags: [Payments]
- *     summary: Get the current payment status for an order
- *     description: Reads the authenticated customer's order and its SePay payment from the database. This endpoint never changes payment or order state.
+ *     summary: Get the current PayOS payment status for an order
+ *     description: Reads the authenticated customer's order and its latest PayOS payment. This endpoint never changes payment or order state.
  *     security:
  *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: orderId
  *         required: true
- *         description: ID of the order owned by the authenticated customer
  *         schema:
  *           type: integer
- *           example: 12
  *     responses:
  *       200:
  *         description: Current order and payment status
@@ -28,48 +26,19 @@ const router = express.Router();
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/PaymentStatusResponse'
- *             example:
- *               success: true
- *               data:
- *                 orderId: 12
- *                 orderStatus: PENDING
- *                 paymentStatus: PENDING
- *                 paymentCode: SP12P34
- *                 amount: 530000
  *       401:
  *         description: Missing or invalid JWT token
  *       404:
  *         description: Order or payment not found
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                   example: false
- *                 message:
- *                   type: string
- *                   example: Order not found
- *             examples:
- *               orderNotFound:
- *                 value:
- *                   success: false
- *                   message: Order not found
- *               paymentNotFound:
- *                 value:
- *                   success: false
- *                   message: Payment not found for this order
  */
-router.get('/orders/:orderId/status', authenticate, paymentController.getSepayPaymentStatus);
+router.get('/orders/:orderId/status', authenticate, paymentController.getPayosPaymentStatus);
 
 /**
  * @openapi
- * /api/payments/orders/{orderId}/sepay-qr:
+ * /api/payments/orders/{orderId}/payos:
  *   post:
  *     tags: [Payments]
- *     summary: Create or reuse a SePay QR payment for an order
- *     description: The authenticated customer must own a pending unpaid order. The response contains a PNG QR URL to display in the client.
+ *     summary: Create or reuse a PayOS payment link for an order
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -80,63 +49,81 @@ router.get('/orders/:orderId/status', authenticate, paymentController.getSepayPa
  *           type: integer
  *     responses:
  *       201:
- *         description: SePay QR payment created
+ *         description: PayOS payment link created
  *         content:
  *           application/json:
  *             schema:
- *               $ref: '#/components/schemas/SepayQrPaymentResponse'
+ *               $ref: '#/components/schemas/PayosPaymentResponse'
  *       401:
  *         description: Missing or invalid JWT token
  *       404:
  *         description: Order not found for this customer
  *       409:
  *         description: Order cannot be paid
+ *       502:
+ *         description: PayOS payment link could not be created
  *       503:
- *         description: SePay QR is not configured
+ *         description: PayOS is not configured
  */
-router.post('/orders/:orderId/sepay-qr', authenticate, paymentController.createSepayQr);
+router.post('/orders/:orderId/payos', authenticate, paymentController.createPayosPayment);
 
 /**
  * @openapi
- * /api/payments/sepay/webhook:
+ * /api/payments/payos/webhook:
+ *   get:
+ *     tags: [Payments]
+ *     summary: Verify that the PayOS webhook URL is reachable
+ *     responses:
+ *       200:
+ *         description: Webhook URL is reachable
+ */
+router.get('/payos/webhook', paymentController.payosWebhookHealth);
+
+/**
+ * @openapi
+ * /api/payments/payos/webhook:
  *   post:
  *     tags: [Payments]
- *     summary: Receive a signed SePay money-in notification
- *     parameters:
- *       - in: header
- *         name: X-SePay-Signature
- *         required: true
- *         schema:
- *           type: string
- *       - in: header
- *         name: X-SePay-Timestamp
- *         required: true
- *         schema:
- *           type: string
+ *     summary: Receive a PayOS payment webhook
+ *     description: PayOS signs the data object with PAYOS_CHECKSUM_KEY. Invalid or already handled callbacks return HTTP 200 without changing payment state.
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
- *             required: [accountNumber, content, transferType, transferAmount]
+ *             required: [code, success, data, signature]
  *             properties:
- *               accountNumber:
+ *               code:
  *                 type: string
- *                 example: '0123456789'
- *               content:
+ *                 example: '00'
+ *               desc:
  *                 type: string
- *                 example: SP12P34
- *               transferType:
+ *                 example: success
+ *               success:
+ *                 type: boolean
+ *                 example: true
+ *               data:
+ *                 type: object
+ *                 properties:
+ *                   orderCode:
+ *                     type: integer
+ *                     example: 34
+ *                   amount:
+ *                     type: integer
+ *                     example: 530000
+ *                   reference:
+ *                     type: string
+ *                     example: TF230204212323
+ *                   code:
+ *                     type: string
+ *                     example: '00'
+ *               signature:
  *                 type: string
- *                 example: in
- *               transferAmount:
- *                 type: integer
- *                 example: 530000
  *     responses:
  *       200:
- *         description: Webhook accepted
+ *         description: Webhook received
  */
-router.post('/sepay/webhook', paymentController.sepayWebhook);
+router.post('/payos/webhook', paymentController.payosWebhook);
 
 module.exports = router;

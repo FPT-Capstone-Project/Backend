@@ -4,10 +4,17 @@ process.env.TZ = 'Asia/Ho_Chi_Minh';
 const app = require('./app');
 const env = require('./config/env');
 const iotMqtt = require('./services/iotMqtt.service');
+const paymentModel = require('./models/payment.model');
 const pool = require('./config/db');
 // One MQTT connection per process; importing Express does not open a connection.
 iotMqtt.start();
 const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
+
+const payosPaymentExpiryInterval = setInterval(() => {
+  paymentModel.expireStalePayosPayments(env.payosPaymentExpireMinutes)
+    .catch((error) => console.error('PayOS payment expiry failed:', error));
+}, 60_000);
+payosPaymentExpiryInterval.unref();
 
 const server = app.listen(env.port, () => {
   console.log(`
@@ -25,6 +32,7 @@ async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
   console.log(`${signal} received. Closing server...`);
+  clearInterval(payosPaymentExpiryInterval);
   const deadline = setTimeout(() => process.exit(1), 10000);
   deadline.unref();
   try {

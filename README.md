@@ -2,6 +2,12 @@
 
 Backend API được xây dựng bằng Node.js, Express và PostgreSQL. Project hiện có nền tảng xác thực người dùng bằng JWT, mã hóa password bằng bcrypt, Swagger UI và cấu trúc module để tiếp tục phát triển các API khác.
 
+## Thanh toán PayOS
+
+Ứng dụng mobile tạo hoặc lấy lại payment link bằng `POST /api/payments/orders/{orderId}/payos`, sau đó mở `checkoutUrl` trong response để khách thanh toán. Sau khi mở trang thanh toán, ứng dụng poll `GET /api/payments/orders/{orderId}/status` cho đến khi `paymentStatus` là `PAID`. Không dùng redirect về `PAYOS_RETURN_URL` làm bằng chứng thanh toán thành công; trạng thái từ API mới là nguồn xác nhận.
+
+PayOS gọi `POST /api/payments/payos/webhook` để cập nhật thanh toán. URL webhook phải là HTTPS public và cần được đăng ký bằng script `npm run payos:confirm-webhook`; app mobile không gọi endpoint webhook này trực tiếp.
+
 ## 1. Công nghệ sử dụng
 
 - Node.js
@@ -110,6 +116,15 @@ DB_PASSWORD=your-postgres-password
 
 JWT_SECRET=replace-with-a-long-random-secret
 JWT_EXPIRES_IN=1d
+
+# PayOS
+PAYOS_CLIENT_ID=your-payos-client-id
+PAYOS_API_KEY=your-payos-api-key
+PAYOS_CHECKSUM_KEY=your-payos-checksum-key
+PAYOS_RETURN_URL=https://your-app.example/payment/return
+PAYOS_CANCEL_URL=https://your-app.example/payment/cancel
+PAYOS_PAYMENT_EXPIRE_MINUTES=15
+PAYOS_WEBHOOK_URL=https://your-api.example/api/payments/payos/webhook
 ```
 
 ### Kết nối Supabase
