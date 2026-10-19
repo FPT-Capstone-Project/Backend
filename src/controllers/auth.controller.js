@@ -1,8 +1,11 @@
 const authService = require('../services/auth.service');
 
 async function register(req, res) {
-  const result = await authService.register(req.body);
-  res.status(201).json({ message: 'Registration successful', ...result });
+  const result = await authService.registerOtp({
+    ...req.body,
+    name: req.body.name || req.body.fullName,
+  });
+  res.status(200).json(result);
 }
 
 async function login(req, res) {
@@ -17,7 +20,10 @@ function me(req, res) {
 module.exports = { register, login, me };
 
 async function registerOtp(req, res) {
-  const result = await authService.registerOtp(req.body);
+  const result = await authService.registerOtp({
+    ...req.body,
+    name: req.body.name || req.body.fullName,
+  });
   res.json(result);
 }
 

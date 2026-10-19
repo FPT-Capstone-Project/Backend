@@ -258,23 +258,29 @@ Request body:
 
 ```json
 {
-  "roleId": 2,
+  "name": "Nguyen Van A",
   "email": "user@example.com",
   "password": "password123",
-  "fullName": "Nguyen Van A",
   "phone": "0900000000",
   "address": "Ho Chi Minh City"
 }
 ```
 
-Điều kiện:
+API tạo tài khoản chưa xác minh và gửi OTP tới email qua Gmail API. Sau đó xác minh mã bằng:
 
-- `roleId`, `email`, `password`, `fullName` là bắt buộc.
-- Password tối thiểu 8 ký tự.
-- Email được chuẩn hóa về chữ thường.
-- Email không được trùng.
-- `roleId` phải tồn tại trong bảng `roles`.
-- Password được hash bằng bcrypt trước khi lưu vào `password_hash`.
+```http
+POST /api/auth/verify-registration-otp
+Content-Type: application/json
+```
+
+```json
+{
+  "email": "user@example.com",
+  "otp": "123456"
+}
+```
+
+`/api/auth/register-otp` vẫn được hỗ trợ như alias. Trường `fullName` cũ cũng được chấp nhận thay cho `name`.
 
 ### Đăng nhập
 

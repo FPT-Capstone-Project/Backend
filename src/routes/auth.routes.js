@@ -97,27 +97,30 @@ router.get('/google/callback', googleOAuthRateLimiter, async (req, res) => {
  * @openapi
  * /api/auth/register:
  *   post:
- *     tags: [Authentication]
- *     summary: Register a new user
+ *     tags: [Auth OTP]
+ *     summary: Register a customer and send an email verification OTP
  *     requestBody:
  *       required: true
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/RegisterRequest'
+ *             type: object
+ *             required: [name, email, password]
+ *             properties:
+ *               name: { type: string, example: Nguyen Van A }
+ *               fullName: { type: string, description: Legacy alias for name }
+ *               email: { type: string, format: email, example: user@example.com }
+ *               password: { type: string, minLength: 6, example: password123 }
+ *               phone: { type: string, example: '0900000000' }
+ *               address: { type: string, example: Ho Chi Minh City }
  *     responses:
- *       201:
- *         description: Registration successful
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/AuthResponse'
- *       400:
- *         description: Invalid input or role does not exist
- *       409:
- *         description: Email is already registered
+ *       200: { description: OTP email sent; verify it using /api/auth/verify-registration-otp }
+ *       400: { description: Missing or invalid input }
+ *       409: { description: Email is already registered }
+ *       429: { description: OTP cooldown or rate limit exceeded }
+ *       500: { description: Unable to send OTP email }
  */
-router.post('/register', authController.register);
+router.post('/register', otpRateLimiter, authController.register);
 
 /**
  * @openapi
