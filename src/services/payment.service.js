@@ -1,7 +1,11 @@
-const crypto = require('crypto');
 const env = require('../config/env');
 const paymentModel = require('../models/payment.model');
 const AppError = require('../utils/app-error');
+const {
+  signPaymentRequest,
+  verifyWebhookSignature,
+  createPayosPaymentLink,
+} = require('../utils/payos');
 
 function parseId(value, fieldName) {
   const parsed = Number(value);
@@ -11,111 +15,80 @@ function parseId(value, fieldName) {
   return parsed;
 }
 
-function parseWholeVndAmount(value, message) {
-  const amount = Number(value);
-  if (!Number.isSafeInteger(amount) || amount <= 0) {
-    throw new AppError(message, 400);
-  }
-  return amount;
-}
-
-function ensureQrConfiguration() {
-  if (!env.sepayBankCode || !env.sepayAccountNumber) {
-    throw new AppError('SePay QR is not configured', 503);
+function ensurePayosConfiguration() {
+  if (!env.payosClientId || !env.payosApiKey || !env.payosChecksumKey) {
+    throw new AppError('PayOS is not configured', 503);
   }
 }
 
-function buildSepayQrUrl(amount, paymentCode) {
-  const url = new URL('https://vietqr.app/img');
-  url.searchParams.set('acc', env.sepayAccountNumber);
-  url.searchParams.set('bank', env.sepayBankCode);
-  url.searchParams.set('amount', String(amount));
-  url.searchParams.set('des', paymentCode);
-  url.searchParams.set('template', env.sepayQrTemplate || 'compact');
-  return url.toString();
+function getPaymentExpireMinutes() {
+  const minutes = Number(env.payosPaymentExpireMinutes);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 15;
 }
 
-function normalizeAccountNumber(value) {
-  return String(value || '').replace(/\s+/g, '');
+function getExpiresAt() {
+  return Math.floor(Date.now() / 1000) + (getPaymentExpireMinutes() * 60);
 }
 
-function extractPaymentCode(payload) {
-  const sources = [payload.code, payload.content, payload.description];
-
-  for (const source of sources) {
-    const match = String(source || '').toUpperCase().match(/SP\d+P\d+/);
-    if (match) return match[0];
-  }
-
-  return null;
-}
-
-function verifyWebhookSignature(rawBody, signature, timestamp) {
-  if (!env.sepayWebhookSecret) {
-    throw new AppError('SePay webhook is not configured', 503);
-  }
-  if (!Buffer.isBuffer(rawBody)) {
-    throw new AppError('Invalid SePay webhook body', 400);
-  }
-
-  const sentAt = Number(timestamp);
-  const maxAge = Number(env.sepayWebhookMaxAgeSeconds || 300);
-  const now = Math.floor(Date.now() / 1000);
-  if (!Number.isInteger(sentAt) || !Number.isFinite(maxAge) || maxAge <= 0 || Math.abs(now - sentAt) > maxAge) {
-    throw new AppError('Expired SePay webhook signature', 401);
-  }
-
-  const hmac = crypto.createHmac('sha256', env.sepayWebhookSecret);
-  hmac.update(`${timestamp}.`);
-  hmac.update(rawBody);
-  const expectedSignature = `sha256=${hmac.digest('hex')}`;
-  const providedSignature = String(signature || '');
-
-  if (
-    Buffer.byteLength(providedSignature) !== Buffer.byteLength(expectedSignature)
-    || !crypto.timingSafeEqual(Buffer.from(providedSignature), Buffer.from(expectedSignature))
-  ) {
-    throw new AppError('Invalid SePay webhook signature', 401);
-  }
-}
-
-function parseWebhookPayload(rawBody) {
-  try {
-    const payload = JSON.parse(rawBody.toString('utf8'));
-    if (!payload || Array.isArray(payload) || typeof payload !== 'object') {
-      throw new Error('Payload must be an object');
-    }
-    return payload;
-  } catch (error) {
-    throw new AppError('Invalid SePay webhook payload', 400);
-  }
-}
-
-async function createSepayQrPayment(userId, orderId) {
-  ensureQrConfiguration();
-
-  const customerId = parseId(userId, 'userId');
-  const id = parseId(orderId, 'orderId');
-  const payment = await paymentModel.createOrGetSepayPayment(id, customerId);
-  const amount = parseWholeVndAmount(payment.amount, 'Order total must be a positive whole VND amount');
-
+function toPaymentResponse(payment) {
   return {
-    payment_id: payment.payment_id,
-    order_id: payment.order_id,
-    amount,
-    payment_method: payment.payment_method,
-    payment_status: payment.status,
-    payment_code: payment.transaction_code,
-    bank_code: env.sepayBankCode,
-    account_number: env.sepayAccountNumber,
-    qr_url: buildSepayQrUrl(amount, payment.transaction_code),
+    paymentId: payment.payment_id,
+    orderCode: Number(payment.payment_id),
+    orderId: payment.order_id,
+    amount: Math.round(Number(payment.amount)),
+    checkoutUrl: payment.payos_checkout_url,
+    qrCode: payment.payos_qr_code,
+    expiresAt: getExpiresAt(),
+    paymentStatus: 'PENDING',
   };
 }
 
-async function getSepayPaymentStatus(userId, orderId) {
+async function createPayosPayment(userId, orderId) {
+  ensurePayosConfiguration();
+
   const customerId = parseId(userId, 'userId');
   const id = parseId(orderId, 'orderId');
-  const result = await paymentModel.findSepayPaymentStatus(id, customerId);
+  const { payment, reused } = await paymentModel.createOrGetPayosPayment(
+    id,
+    customerId,
+    getPaymentExpireMinutes(),
+  );
+
+  if (reused) return toPaymentResponse(payment);
+
+  const expiresAt = getExpiresAt();
+  const request = {
+    orderCode: Number(payment.payment_id),
+    amount: Math.round(Number(payment.amount)),
+    description: `DH${id}`,
+    returnUrl: env.payosReturnUrl,
+    cancelUrl: env.payosCancelUrl,
+    expiredAt: expiresAt,
+  };
+
+  try {
+    const payosPayment = await createPayosPaymentLink({
+      ...request,
+      signature: signPaymentRequest(request),
+    });
+    const savedPayment = await paymentModel.savePayosPaymentLink(payment.payment_id, {
+      paymentLinkId: payosPayment.paymentLinkId,
+      checkoutUrl: payosPayment.checkoutUrl,
+      qrCode: payosPayment.qrCode,
+    });
+    if (!savedPayment) throw new AppError('Payment is no longer available', 409);
+    return toPaymentResponse(savedPayment);
+  } catch (error) {
+    await paymentModel.markPayosPaymentFailed(payment.payment_id);
+    if (error && Number.isInteger(error.statusCode)) throw error;
+    throw new AppError('PayOS request failed', 502);
+  }
+}
+
+async function getPayosPaymentStatus(userId, orderId) {
+  const customerId = parseId(userId, 'userId');
+  const id = parseId(orderId, 'orderId');
+  const result = await paymentModel.findPayosPaymentStatus(id, customerId);
 
   if (!result || !result.order) throw new AppError('Order not found', 404);
   if (!result.payment) throw new AppError('Payment not found for this order', 404);
@@ -128,30 +101,50 @@ async function getSepayPaymentStatus(userId, orderId) {
   return {
     orderId: result.order.order_id,
     orderStatus: result.order.status,
-    paymentStatus: result.payment.status,
-    paymentCode: result.payment.transaction_code,
+    paymentStatus: result.order.payment_status,
+    paymentCode: String(result.payment.payment_id),
     amount,
   };
 }
 
-async function handleSepayWebhook({ rawBody, signature, timestamp }) {
-  verifyWebhookSignature(rawBody, signature, timestamp);
-  const payload = parseWebhookPayload(rawBody);
+function warnIgnoredPayosWebhook(payload, reason) {
+  const data = payload && payload.data && typeof payload.data === 'object' ? payload.data : {};
+  console.warn('PayOS webhook ignored', {
+    orderCode: data.orderCode ?? null,
+    amount: data.amount ?? null,
+    code: payload && payload.code ? payload.code : null,
+    reason,
+  });
+}
 
-  if (String(payload.transferType || '').toLowerCase() !== 'in') return null;
-  if (normalizeAccountNumber(payload.accountNumber) !== normalizeAccountNumber(env.sepayAccountNumber)) return null;
+async function handlePayosWebhook(payload) {
+  if (!payload || typeof payload !== 'object' || !verifyWebhookSignature(payload.data, payload.signature)) {
+    warnIgnoredPayosWebhook(payload, 'invalid_signature');
+    return { invalidSignature: true };
+  }
 
-  const paymentCode = extractPaymentCode(payload);
-  if (!paymentCode) return null;
+  const data = payload.data || {};
+  const orderCode = Number(data.orderCode);
+  if (!Number.isSafeInteger(orderCode) || orderCode <= 0) {
+    warnIgnoredPayosWebhook(payload, 'invalid_order_code');
+    return null;
+  }
 
-  const transferAmount = Number(payload.transferAmount);
-  if (!Number.isSafeInteger(transferAmount) || transferAmount <= 0) return null;
+  if (payload.success !== true || payload.code !== '00' || data.code !== '00') {
+    await paymentModel.markPayosPaymentFailed(orderCode);
+    return null;
+  }
 
-  return paymentModel.markSepayPaymentAsPaid(paymentCode, transferAmount);
+  return paymentModel.markPayosPaymentAsPaid(orderCode, Number(data.amount), data.reference);
+}
+
+function payosWebhookHealth() {
+  return { ok: true };
 }
 
 module.exports = {
-  createSepayQrPayment,
-  getSepayPaymentStatus,
-  handleSepayWebhook,
+  createPayosPayment,
+  getPayosPaymentStatus,
+  handlePayosWebhook,
+  payosWebhookHealth,
 };

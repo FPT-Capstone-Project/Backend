@@ -26,7 +26,12 @@ function loadOrderModel({
       }
       if (statement.startsWith('UPDATE orders')) {
         return {
-          rows: [{ order_id: values[0], user_id: values[1], status: 'CANCELLED', payment_status: cancelOrder.payment_status }],
+          rows: [{
+            order_id: values[0],
+            user_id: values[1],
+            status: 'CANCELLED',
+            payment_status: cancelOrder.payment_status === 'PENDING' ? 'FAILED' : cancelOrder.payment_status,
+          }],
         };
       }
       if (statement.startsWith('INSERT INTO orders')) {
@@ -143,6 +148,24 @@ test('cancels a pending unpaid order for its owner', async () => {
   assert.equal(order.status, 'CANCELLED');
   assert.equal(order.payment_status, 'UNPAID');
   assert.deepEqual(statements[1].values, [11, 3]);
+  assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
+});
+
+test('cancels pending payments and marks the order payment as failed', async () => {
+  const { model, statements } = loadOrderModel({
+    cancelOrder: { order_id: 11, status: 'PENDING', payment_status: 'PENDING' },
+  });
+
+  const order = await model.cancelOrderForUser(11, 3);
+
+  assert.equal(order.status, 'CANCELLED');
+  assert.equal(order.payment_status, 'FAILED');
+  assert.ok(statements.some(({ statement }) => (
+    statement === "UPDATE payments SET status = 'CANCELLED' WHERE order_id = $1 AND status = 'PENDING'"
+  )));
+  assert.ok(statements.some(({ statement }) => (
+    statement.startsWith("UPDATE orders SET status = 'CANCELLED', payment_status = 'FAILED'")
+  )));
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
 });
 

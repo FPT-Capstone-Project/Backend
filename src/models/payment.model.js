@@ -1,7 +1,7 @@
 const pool = require('../config/db');
 const AppError = require('../utils/app-error');
 
-const SEPAY_PAYMENT_METHOD = 'SEPAY_QR';
+const PAYOS_PAYMENT_METHOD = 'PAYOS';
 const paymentColumns = `
   payment_id,
   order_id,
@@ -10,19 +10,37 @@ const paymentColumns = `
   transaction_code,
   status,
   paid_at,
-  created_at
+  created_at,
+  payos_payment_link_id,
+  payos_checkout_url,
+  payos_qr_code
 `;
 
-function buildPaymentCode(orderId, paymentId) {
-  return `SP${orderId}P${paymentId}`;
+function toPositiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
 }
 
-function isPositiveWholeVnd(value) {
-  const amount = Number(value);
-  return Number.isSafeInteger(amount) && amount > 0;
+function toPaymentAmount(value) {
+  const amount = Math.round(Number(value));
+  return Number.isSafeInteger(amount) && amount > 0 ? amount : null;
 }
 
-async function createOrGetSepayPayment(orderId, userId) {
+function toExpiryMinutes(value) {
+  const minutes = Number(value);
+  return Number.isFinite(minutes) && minutes > 0 ? minutes : 15;
+}
+
+function warnUnprocessedPayosPayment(orderCode, paidAmount, reason, details = {}) {
+  console.warn('PayOS payment was not processed', {
+    orderCode,
+    paidAmount,
+    reason,
+    ...details,
+  });
+}
+
+async function createOrGetPayosPayment(orderId, userId, maxAgeMinutes) {
   const client = await pool.connect();
 
   try {
@@ -43,39 +61,39 @@ async function createOrGetSepayPayment(orderId, userId) {
     if (!['UNPAID', 'PENDING', 'FAILED'].includes(order.payment_status)) {
       throw new AppError('Order is not eligible for payment', 409);
     }
-    if (!isPositiveWholeVnd(order.total_amount)) {
-      throw new AppError('Order total must be a positive whole VND amount', 400);
-    }
 
-    const existingResult = await client.query(
+    const reusablePaymentResult = await client.query(
       `SELECT ${paymentColumns}
        FROM payments
-       WHERE order_id = $1 AND payment_method = $2 AND status = 'PENDING'
+       WHERE order_id = $1
+         AND payment_method = $2
+         AND status = 'PENDING'
+         AND payos_checkout_url IS NOT NULL
+         AND created_at >= NOW() - ($3 * INTERVAL '1 minute')
        ORDER BY payment_id DESC
        LIMIT 1
        FOR UPDATE`,
-      [orderId, SEPAY_PAYMENT_METHOD],
+      [orderId, PAYOS_PAYMENT_METHOD, toExpiryMinutes(maxAgeMinutes)],
     );
-    let payment = existingResult.rows[0];
+    const reusablePayment = reusablePaymentResult.rows[0];
 
-    if (!payment) {
-      const paymentResult = await client.query(
-        `INSERT INTO payments (order_id, amount, payment_method, status)
-         VALUES ($1, $2, $3, 'PENDING')
-         RETURNING ${paymentColumns}`,
-        [orderId, order.total_amount, SEPAY_PAYMENT_METHOD],
-      );
-
-      const createdPayment = paymentResult.rows[0];
-      const codeResult = await client.query(
-        `UPDATE payments
-         SET transaction_code = $1
-         WHERE payment_id = $2
-         RETURNING ${paymentColumns}`,
-        [buildPaymentCode(orderId, createdPayment.payment_id), createdPayment.payment_id],
-      );
-      payment = codeResult.rows[0];
+    if (reusablePayment) {
+      await client.query('COMMIT');
+      return { payment: reusablePayment, reused: true };
     }
+
+    const amount = toPaymentAmount(order.total_amount);
+    if (!amount) {
+      throw new AppError('Order total must be a positive whole VND amount', 400);
+    }
+
+    const paymentResult = await client.query(
+      `INSERT INTO payments (order_id, amount, payment_method, status)
+       VALUES ($1, $2, $3, 'PENDING')
+       RETURNING ${paymentColumns}`,
+      [orderId, amount, PAYOS_PAYMENT_METHOD],
+    );
+    const payment = paymentResult.rows[0];
 
     await client.query(
       `UPDATE orders
@@ -85,7 +103,7 @@ async function createOrGetSepayPayment(orderId, userId) {
     );
 
     await client.query('COMMIT');
-    return payment;
+    return { payment, reused: false };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -94,62 +112,198 @@ async function createOrGetSepayPayment(orderId, userId) {
   }
 }
 
-async function markSepayPaymentAsPaid(paymentCode, transferAmount) {
+async function savePayosPaymentLink(paymentId, { paymentLinkId, checkoutUrl, qrCode }) {
+  const result = await pool.query(
+    `UPDATE payments
+     SET payos_payment_link_id = $2,
+         payos_checkout_url = $3,
+         payos_qr_code = $4
+     WHERE payment_id = $1
+       AND payment_method = $5
+       AND status = 'PENDING'
+     RETURNING ${paymentColumns}`,
+    [paymentId, paymentLinkId || null, checkoutUrl || null, qrCode || null, PAYOS_PAYMENT_METHOD],
+  );
+
+  return result.rows[0] || null;
+}
+
+async function markPayosPaymentFailed(orderCode) {
+  const paymentId = toPositiveInteger(orderCode);
+  if (!paymentId) return null;
+
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
 
     const paymentResult = await client.query(
-      `SELECT p.payment_id, p.order_id, p.amount, p.payment_method,
-              p.transaction_code, p.status, p.paid_at, p.created_at,
-              o.status AS order_status, o.payment_status AS order_payment_status
+      `SELECT p.payment_id, p.order_id, p.status
        FROM payments p
        INNER JOIN orders o ON o.order_id = p.order_id
-       WHERE p.transaction_code = $1 AND p.payment_method = $2
+       WHERE p.payment_id = $1 AND p.payment_method = $2
        FOR UPDATE OF p, o`,
-      [paymentCode, SEPAY_PAYMENT_METHOD],
+      [paymentId, PAYOS_PAYMENT_METHOD],
     );
     const payment = paymentResult.rows[0];
 
-    if (!payment || payment.status === 'PAID') {
+    if (!payment || payment.status !== 'PENDING') {
       await client.query('COMMIT');
-      return payment || null;
+      return null;
     }
 
-    if (
-      payment.status !== 'PENDING'
-      || payment.order_status !== 'PENDING'
-      || payment.order_payment_status === 'PAID'
-      || !Number.isSafeInteger(transferAmount)
-      || transferAmount < Number(payment.amount)
-    ) {
+    const failedPaymentResult = await client.query(
+      `UPDATE payments
+       SET status = 'FAILED'
+       WHERE payment_id = $1 AND status = 'PENDING'
+       RETURNING ${paymentColumns}`,
+      [payment.payment_id],
+    );
+    const failedPayment = failedPaymentResult.rows[0] || null;
+
+    if (failedPayment) {
+      await client.query(
+        `UPDATE orders
+         SET payment_status = 'FAILED'
+         WHERE order_id = $1
+           AND status = 'PENDING'
+           AND payment_status = 'PENDING'`,
+        [payment.order_id],
+      );
+    }
+
+    await client.query('COMMIT');
+    return failedPayment;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function markPayosPaymentAsPaid(orderCode, paidAmount, reference) {
+  const paymentId = toPositiveInteger(orderCode);
+  const receivedAmount = Number(paidAmount);
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    if (!paymentId) {
+      warnUnprocessedPayosPayment(orderCode, paidAmount, 'invalid_order_code');
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const paymentResult = await client.query(
+      `SELECT ${paymentColumns}
+       FROM payments
+       WHERE payment_id = $1 AND payment_method = $2
+       FOR UPDATE`,
+      [paymentId, PAYOS_PAYMENT_METHOD],
+    );
+    const payment = paymentResult.rows[0];
+
+    if (!payment) {
+      warnUnprocessedPayosPayment(orderCode, paidAmount, 'payment_not_found');
+      await client.query('COMMIT');
+      return null;
+    }
+
+    const orderResult = await client.query(
+      `SELECT order_id, status, payment_status
+       FROM orders
+       WHERE order_id = $1
+       FOR UPDATE`,
+      [payment.order_id],
+    );
+    const order = orderResult.rows[0];
+
+    if (!order) {
+      warnUnprocessedPayosPayment(orderCode, paidAmount, 'order_not_found');
+      await client.query('COMMIT');
+      return null;
+    }
+
+    if (payment.status === 'PAID') {
+      await client.query('COMMIT');
+      return payment;
+    }
+
+    const expectedAmount = Number(payment.amount);
+    if (!Number.isSafeInteger(receivedAmount) || receivedAmount <= 0) {
+      warnUnprocessedPayosPayment(orderCode, paidAmount, 'invalid_paid_amount', { expectedAmount });
+      await client.query('COMMIT');
+      return null;
+    }
+
+    if (receivedAmount < expectedAmount) {
+      warnUnprocessedPayosPayment(orderCode, receivedAmount, 'insufficient_paid_amount', {
+        expectedAmount,
+        shortfallAmount: expectedAmount - receivedAmount,
+      });
+      await client.query('COMMIT');
+      return null;
+    }
+
+    if (!['PENDING', 'CANCELLED', 'FAILED'].includes(payment.status)) {
+      warnUnprocessedPayosPayment(orderCode, receivedAmount, 'payment_not_payable', {
+        paymentStatus: payment.status,
+      });
+      await client.query('COMMIT');
+      return null;
+    }
+
+    if (order.status !== 'PENDING' && order.status !== 'CANCELLED') {
+      warnUnprocessedPayosPayment(orderCode, receivedAmount, 'order_not_payable', {
+        orderStatus: order.status,
+        orderPaymentStatus: order.payment_status,
+      });
       await client.query('COMMIT');
       return null;
     }
 
     const paidPaymentResult = await client.query(
       `UPDATE payments
-       SET status = 'PAID', paid_at = CURRENT_TIMESTAMP
-       WHERE payment_id = $1 AND status = 'PENDING'
+       SET status = 'PAID',
+           paid_at = CURRENT_TIMESTAMP,
+           transaction_code = $2
+       WHERE payment_id = $1
+         AND status IN ('PENDING', 'CANCELLED', 'FAILED')
        RETURNING ${paymentColumns}`,
-      [payment.payment_id],
+      [payment.payment_id, reference == null ? null : String(reference)],
     );
     const paidPayment = paidPaymentResult.rows[0];
 
     if (!paidPayment) {
+      warnUnprocessedPayosPayment(orderCode, receivedAmount, 'payment_update_conflict');
       await client.query('COMMIT');
       return null;
     }
 
+    if (order.status === 'CANCELLED') {
+      console.warn('PayOS money received for cancelled order', { orderCode, paidAmount: receivedAmount });
+      await client.query('COMMIT');
+      return paidPayment;
+    }
+
     await client.query(
       `UPDATE orders
-       SET payment_status = 'PAID', status = 'PAID'
-       WHERE order_id = $1`,
+       SET payment_status = 'PAID', status = 'CONFIRMED'
+       WHERE order_id = $1 AND status = 'PENDING'`,
       [payment.order_id],
     );
 
     await client.query('COMMIT');
+    if (receivedAmount > expectedAmount) {
+      console.warn('PayOS payment received an overpayment', {
+        orderCode,
+        paidAmount: receivedAmount,
+        expectedAmount,
+        excessAmount: receivedAmount - expectedAmount,
+      });
+    }
     return paidPayment;
   } catch (error) {
     await client.query('ROLLBACK');
@@ -159,7 +313,60 @@ async function markSepayPaymentAsPaid(paymentCode, transferAmount) {
   }
 }
 
-async function findSepayPaymentStatus(orderId, userId) {
+async function expireStalePayosPayments(maxAgeMinutes) {
+  const client = await pool.connect();
+  const expiryMinutes = toExpiryMinutes(maxAgeMinutes) + 1;
+
+  try {
+    await client.query('BEGIN');
+
+    const stalePaymentsResult = await client.query(
+      `SELECT p.payment_id, p.order_id
+       FROM payments p
+       INNER JOIN orders o ON o.order_id = p.order_id
+       WHERE p.payment_method = $1
+         AND p.status = 'PENDING'
+         AND p.created_at < NOW() - ($2 * INTERVAL '1 minute')
+         AND o.status = 'PENDING'
+         AND o.payment_status = 'PENDING'
+       FOR UPDATE OF p, o`,
+      [PAYOS_PAYMENT_METHOD, expiryMinutes],
+    );
+
+    let processedCount = 0;
+    for (const stalePayment of stalePaymentsResult.rows) {
+      const paymentResult = await client.query(
+        `UPDATE payments
+         SET status = 'CANCELLED'
+         WHERE payment_id = $1 AND status = 'PENDING'
+         RETURNING payment_id`,
+        [stalePayment.payment_id],
+      );
+
+      if (paymentResult.rows.length === 0) continue;
+
+      await client.query(
+        `UPDATE orders
+         SET payment_status = 'FAILED'
+         WHERE order_id = $1
+           AND status = 'PENDING'
+           AND payment_status = 'PENDING'`,
+        [stalePayment.order_id],
+      );
+      processedCount += paymentResult.rows.length;
+    }
+
+    await client.query('COMMIT');
+    return processedCount;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function findPayosPaymentStatus(orderId, userId) {
   const orderResult = await pool.query(
     `SELECT order_id, status, payment_status, total_amount
      FROM orders
@@ -172,13 +379,12 @@ async function findSepayPaymentStatus(orderId, userId) {
   if (!order) return { order: null, payment: null };
 
   const paymentResult = await pool.query(
-    `SELECT payment_id, order_id, amount, payment_method,
-            transaction_code, status, paid_at
+    `SELECT ${paymentColumns}
      FROM payments
      WHERE order_id = $1 AND payment_method = $2
      ORDER BY payment_id DESC
      LIMIT 1`,
-    [orderId, SEPAY_PAYMENT_METHOD],
+    [orderId, PAYOS_PAYMENT_METHOD],
   );
 
   return {
@@ -188,8 +394,11 @@ async function findSepayPaymentStatus(orderId, userId) {
 }
 
 module.exports = {
-  SEPAY_PAYMENT_METHOD,
-  createOrGetSepayPayment,
-  markSepayPaymentAsPaid,
-  findSepayPaymentStatus,
+  PAYOS_PAYMENT_METHOD,
+  createOrGetPayosPayment,
+  savePayosPaymentLink,
+  markPayosPaymentAsPaid,
+  markPayosPaymentFailed,
+  expireStalePayosPayments,
+  findPayosPaymentStatus,
 };
