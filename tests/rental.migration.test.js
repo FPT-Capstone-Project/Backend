@@ -96,7 +96,15 @@ test('legacy rental rows migrate to order-based records and backfill missing pai
         tray_id INT PRIMARY KEY,
         tray_code VARCHAR(30),
         tray_name VARCHAR(100),
-        room_id INT
+        room_id INT,
+        floor_id INT
+      );
+      CREATE TABLE cultivation_floors (
+        floor_id INT PRIMARY KEY,
+        room_id INT NOT NULL,
+        floor_number INT NOT NULL,
+        floor_name VARCHAR(100),
+        status VARCHAR(20) NOT NULL
       );
       CREATE TABLE rentals (
         rental_id SERIAL PRIMARY KEY,

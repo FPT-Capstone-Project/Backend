@@ -18,6 +18,10 @@ function loadRentalService(modelOverrides = {}) {
       calls.push(['createFromOrderForAdmin', orderId]);
       return { rentalId: 12, created: true };
     },
+    startCultivationForAdmin: async (...args) => {
+      calls.push(['startCultivationForAdmin', ...args]);
+      return { session: { session_id: 77 }, rental: { rental_id: 12, status: 'ACTIVE' } };
+    },
     updateForAdmin: async (...args) => {
       calls.push(['updateForAdmin', ...args]);
       return { rental_id: args[0] };
@@ -134,4 +138,25 @@ test('creates a rental manually from a paid rental order', async () => {
     ['findByIdForAdmin', 12],
   ]);
   assert.deepEqual(result, { rental: { rental_id: 12 }, created: true });
+});
+
+test('starts cultivation using validated rental and tray IDs', async () => {
+  const { service, calls } = loadRentalService();
+  const result = await service.startCultivationForAdmin('12', { trayId: '8' });
+
+  assert.deepEqual(calls, [['startCultivationForAdmin', 12, 8]]);
+  assert.deepEqual(result, {
+    session: { session_id: 77 },
+    rental: { rental_id: 12, status: 'ACTIVE' },
+  });
+});
+
+test('rejects start cultivation requests without a valid tray ID', async () => {
+  const { service, calls } = loadRentalService();
+
+  await assert.rejects(
+    () => service.startCultivationForAdmin('12', {}),
+    { statusCode: 400 },
+  );
+  assert.equal(calls.length, 0);
 });

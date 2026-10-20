@@ -20,9 +20,26 @@ async function adminCreateFromOrder(req, res) {
   });
 }
 
+async function adminStartCultivation(req, res) {
+  const result = await rentalService.startCultivationForAdmin(
+    req.params.rentalId,
+    req.body || {},
+  );
+  res.status(201).json({
+    message: 'Cultivation session started successfully',
+    data: result,
+  });
+}
+
 async function adminUpdate(req, res) {
   const rental = await rentalService.updateRentalForAdmin(req.params.rentalId, req.body || {});
   res.json({ message: 'Rental updated successfully', data: rental });
 }
 
-module.exports = { adminList, adminGetById, adminCreateFromOrder, adminUpdate };
+module.exports = {
+  adminList,
+  adminGetById,
+  adminCreateFromOrder,
+  adminStartCultivation,
+  adminUpdate,
+};

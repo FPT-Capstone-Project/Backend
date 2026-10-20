@@ -105,6 +105,50 @@ router.post('/admin/from-order', adminOrFarmOperator, rentalController.adminCrea
 
 /**
  * @openapi
+ * /api/rentals/admin/{rentalId}/cultivation-session:
+ *   post:
+ *     tags: [Rentals]
+ *     summary: Start cultivation for a paid rental
+ *     description: Selects the mushroom type from the rental order, creates an ACTIVE cultivation session, assigns the tray, starts the rental period, and marks the tray OCCUPIED. The order remains CONFIRMED and its payment remains PAID. Role IDs 1 and 2 are allowed.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [trayId]
+ *             properties:
+ *               trayId:
+ *                 type: integer
+ *                 example: 8
+ *     responses:
+ *       201:
+ *         description: Cultivation session created and rental started
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       403:
+ *         description: Only Admin and Farm Operator roles are allowed
+ *       404:
+ *         description: Rental or cultivation tray not found
+ *       409:
+ *         description: Rental is not paid or ready, tray is unavailable, session already exists, or no active mushroom is associated with the rental
+ */
+router.post(
+  '/admin/:rentalId/cultivation-session',
+  adminOrFarmOperator,
+  rentalController.adminStartCultivation,
+);
+
+/**
+ * @openapi
  * /api/rentals/admin/{rentalId}:
  *   get:
  *     tags: [Rentals]

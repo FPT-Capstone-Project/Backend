@@ -20,13 +20,21 @@ function loadRoomService({ deleteError = null } = {}) {
   return require('../src/services/cultivationRoom.service');
 }
 
-function loadTrayService({ roomExists = true, deleteError = null } = {}) {
+function loadTrayService({
+  roomExists = true,
+  floorExists = true,
+  floorRoomId = 1,
+  deleteError = null,
+} = {}) {
   const trayModelPath = require.resolve('../src/models/cultivationTray.model');
   const roomModelPath = require.resolve('../src/models/cultivationRoom.model');
   const servicePath = require.resolve('../src/services/cultivationTray.service');
   const trayModel = {
     findAll: async (filters) => filters,
-    findById: async () => ({ tray_id: 1 }),
+    findById: async () => ({ tray_id: 1, room_id: 1, floor_id: null }),
+    findFloorById: async () => (
+      floorExists ? { floor_id: 3, room_id: floorRoomId } : null
+    ),
     create: async (data) => ({ tray_id: 2, ...data }),
     updateById: async (id, data) => ({ tray_id: id, ...data }),
     removeById: async () => {
@@ -65,6 +73,36 @@ test('creates a tray only for an existing room', async () => {
   await assert.rejects(
     () => missingRoomService.createCultivationTray({ roomId: 5, trayCode: 'T-05' }),
     { statusCode: 404, message: 'Cultivation room not found' },
+  );
+});
+
+test('assigns a tray to a floor in the same room', async () => {
+  const service = loadTrayService();
+  const tray = await service.createCultivationTray({
+    roomId: 1,
+    floorId: 3,
+    trayCode: 'T-FLOOR-01',
+  });
+  assert.equal(tray.floorId, 3);
+
+  const mismatchedFloorService = loadTrayService({ floorRoomId: 2 });
+  await assert.rejects(
+    () => mismatchedFloorService.createCultivationTray({
+      roomId: 1,
+      floorId: 3,
+      trayCode: 'T-FLOOR-02',
+    }),
+    { statusCode: 400, message: 'Cultivation floor must belong to the selected room' },
+  );
+
+  const missingFloorService = loadTrayService({ floorExists: false });
+  await assert.rejects(
+    () => missingFloorService.createCultivationTray({
+      roomId: 1,
+      floorId: 99,
+      trayCode: 'T-FLOOR-03',
+    }),
+    { statusCode: 404, message: 'Cultivation floor not found' },
   );
 });
 
