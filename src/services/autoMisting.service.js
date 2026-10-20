@@ -3,6 +3,7 @@ const mqtt = require('./iotMqtt.service');
 const AppError = require('../utils/app-error');
 const {randomUUID}=require('node:crypto');
 const {validateConfig,aggregate,decide}=require('./autoMisting.algorithm');
+const {suggest,assertCompatible}=require('./autoMisting.profile');
 
 function positive(value,name='floorId') {
  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value)<1 || Number(value)>2147483647) throw new AppError(`Invalid ${name}`,400);
@@ -30,6 +31,9 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   if (run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)) throw new AppError('Stop automation and resolve pending OFF before changing configuration or mapping',409);
  }
  async function env(id,c) {const f=await repo.floor(id);return {masterId:f.master_identifier,nodeId:f.node_address,thresholds:c,...aggregate(await repo.sensors(f),c,now())};}
+ async function verifyProfile(id,c) {
+  if(c.config_source==='FLOOR')assertCompatible(c,(await repo.profiles(id)).profiles,true);
+ }
  async function log(id,run,event,reason,details) {return repo.log(id,run,event,reason,details);}
  async function stopRecord(id,user,reason,status='STOPPED') {
   return repo.transaction(async()=>{
@@ -74,12 +78,26 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   async configuration(value) {
    const id=positive(value);await repo.floor(id);
    const config=await repo.config(id),run=await repo.run(id);
-   return {config,mode:run?.status==='RUNNING'?'AUTO':'MANUAL',cultivation:await repo.profiles(id),
-    suggestions:config?await repo.one('SELECT * FROM mushroom_conditions WHERE mushroom_type_id=$1',[config.mushroom_type_id]):null};
+   const cultivation=await repo.profiles(id);
+   return {config,mode:run?.status==='RUNNING'?'AUTO':'MANUAL',cultivation,
+    suggestions:config?await repo.one('SELECT * FROM mushroom_conditions WHERE mushroom_type_id=$1',[config.mushroom_type_id]):null,
+    floorSuggestion:suggest(cultivation.profiles)};
+  },
+  async suggestions(value) {
+   const id=positive(value);await repo.floor(id);
+   return suggest((await repo.profiles(id)).profiles);
   },
   async save(value,body,user) {
    const id=positive(value),c=validateConfig(body);
    return repo.lockFloor(id,async()=>{await repo.floor(id);await editable(id);
+    c.config_source=c.config_source || 'LEGACY';
+    c.cooling_enabled=c.cooling_enabled ?? false;
+    c.source_profiles=null;
+    if(c.config_source==='FLOOR') {
+     if(!c.profile_approved || !c.profile_name)throw new AppError('Review and approve a named floor profile before saving',409);
+     c.source_profiles=assertCompatible(c,(await repo.profiles(id)).profiles);
+     c.mushroom_type_id=null;
+    }
     return repo.transaction(async()=>{const config=await repo.saveConfig(id,c,user);await log(id,null,'CONFIG_SAVED','Configuration saved; MANUAL remains active');return {config,mode:'MANUAL'};});
    });
   },
@@ -106,6 +124,33 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     return repo.one('UPDATE cultivation_trays SET floor_id=$1 WHERE tray_id=$2 RETURNING *',[id,tray]);
    });
   },
+  async cultivation(value,trayValue,body={},user) {
+   const id=positive(value),tray=positive(trayValue,'trayId');
+   if(!body || Object.keys(body).some(k=>!['rental_id','mushroom_type_id'].includes(k)))throw new AppError('Invalid cultivation fields',400);
+   const rental=positive(body.rental_id,'rental_id'),mushroom=positive(body.mushroom_type_id,'mushroom_type_id');
+   return repo.lockFloor(id,async()=>{
+    await repo.floor(id);await editable(id);
+    return repo.transaction(async()=>{
+     const assigned=await repo.one('SELECT * FROM cultivation_trays WHERE tray_id=$1 AND floor_id=$2 FOR UPDATE',[tray,id]);
+     if(!assigned)throw new AppError('Assign this tray to the floor first',409);
+     const lease=await repo.one("SELECT * FROM rentals WHERE rental_id=$1 AND tray_id=$2 AND status='ACTIVE' AND CURRENT_DATE BETWEEN start_date AND end_date FOR UPDATE",[rental,tray]);
+     if(!lease)throw new AppError('An active rental assigned to this tray within its rental dates is required',409);
+     const type=await repo.one("SELECT * FROM mushroom_types WHERE mushroom_type_id=$1 AND status='ACTIVE'",[mushroom]);
+     if(!type)throw new AppError('Active mushroom type required',409);
+     const sessions=await repo.rows("SELECT * FROM cultivation_sessions WHERE tray_id=$1 AND status IN ('PLANNED','ACTIVE','IN_PROGRESS') FOR UPDATE",[tray]);
+     if(sessions.length>1 || (sessions[0] && sessions[0].rental_id!==rental))
+      throw new AppError('Tray already has a different cultivation session',409);
+     const current=sessions[0];
+     if(current && current.status!=='PLANNED' && current.mushroom_type_id!==mushroom)
+      throw new AppError('Cannot change the mushroom type of an active cultivation session',409);
+     const session=current
+      ?await repo.one('UPDATE cultivation_sessions SET mushroom_type_id=$2 WHERE session_id=$1 RETURNING *',[current.session_id,mushroom])
+      :await repo.one("INSERT INTO cultivation_sessions(rental_id,tray_id,mushroom_type_id,start_at,status) VALUES($1,$2,$3,now(),'PLANNED') RETURNING *",[rental,tray,mushroom]);
+     await log(id,null,'CULTIVATION_SELECTED',`Operator ${user} selected mushroom ${mushroom} for tray ${tray}; review floor suggestions`);
+     return {session,mode:'MANUAL'};
+    });
+   });
+  },
   async start(value,body={},user) {
    const id=positive(value);
    if(Object.keys(body).some(k=>k!=='dryRun') || (body.dryRun!==undefined && typeof body.dryRun!=='boolean'))throw new AppError('dryRun must be boolean',400);
@@ -118,7 +163,10 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      const c=await repo.config(id);if(!c)throw new AppError('Save configuration first',409);
      if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Invalid or inactive floor mapping',409);
      const cultivation=await repo.profiles(id);
-     if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Mixed profiles or unassigned trays require an explicitly approved named floor profile',409);
+     if(c.config_source==='FLOOR') {
+      assertCompatible(c,cultivation.profiles,true);
+      if(!c.profile_approved || !c.profile_name)throw new AppError('Approved named floor profile required',409);
+     } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Mixed profiles or unassigned trays require an explicitly approved named floor profile',409);
      const e=await env(id,c);if(!e.healthy)throw new AppError(e.reason,409);
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Real automation disabled: verified device watchdog required',409);
@@ -127,7 +175,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      }
      return repo.transaction(async()=>{
      const run=await repo.createRun(id,c,user,dry);
-     await repo.runtimeSet(id,{run_id:run.id,control_state:'IDLE',demand:false,cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,cooldown_until:null,off_requested_at:null,last_error:null,last_evaluated_at:null});
+     await repo.runtimeSet(id,{run_id:run.id,control_state:'IDLE',demand:false,cooling_demand:false,last_reason:null,cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,cooldown_until:null,off_requested_at:null,last_error:null,last_evaluated_at:null});
      await log(id,run,'START',dry?'Operator started dry run':'Operator explicitly started real automation');
      return {mode:'AUTO',run};
      });
@@ -182,10 +230,19 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     const reservedOnMs=run?.dry_run?c.misting_pulse_ms:Math.max(c.misting_pulse_ms,watchdog(f));
     const decision=decide({running:run?.status==='RUNNING',config:c,runtime:rt,environment:e,online:run?.dry_run || online(f),
      ...budget,duration:budget.duration+reservedOnMs-c.misting_pulse_ms,now:now()});
-    if(preview)return {dryRun:true,decision,environment:e};
+    if(preview) {
+     if(run?.status==='RUNNING')await verifyProfile(id,c);
+     return {dryRun:true,decision,environment:e};
+    }
     if(rt.control_state==='OFF_PENDING' && run) {await requestOff(f,run,'Reconcile pending OFF');return decision;}
     if(run?.status!=='RUNNING')return decision;
     const active=['ON_REQUESTED','MISTING'].includes(rt.control_state);
+    try {await verifyProfile(id,c);} catch(error) {
+     await stopRecord(id,null,error.message,'FAULT');
+     await log(id,run,'FAULT',error.message,e);
+     if(active)await requestOff(f,run,error.message);
+     return {action:active?'OFF':'FAULT',state:active?'OFF_PENDING':'DISABLED',reason:error.message};
+    }
     if(!active && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)return decision;
     if(!run.dry_run && !hardware(f,c)) {await stopRecord(id,null,'Device safety verification missing','FAULT');if(active)await requestOff(f,run,'Safety gate closed');return;}
     if(decision.action==='FAULT' || (decision.action==='OFF' && ['SENSOR_FAULT','DEVICE_OFFLINE'].includes(decision.state))) {
@@ -193,7 +250,10 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      if(!active)await repo.runtimeSet(id,{control_state:decision.state,last_error:decision.reason});
      await log(id,run,'FAULT',decision.reason,e);
     }
-    if(decision.action==='OFF') {await requestOff(f,run,decision.reason);return decision;}
+    if(decision.action==='OFF') {
+     if(decision.demand!==undefined)await repo.runtimeSet(id,{demand:decision.demand,cooling_demand:decision.coolingDemand??false,last_reason:decision.reason});
+     await requestOff(f,run,decision.reason);return decision;
+    }
     if(decision.action==='FAULT')return decision;
     if(decision.action==='ON') {
      const reserve=async()=>{
@@ -202,10 +262,15 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped before ON publication',409);
       const fresh=await env(id,c);
       if(!fresh.healthy || (!run.dry_run && !online(f)))throw new AppError('Sensor or connection health changed before publication',409);
-      if(fresh.averageHumidity>=c.humidity_stop_threshold)throw new AppError('Humidity demand cleared before publication',409);
+      await verifyProfile(id,c);
+      const latestDecision=decide({running:true,config:c,runtime:rt,environment:fresh,
+       ...budget,duration:budget.duration+reservedOnMs-c.misting_pulse_ms,now:now()});
+      if(latestDecision.action!=='ON')throw new AppError('Climate demand cleared before publication',409);
+      Object.assign(decision,latestDecision);
       if(!run.dry_run)await requireLiveOff(f,c);
       await repo.transaction(async()=>{
       await repo.runtimeSet(id,{control_state:'ON_REQUESTED',cycle_id:randomUUID(),demand:decision.demand,
+       cooling_demand:decision.coolingDemand??false,last_reason:decision.reason,
        pulse_started_at:new Date(now()),pulse_deadline_at:new Date(now()+c.misting_pulse_ms),off_requested_at:null});
       await log(id,run,'PULSE_RESERVED',decision.reason,{...fresh,reservedOnMs});
       });
@@ -225,14 +290,16 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       await log(id,run,'FAULT',error.message);
       if(needsOff)await requestOff(f,run,'ON attempt failed or prerequisites changed');
      }
-    } else if(rt.control_state!==decision.state || rt.demand!==decision.demand) {
+    } else if(rt.control_state!==decision.state || rt.demand!==decision.demand
+     || rt.cooling_demand!==decision.coolingDemand || rt.last_reason!==decision.reason) {
      await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
       if((await repo.run(id))?.status!=='RUNNING')return;
-      await repo.runtimeSet(id,{control_state:decision.state,demand:decision.demand??rt.demand});
+      await repo.runtimeSet(id,{control_state:decision.state,demand:decision.demand??rt.demand,
+       cooling_demand:decision.coolingDemand??rt.cooling_demand,last_reason:decision.reason});
       await log(id,run,'DECISION',decision.reason,e);
      });
     }
-    if(!active)await repo.runtimeSet(id,{last_evaluated_at:new Date(now()),last_average_humidity:e.averageHumidity});
+    if(!active)await repo.runtimeSet(id,{last_evaluated_at:new Date(now()),last_average_humidity:e.averageHumidity,last_average_temperature:e.averageTemperature});
     return decision;
    });
   },

@@ -1,8 +1,13 @@
-const {ranges}=require('../services/autoMisting.algorithm');
+const {ranges,coolingRanges}=require('../services/autoMisting.algorithm');
 const config={type:'object',additionalProperties:false,
- required:Object.keys(ranges).filter(k=>!['sensor_max_age_ms','required_valid_sensors'].includes(k)),
+ required:Object.keys(ranges).filter(k=>!['mushroom_type_id','sensor_max_age_ms','required_valid_sensors'].includes(k)),
  properties:Object.fromEntries(Object.entries(ranges).map(([k,[minimum,maximum]])=>[k,{type:k.startsWith('humidity_') || k==='max_sensor_spread_percent'?'number':'integer',minimum,maximum}]))};
 Object.assign(config.properties,{profile_name:{type:'string',maxLength:200,nullable:true},profile_approved:{type:'boolean',default:false}});
+Object.assign(config.properties,{
+ config_source:{type:'string',enum:['LEGACY','FLOOR'],default:'LEGACY',description:'FLOOR derives crop types from assigned tray sessions; requires a reviewed named profile. LEGACY requires mushroom_type_id.'},
+ cooling_enabled:{type:'boolean',default:false,description:'When true all temperature fields and cooling_humidity_limit are required.'},
+ ...Object.fromEntries(Object.entries(coolingRanges).map(([k,[minimum,maximum]])=>[k,{type:'number',minimum,maximum}]))
+});
 const mapping={type:'object',additionalProperties:false,required:['room_id','floor_number','floor_name','master_id','node_address','misting_ssr_channel'],properties:{
  room_id:{type:'integer',minimum:1},floor_number:{type:'integer',minimum:1},floor_name:{type:'string',maxLength:200},
  master_id:{type:'integer',minimum:1},node_address:{type:'integer',minimum:1,maximum:247},misting_ssr_channel:{type:'integer',minimum:1,maximum:8},status:{type:'string',enum:['ACTIVE','INACTIVE']}}};
@@ -11,10 +16,10 @@ const example={mushroom_type_id:1,humidity_min:85,humidity_max:95,humidity_start
  max_sensor_spread_percent:10,max_activations_per_hour:20,max_cumulative_on_ms_per_hour:100000};
 const paths={};
 const environmentSchema={type:'object',properties:{masterId:{type:'string'},nodeId:{type:'integer'},
- averageHumidity:{type:'number',nullable:true},averageTemperature:{type:'number',nullable:true},healthy:{type:'boolean'},reason:{type:'string',nullable:true},
+ averageHumidity:{type:'number',nullable:true},averageTemperature:{type:'number',nullable:true},temperatureSpread:{type:'number',nullable:true},healthy:{type:'boolean'},reason:{type:'string',nullable:true},
  sensors:{type:'array',items:{type:'object',properties:{sensorId:{type:'integer'},humidity:{type:'number',nullable:true},valid:{type:'boolean'},ageMs:{type:'number',nullable:true},retained:{type:'boolean'}}}},thresholds:config}};
 const statusSchema={type:'object',properties:{mode:{type:'string',enum:['MANUAL','AUTO']},run:{type:'object',nullable:true,properties:{status:{type:'string',enum:['RUNNING','STOPPED','FAULT']},dry_run:{type:'boolean'},started_by:{type:'integer',nullable:true}}},
- runtime:{type:'object',properties:{control_state:{type:'string',enum:['DISABLED','IDLE','ON_REQUESTED','MISTING','OFF_PENDING','COOLDOWN','SENSOR_FAULT','DEVICE_OFFLINE','FAULT']},pulse_started_at:{type:'string',format:'date-time',nullable:true},pulse_deadline_at:{type:'string',format:'date-time',nullable:true},last_error:{type:'string',nullable:true}}},
+ runtime:{type:'object',properties:{demand:{type:'boolean'},cooling_demand:{type:'boolean'},last_reason:{type:'string',nullable:true},control_state:{type:'string',enum:['DISABLED','IDLE','ON_REQUESTED','MISTING','OFF_PENDING','COOLDOWN','SENSOR_FAULT','DEVICE_OFFLINE','FAULT']},pulse_started_at:{type:'string',format:'date-time',nullable:true},pulse_deadline_at:{type:'string',format:'date-time',nullable:true},last_error:{type:'string',nullable:true}}},
  environment:environmentSchema,ssr:{type:'object',nullable:true,properties:{desired_state:{type:'string',enum:['ON','OFF'],nullable:true},reported_state:{type:'string',enum:['ON','OFF'],nullable:true}}},cooldownRemainingMs:{type:'number'},lastDecision:{type:'object',nullable:true}}};
 function add(path,method,summary,schema,description='') {
  const operation={tags:['Automatic misting'],summary,description:`${description} ${method==='get'?'Authenticated read access.':'Requires iot.automation.manage permission.'}`,
@@ -44,8 +49,14 @@ const base='/api/iot/floors',floor=base+'/{floorId}',auto=floor+'/auto-control';
 add(base,'get','List floor mappings');add(base,'post','Create floor mapping',mapping,'Master must already belong to this room. No inferred node/floor assignments.');
 add(floor,'put','Replace floor mapping',mapping,'Stop and resolve OFF first. Channels and nodes are unique per master.');
 add(floor+'/trays/{trayId}','put','Assign a same-room tray to a stopped floor');
+add(floor+'/trays/{trayId}/cultivation','put','Select a mushroom type for a rented tray',{
+ type:'object',additionalProperties:false,required:['rental_id','mushroom_type_id'],
+ properties:{rental_id:{type:'integer',minimum:1},mushroom_type_id:{type:'integer',minimum:1}}
+},'Stop AUTO and resolve OFF first. Requires an ACTIVE rental assigned to this tray within its rental dates. Creates or updates a PLANNED session; cannot change the mushroom type of an ACTIVE session. Review floor suggestions afterward.');
 add(floor+'/environment','get','Get three sensors, averages, freshness and thresholds');
 add(auto,'get','Read saved configuration, mode, cultivation conflicts and suggestions');
+add(auto+'/suggestions','get','Suggest a shared floor climate configuration',null,
+ 'Requires iot.automation.manage. Uses PLANNED/ACTIVE/IN_PROGRESS tray sessions; returns sourceProfiles, common, issues, warnings, config. Config is null for missing, conflicting or too narrow conditions. No database writes or device commands. Review preset, set profile_approved=true and PUT config to auto-control.');
 add(auto,'put','Save configuration without starting AUTO',config,'Example thresholds are for simulation only. Save remains MANUAL. Stop before edits.');
 add(auto+'/start','post','Explicitly start a run',{type:'object',additionalProperties:false,properties:{dryRun:{type:'boolean',default:true}}},'Fresh non-retained sensors required. Real runs also require MQTT, fresh SSR OFF and verified local watchdog. Default dryRun=true publishes nothing.');
 add(auto+'/stop','post','Stop AUTO and request OFF',null,'Blocks new ON; unresolved physical state remains OFF_PENDING. OFF publish success is not confirmation.');

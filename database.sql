@@ -1,7 +1,12 @@
 -- ============================================================
 -- SMART MUSH FARM DATABASE
 -- PostgreSQL
--- DATABASE SCHEMA - NEW VERSION
+-- Consolidated schema for a NEW, EMPTY database (migrations 001 through 008).
+-- Includes both 005 migrations and both 007 migrations.
+-- Existing databases: apply the relevant migrations instead of rerunning this file.
+-- Paid-rental backfill in 007_backfill_paid_rentals.sql is for existing data;
+-- its final rental schema is already defined below.
+-- Seed roles separately, then grant iot.automation.manage to Admin/Farm Operator.
 -- ============================================================
 
 -- ============================================================
@@ -843,7 +848,7 @@ CREATE INDEX idx_payments_payos_payment_link_id
     ON payments(payos_payment_link_id)
     WHERE payos_payment_link_id IS NOT NULL;
 
-CREATE UNIQUE INDEX uq_payments_transaction_code
+CREATE UNIQUE INDEX ux_payments_transaction_code
     ON payments(transaction_code)
     WHERE transaction_code IS NOT NULL;
 
@@ -956,3 +961,222 @@ CREATE TRIGGER trg_cultivation_progress_updated_at
 BEFORE UPDATE ON cultivation_progress
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
+
+
+-- ============================================================
+-- 22. MQTT IOT INTEGRATION (migration 004)
+-- ============================================================
+
+CREATE TABLE iot_masters (
+    id SERIAL PRIMARY KEY,
+    master_identifier VARCHAR(64) NOT NULL UNIQUE CHECK (master_identifier ~ '^[A-Za-z0-9_-]{1,64}$'),
+    cultivation_room_id INT REFERENCES cultivation_rooms(room_id) ON DELETE RESTRICT,
+    reported_status VARCHAR(7) CHECK (reported_status IN ('online', 'offline')),
+    status_received_at TIMESTAMPTZ,
+    status_retained BOOLEAN,
+    last_seen_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_iot_masters_room ON iot_masters(cultivation_room_id);
+
+CREATE TABLE iot_sensor_readings (
+    id BIGSERIAL PRIMARY KEY,
+    master_id INT NOT NULL REFERENCES iot_masters(id) ON DELETE RESTRICT,
+    node_address INT NOT NULL CHECK (node_address BETWEEN 1 AND 247),
+    sensor_address INT NOT NULL CHECK (sensor_address BETWEEN 1 AND 3),
+    temperature DOUBLE PRECISION,
+    humidity DOUBLE PRECISION,
+    is_valid BOOLEAN NOT NULL,
+    received_at TIMESTAMPTZ NOT NULL,
+    measured_at TIMESTAMPTZ,
+    retained BOOLEAN NOT NULL DEFAULT false,
+    CHECK ((is_valid AND temperature IS NOT NULL AND humidity IS NOT NULL
+        AND temperature BETWEEN -40 AND 125 AND humidity BETWEEN 0 AND 100)
+        OR (NOT is_valid AND temperature IS NULL AND humidity IS NULL))
+);
+CREATE INDEX idx_iot_readings_sensor_time ON iot_sensor_readings(master_id, node_address, sensor_address, received_at DESC, id DESC);
+
+CREATE TABLE iot_sensor_latest (
+    master_id INT NOT NULL REFERENCES iot_masters(id) ON DELETE RESTRICT,
+    node_address INT NOT NULL CHECK (node_address BETWEEN 1 AND 247),
+    sensor_address INT NOT NULL CHECK (sensor_address BETWEEN 1 AND 3),
+    temperature DOUBLE PRECISION CHECK (temperature BETWEEN -40 AND 125),
+    humidity DOUBLE PRECISION CHECK (humidity BETWEEN 0 AND 100),
+    is_valid BOOLEAN NOT NULL,
+    last_received_at TIMESTAMPTZ NOT NULL,
+    last_valid_at TIMESTAMPTZ,
+    retained BOOLEAN NOT NULL DEFAULT false,
+    PRIMARY KEY (master_id, node_address, sensor_address)
+);
+
+CREATE TABLE iot_ssr_states (
+    id BIGSERIAL PRIMARY KEY,
+    master_id INT NOT NULL REFERENCES iot_masters(id) ON DELETE RESTRICT,
+    channel INT NOT NULL CHECK (channel BETWEEN 1 AND 8),
+    desired_state VARCHAR(3) CHECK (desired_state IN ('ON', 'OFF')),
+    reported_state VARCHAR(3) CHECK (reported_state IN ('ON', 'OFF')),
+    command_requested_at TIMESTAMPTZ,
+    state_reported_at TIMESTAMPTZ,
+    reported_retained BOOLEAN,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (master_id, channel)
+);
+
+CREATE TABLE iot_device_commands (
+    id UUID PRIMARY KEY,
+    master_id INT NOT NULL REFERENCES iot_masters(id) ON DELETE RESTRICT,
+    channel INT NOT NULL CHECK (channel BETWEEN 1 AND 8),
+    action VARCHAR(3) NOT NULL CHECK (action IN ('ON', 'OFF')),
+    status VARCHAR(12) NOT NULL CHECK (status IN ('PENDING', 'PUBLISHED', 'FAILED', 'TIMED_OUT')),
+    requested_by INT REFERENCES users(user_id) ON DELETE SET NULL,
+    requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    expires_at TIMESTAMPTZ NOT NULL,
+    published_at TIMESTAMPTZ,
+    completed_at TIMESTAMPTZ,
+    error_message TEXT
+);
+CREATE INDEX idx_iot_commands_master_time ON iot_device_commands(master_id, requested_at DESC);
+CREATE INDEX idx_iot_commands_pending_expiry ON iot_device_commands(expires_at) WHERE status = 'PENDING';
+
+INSERT INTO iot_masters(master_identifier) VALUES ('master01');
+
+
+-- ============================================================
+-- 23. FLOOR AUTOMATION (migration 005_add_auto_misting_control)
+-- ============================================================
+
+CREATE TABLE cultivation_floors (
+ floor_id SERIAL PRIMARY KEY,
+ room_id INT NOT NULL REFERENCES cultivation_rooms(room_id),
+ floor_number INT NOT NULL CHECK (floor_number > 0),
+ floor_name TEXT NOT NULL,
+ master_id INT NOT NULL REFERENCES iot_masters(id),
+ node_address INT NOT NULL CHECK (node_address BETWEEN 1 AND 247),
+ misting_ssr_channel INT NOT NULL CHECK (misting_ssr_channel BETWEEN 1 AND 8),
+ status TEXT NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','INACTIVE')),
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now(), updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ UNIQUE(room_id,floor_number), UNIQUE(master_id,misting_ssr_channel), UNIQUE(master_id,node_address),
+ UNIQUE(floor_id,room_id)
+);
+ALTER TABLE cultivation_trays ADD COLUMN floor_id INT;
+ALTER TABLE cultivation_trays ADD CONSTRAINT trays_floor_room_fk
+ FOREIGN KEY(floor_id,room_id) REFERENCES cultivation_floors(floor_id,room_id);
+CREATE INDEX idx_trays_floor ON cultivation_trays(floor_id);
+
+CREATE TABLE iot_auto_control_configs (
+ id SERIAL PRIMARY KEY, floor_id INT NOT NULL UNIQUE REFERENCES cultivation_floors(floor_id),
+ mushroom_type_id INT NOT NULL REFERENCES mushroom_types(mushroom_type_id),
+ profile_name TEXT, profile_approved BOOLEAN NOT NULL DEFAULT false,
+ humidity_min DOUBLE PRECISION NOT NULL CHECK (humidity_min BETWEEN 0 AND 100),
+ humidity_max DOUBLE PRECISION NOT NULL CHECK (humidity_max BETWEEN 0 AND 100),
+ humidity_start_threshold DOUBLE PRECISION NOT NULL CHECK (humidity_start_threshold BETWEEN 0 AND 100),
+ humidity_stop_threshold DOUBLE PRECISION NOT NULL CHECK (humidity_stop_threshold BETWEEN 0 AND 100),
+ misting_pulse_ms INT NOT NULL CHECK (misting_pulse_ms BETWEEN 1000 AND 60000),
+ cooldown_ms INT NOT NULL CHECK (cooldown_ms BETWEEN 1000 AND 86400000),
+ evaluation_interval_ms INT NOT NULL CHECK (evaluation_interval_ms BETWEEN 1000 AND 60000),
+ sensor_max_age_ms INT NOT NULL DEFAULT 20000 CHECK (sensor_max_age_ms BETWEEN 1000 AND 300000),
+ required_valid_sensors INT NOT NULL DEFAULT 3 CHECK (required_valid_sensors BETWEEN 1 AND 3),
+ max_sensor_spread_percent DOUBLE PRECISION NOT NULL CHECK (max_sensor_spread_percent BETWEEN 0 AND 100),
+ max_activations_per_hour INT NOT NULL CHECK (max_activations_per_hour BETWEEN 1 AND 3600),
+ max_cumulative_on_ms_per_hour INT NOT NULL CHECK (max_cumulative_on_ms_per_hour BETWEEN 1000 AND 3600000),
+ configured_by INT REFERENCES users(user_id), configured_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ CHECK (humidity_min < humidity_max AND humidity_start_threshold < humidity_stop_threshold
+ AND humidity_start_threshold <= humidity_min AND humidity_stop_threshold <= humidity_max),
+ CHECK (max_cumulative_on_ms_per_hour >= misting_pulse_ms)
+);
+CREATE TABLE iot_auto_control_runs (
+ id SERIAL PRIMARY KEY, floor_id INT NOT NULL REFERENCES cultivation_floors(floor_id),
+ config_id INT NOT NULL REFERENCES iot_auto_control_configs(id), config_snapshot JSONB NOT NULL,
+ dry_run BOOLEAN NOT NULL DEFAULT true,
+ status TEXT NOT NULL CHECK (status IN ('RUNNING','STOPPED','FAULT')),
+ started_by INT REFERENCES users(user_id), started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+ stopped_by INT REFERENCES users(user_id), stopped_at TIMESTAMPTZ, stop_reason TEXT,
+ created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX idx_auto_one_run ON iot_auto_control_runs(floor_id) WHERE status='RUNNING';
+CREATE INDEX idx_auto_runs_floor ON iot_auto_control_runs(floor_id,id DESC);
+CREATE TABLE iot_auto_control_runtime (
+ floor_id INT PRIMARY KEY REFERENCES cultivation_floors(floor_id), run_id INT REFERENCES iot_auto_control_runs(id),
+ control_state TEXT NOT NULL DEFAULT 'DISABLED' CHECK (control_state IN
+ ('DISABLED','IDLE','ON_REQUESTED','MISTING','OFF_PENDING','COOLDOWN','SENSOR_FAULT','DEVICE_OFFLINE','FAULT')),
+ cycle_id UUID, demand BOOLEAN NOT NULL DEFAULT false,
+ pulse_started_at TIMESTAMPTZ, pulse_deadline_at TIMESTAMPTZ, cooldown_until TIMESTAMPTZ,
+ off_requested_at TIMESTAMPTZ, last_evaluated_at TIMESTAMPTZ, last_average_humidity DOUBLE PRECISION,
+ last_error TEXT, updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE iot_auto_control_logs (
+ id BIGSERIAL PRIMARY KEY, floor_id INT NOT NULL REFERENCES cultivation_floors(floor_id),
+ run_id INT REFERENCES iot_auto_control_runs(id), event_type TEXT NOT NULL,
+ average_humidity DOUBLE PRECISION, sensor_values_json JSONB, thresholds_snapshot_json JSONB,
+ command_id UUID REFERENCES iot_device_commands(id), reason TEXT,
+ reserved_on_ms INT NOT NULL DEFAULT 0, created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_auto_logs_floor_time ON iot_auto_control_logs(floor_id,created_at DESC,id DESC);
+CREATE TABLE iot_auto_control_worker (
+ id INT PRIMARY KEY CHECK(id=1), heartbeat_at TIMESTAMPTZ NOT NULL
+);
+
+-- Exact role names are deliberately resolved in data, never by numeric IDs.
+INSERT INTO permissions(permission_name,description) VALUES
+ ('iot.automation.manage','Configure, start, stop and map floor automation') ON CONFLICT DO NOTHING;
+INSERT INTO role_permissions(role_id,permission_id)
+ SELECT r.role_id,p.permission_id FROM roles r CROSS JOIN permissions p
+ WHERE lower(regexp_replace(r.role_name,'[ _-]','','g')) IN ('admin','farmoperator')
+ AND p.permission_name='iot.automation.manage' ON CONFLICT DO NOTHING;
+
+CREATE FUNCTION check_floor_master_room() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NOT EXISTS(SELECT 1 FROM iot_masters WHERE id=NEW.master_id AND cultivation_room_id=NEW.room_id) THEN
+  RAISE EXCEPTION 'Master must belong to the floor room' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER floor_master_room BEFORE INSERT OR UPDATE ON cultivation_floors
+ FOR EACH ROW EXECUTE FUNCTION check_floor_master_room();
+CREATE FUNCTION protect_master_floor_room() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF EXISTS(SELECT 1 FROM cultivation_floors WHERE master_id=NEW.id AND room_id IS DISTINCT FROM NEW.cultivation_room_id) THEN
+  RAISE EXCEPTION 'Master is assigned to floors in another room' USING ERRCODE='23514';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER master_floor_room BEFORE UPDATE OF cultivation_room_id ON iot_masters
+ FOR EACH ROW EXECUTE FUNCTION protect_master_floor_room();
+
+
+-- ============================================================
+-- 24. SHARED FLOOR CLIMATE PROFILES (migration 007_add_floor_climate_profiles)
+-- ============================================================
+
+ALTER TABLE iot_auto_control_configs
+ ALTER COLUMN mushroom_type_id DROP NOT NULL,
+ ADD COLUMN config_source TEXT NOT NULL DEFAULT 'LEGACY' CHECK (config_source IN ('LEGACY','FLOOR')),
+ ADD COLUMN source_profiles JSONB,
+ ADD COLUMN cooling_enabled BOOLEAN NOT NULL DEFAULT false,
+ ADD COLUMN temperature_min DOUBLE PRECISION,
+ ADD COLUMN temperature_max DOUBLE PRECISION,
+ ADD COLUMN temperature_start_threshold DOUBLE PRECISION,
+ ADD COLUMN temperature_stop_threshold DOUBLE PRECISION,
+ ADD COLUMN cooling_humidity_limit DOUBLE PRECISION,
+ ADD COLUMN max_temperature_spread_c DOUBLE PRECISION,
+ ADD CONSTRAINT auto_profile_source CHECK (
+  (config_source='LEGACY' AND mushroom_type_id IS NOT NULL) OR
+  (config_source='FLOOR' AND source_profiles IS NOT NULL AND jsonb_typeof(source_profiles)='array')),
+ ADD CONSTRAINT auto_cooling_bounds CHECK (NOT cooling_enabled OR (
+  temperature_min IS NOT NULL AND temperature_max IS NOT NULL
+  AND temperature_start_threshold IS NOT NULL AND temperature_stop_threshold IS NOT NULL
+  AND cooling_humidity_limit IS NOT NULL AND max_temperature_spread_c IS NOT NULL
+  AND temperature_min >= -40 AND temperature_max <= 80
+  AND temperature_min < temperature_max
+  AND temperature_stop_threshold >= temperature_min
+  AND temperature_stop_threshold < temperature_start_threshold
+  AND temperature_start_threshold <= temperature_max
+  AND cooling_humidity_limit > humidity_stop_threshold AND cooling_humidity_limit <= humidity_max
+  AND max_temperature_spread_c BETWEEN 0 AND 20));
+ALTER TABLE iot_auto_control_runtime
+ ADD COLUMN cooling_demand BOOLEAN NOT NULL DEFAULT false,
+ ADD COLUMN last_average_temperature DOUBLE PRECISION,
+ ADD COLUMN last_reason TEXT;
+ALTER TABLE iot_auto_control_logs ADD COLUMN average_temperature DOUBLE PRECISION;
