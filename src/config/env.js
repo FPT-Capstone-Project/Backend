@@ -3,9 +3,16 @@ const dotenv = require('dotenv');
 
 dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
+const nodeEnv = process.env.NODE_ENV || 'development';
+const defaultCorsOrigins = nodeEnv === 'development' ? '*' : '';
+
 const env = {
-  nodeEnv: process.env.NODE_ENV || 'development',
+  nodeEnv,
   port: Number(process.env.PORT || 3000),
+  corsOrigins: (process.env.CORS_ORIGINS || defaultCorsOrigins)
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
   databaseUrl: process.env.DATABASE_URL,
   dbHost: process.env.DB_HOST || 'localhost',
   dbPort: Number(process.env.DB_PORT || 5432),
