@@ -1,11 +1,11 @@
 const authService = require('../services/auth.service');
 
 async function register(req, res) {
-  const result = await authService.registerOtp({
+  const result = await authService.register({
     ...req.body,
-    name: req.body.name || req.body.fullName,
+    fullName: req.body.fullName || req.body.name,
   });
-  res.status(200).json(result);
+  res.status(201).json({ message: 'Registration successful', ...result });
 }
 
 async function login(req, res) {

@@ -45,6 +45,12 @@ async function getAllCultivationTrays(filters = {}) {
   return cultivationTrayModel.findAll({ roomId, status });
 }
 
+async function getCultivationTraysByRoomId(roomId, filters = {}) {
+  const id = parseId(roomId, 'roomId');
+  await ensureRoomExists(id);
+  return getAllCultivationTrays({ ...filters, roomId: id });
+}
+
 async function getCultivationTrayById(trayId) {
   const tray = await cultivationTrayModel.findById(parseId(trayId, 'trayId'));
   if (!tray) throw new AppError('Cultivation tray not found', 404);
@@ -109,6 +115,7 @@ async function deleteCultivationTray(trayId) {
 
 module.exports = {
   getAllCultivationTrays,
+  getCultivationTraysByRoomId,
   getCultivationTrayById,
   createCultivationTray,
   updateCultivationTray,

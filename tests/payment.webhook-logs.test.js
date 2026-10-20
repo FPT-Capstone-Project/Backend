@@ -27,6 +27,7 @@ function loadPaymentModel({ payment, order = {} } = {}) {
     },
     paymentUpdates: 0,
     orderUpdates: 0,
+    rentalsCreated: 0,
   };
 
   const client = {
@@ -57,6 +58,11 @@ function loadPaymentModel({ payment, order = {} } = {}) {
         state.order.status = 'CONFIRMED';
         state.order.payment_status = 'PAID';
         state.orderUpdates += 1;
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('INSERT INTO rentals')) {
+        state.rentalsCreated += 1;
         return { rows: [] };
       }
 
@@ -115,6 +121,7 @@ test('accepts a late PayOS payment after its pending order payment was cancelled
   assert.equal(state.orderUpdates, 1);
   assert.equal(state.order.status, 'CONFIRMED');
   assert.equal(state.order.payment_status, 'PAID');
+  assert.equal(state.rentalsCreated, 1);
 });
 
 test('records an overpayment as paid and logs the excess for reconciliation', async (t) => {
@@ -125,6 +132,7 @@ test('records an overpayment as paid and logs the excess for reconciliation', as
 
   assert.equal(result.status, 'PAID');
   assert.equal(state.order.status, 'CONFIRMED');
+  assert.equal(state.rentalsCreated, 1);
   assert.deepEqual(warning.mock.calls[0].arguments[1], {
     orderCode: 21,
     paidAmount: 530001,

@@ -4,6 +4,11 @@ async function list(req, res) {
   res.json({ data: await cultivationTrayService.getAllCultivationTrays(req.query || {}) });
 }
 
+async function listByRoom(req, res) {
+  const data = await cultivationTrayService.getCultivationTraysByRoomId(req.params.id, req.query || {});
+  res.json({ data });
+}
+
 async function getById(req, res) {
   res.json({ data: await cultivationTrayService.getCultivationTrayById(req.params.id) });
 }
@@ -23,4 +28,4 @@ async function remove(req, res) {
   res.json({ message: 'Cultivation tray deleted successfully', data: tray });
 }
 
-module.exports = { list, getById, create, update, remove };
+module.exports = { list, listByRoom, getById, create, update, remove };

@@ -295,6 +295,20 @@ async function markPayosPaymentAsPaid(orderCode, paidAmount, reference) {
       [payment.order_id],
     );
 
+    await client.query(
+      `INSERT INTO rentals (
+         order_id, user_id, duration_days, status
+       )
+       SELECT o.order_id, o.user_id, rp.duration_days, 'CONFIRMED'
+       FROM orders o
+       INNER JOIN order_items oi ON oi.order_id = o.order_id AND oi.item_type = 'RENTAL'
+       INNER JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
+       WHERE o.order_id = $1
+         AND o.payment_status = 'PAID'
+       ON CONFLICT (order_id) DO NOTHING`,
+      [payment.order_id],
+    );
+
     await client.query('COMMIT');
     if (receivedAmount > expectedAmount) {
       console.warn('PayOS payment received an overpayment', {

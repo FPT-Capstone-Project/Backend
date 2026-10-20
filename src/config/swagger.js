@@ -25,6 +25,7 @@ const options = {
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
       { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
+      { name: 'Rentals', description: 'Rental records created after successful payment and managed by Admin/Farm Operator' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
     ],
     components: {
@@ -38,12 +39,18 @@ const options = {
       schemas: {
         RegisterRequest: {
           type: 'object',
-          required: ['roleId', 'email', 'password', 'fullName'],
+          required: ['email', 'password', 'fullName'],
           properties: {
-            roleId: { type: 'integer', example: 2 },
             email: { type: 'string', format: 'email', example: 'user@example.com' },
             password: { type: 'string', minLength: 8, example: 'password123' },
             fullName: { type: 'string', example: 'Nguyen Van A' },
+            name: { type: 'string', description: 'Alias for fullName' },
+            roleId: {
+              type: 'integer',
+              minimum: 1,
+              example: 3,
+              description: 'Optional; role IDs in the current seed: 1 = Farm Operator, 2 = Admin, 3 = Customer. Without roleId, Customer (3) is assigned.',
+            },
             phone: { type: 'string', example: '0900000000' },
             address: { type: 'string', example: 'Ho Chi Minh City' },
           },
@@ -140,10 +147,19 @@ const options = {
         },
         CreateRentalOrderRequest: {
           type: 'object',
-          required: ['packageId', 'mushroomTypeId'],
+          required: ['mushroomTypeId'],
           properties: {
-            packageId: { type: 'integer', example: 1, description: 'Selected rental package ID' },
-            mushroomTypeId: { type: 'integer', example: 2, description: 'Selected mushroom type ID' },
+            packageId: {
+              type: 'integer',
+              nullable: true,
+              example: 1,
+              description: 'Optional rental package ID. When provided, the order has one RENTAL item containing both this package and mushroomTypeId.',
+            },
+            mushroomTypeId: {
+              type: 'integer',
+              example: 2,
+              description: 'Required mushroom type ID. Without packageId, creates one MUSHROOM order item.',
+            },
           },
         },
         PayosPaymentResponse: {

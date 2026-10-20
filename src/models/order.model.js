@@ -114,16 +114,19 @@ async function createRentalOrder({ userId, packageId, mushroomTypeId }) {
   try {
     await client.query('BEGIN');
 
-    const packageResult = await client.query(
-      `SELECT package_id, package_name, duration_days, price, status
-       FROM rental_packages
-       WHERE package_id = $1
-       FOR SHARE`,
-      [packageId],
-    );
-    const rentalPackage = packageResult.rows[0];
-    if (!rentalPackage) throw new AppError('Rental package not found', 404);
-    if (rentalPackage.status !== 'ACTIVE') throw new AppError('Rental package is not available', 400);
+    let rentalPackage = null;
+    if (packageId != null) {
+      const packageResult = await client.query(
+        `SELECT package_id, package_name, duration_days, price, status
+         FROM rental_packages
+         WHERE package_id = $1
+         FOR SHARE`,
+        [packageId],
+      );
+      rentalPackage = packageResult.rows[0];
+      if (!rentalPackage) throw new AppError('Rental package not found', 404);
+      if (rentalPackage.status !== 'ACTIVE') throw new AppError('Rental package is not available', 400);
+    }
 
     const mushroomResult = await client.query(
       `SELECT mushroom_type_id, name, growing_days, price, status
@@ -135,50 +138,50 @@ async function createRentalOrder({ userId, packageId, mushroomTypeId }) {
     const mushroomType = mushroomResult.rows[0];
     if (!mushroomType) throw new AppError('Mushroom type not found', 404);
     if (mushroomType.status !== 'ACTIVE') throw new AppError('Mushroom type is not available', 400);
-    if (Number(mushroomType.growing_days) > Number(rentalPackage.duration_days)) {
+    if (rentalPackage && Number(mushroomType.growing_days) > Number(rentalPackage.duration_days)) {
       throw new AppError(
         `Growing this mushroom takes ${mushroomType.growing_days} days, longer than the ${rentalPackage.duration_days}-day rental. Choose another mushroom type or rental package.`,
         400,
       );
     }
 
+    const packagePrice = rentalPackage ? rentalPackage.price : 0;
     const orderResult = await client.query(
       `INSERT INTO orders (user_id, subtotal, total_amount)
        VALUES ($1, $2::numeric + $3::numeric, $2::numeric + $3::numeric)
         RETURNING order_id, user_id, subtotal, discount, shipping_fee,
              total_amount, status, payment_status, created_at, updated_at`,
-      [userId, rentalPackage.price, mushroomType.price],
+      [userId, packagePrice, mushroomType.price],
     );
     const order = orderResult.rows[0];
 
-    const rentalItemResult = await client.query(
+    const itemType = rentalPackage ? 'RENTAL' : 'MUSHROOM';
+    const itemResult = await client.query(
       `INSERT INTO order_items (
          order_id, item_type, rental_package_id, mushroom_type_id,
          quantity, unit_price, total_price
        )
-       VALUES ($1, 'RENTAL', $2, NULL, 1, $3, $3)
+       VALUES ($1, $2, $3, $4, 1, $5::numeric + $6::numeric, $5::numeric + $6::numeric)
        RETURNING order_item_id, order_id, item_type, rental_package_id,
                  mushroom_type_id, quantity, unit_price, total_price`,
-      [order.order_id, packageId, rentalPackage.price],
-    );
-    const mushroomItemResult = await client.query(
-      `INSERT INTO order_items (
-         order_id, item_type, rental_package_id, mushroom_type_id,
-         quantity, unit_price, total_price
-       )
-       VALUES ($1, 'MUSHROOM', NULL, $2, 1, $3, $3)
-       RETURNING order_item_id, order_id, item_type, rental_package_id,
-                 mushroom_type_id, quantity, unit_price, total_price`,
-      [order.order_id, mushroomTypeId, mushroomType.price],
+      [
+        order.order_id,
+        itemType,
+        rentalPackage ? packageId : null,
+        mushroomTypeId,
+        packagePrice,
+        mushroomType.price,
+      ],
     );
 
     await client.query('COMMIT');
     return {
       ...order,
-      items: [
-        { ...rentalItemResult.rows[0], package_name: rentalPackage.package_name },
-        { ...mushroomItemResult.rows[0], mushroom_name: mushroomType.name },
-      ],
+      items: [{
+        ...itemResult.rows[0],
+        package_name: rentalPackage ? rentalPackage.package_name : null,
+        mushroom_name: mushroomType.name,
+      }],
     };
   } catch (error) {
     await client.query('ROLLBACK');

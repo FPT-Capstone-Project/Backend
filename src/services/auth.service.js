@@ -26,8 +26,15 @@ function normalizeEmail(email) {
 
 async function register({ roleId, email, password, fullName, phone, address }) {
   const normalizedEmail = normalizeEmail(email);
-  if (!normalizedEmail || !password || !fullName || !Number.isInteger(Number(roleId))) {
-    throw new AppError('roleId, email, password and fullName are required', 400);
+  if (!normalizedEmail || !password || !fullName) {
+    throw new AppError('email, password and fullName are required', 400);
+  }
+  let selectedRoleId = DEFAULT_CUSTOMER_ROLE_ID;
+  if (roleId !== undefined) {
+    if (!Number.isInteger(roleId) || roleId < 1) {
+      throw new AppError('roleId must be a positive integer', 400);
+    }
+    selectedRoleId = roleId;
   }
   if (password.length < 8) {
     throw new AppError('Password must be at least 8 characters', 400);
@@ -39,7 +46,7 @@ async function register({ roleId, email, password, fullName, phone, address }) {
   const passwordHash = await bcrypt.hash(password, 12);
   try {
     const user = await userModel.create({
-      roleId: Number(roleId), email: normalizedEmail, passwordHash, fullName, phone, address,
+      roleId: selectedRoleId, email: normalizedEmail, passwordHash, fullName, phone, address,
     });
     return { user, token: createToken(user) };
   } catch (error) {
