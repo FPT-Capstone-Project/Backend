@@ -24,7 +24,6 @@ test('IoT migration and model SQL against isolated PostgreSQL', async (t) => {
   try {
     // Use the repository's complete existing schema, not invented user/room tables.
     await db.exec(fs.readFileSync(path.join(__dirname, '../database.sql'), 'utf8'));
-    await db.exec(fs.readFileSync(path.join(__dirname, '../migrations/004_add_iot_integration.sql'), 'utf8'));
     const message = { type: 'sensor', master: 'master01', node: 1, sensor: 1, ok: true, temperature: 27.5, humidity: 85.2 };
     const first = new Date('2026-10-16T10:00:00Z'); const second = new Date('2026-10-16T10:01:00Z');
 

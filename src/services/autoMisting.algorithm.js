@@ -7,16 +7,37 @@ const ranges = {
  sensor_max_age_ms: [1000,300000], required_valid_sensors: [1,3], max_sensor_spread_percent: [0,100],
  max_activations_per_hour: [1,3600], max_cumulative_on_ms_per_hour: [1000,3600000],
 };
+const coolingRanges={
+ temperature_min:[-40,80],temperature_max:[-40,80],
+ temperature_start_threshold:[-40,80],temperature_stop_threshold:[-40,80],
+ cooling_humidity_limit:[0,100],max_temperature_spread_c:[0,20],
+};
 function validateConfig(input = {}) {
+ if(!input || typeof input!=='object' || Array.isArray(input))throw new AppError('Invalid configuration',400);
  const c = { sensor_max_age_ms: 20000, required_valid_sensors: 3, ...input };
- const allowed = [...Object.keys(ranges),'profile_name','profile_approved'];
+ const allowed = [...Object.keys(ranges),...Object.keys(coolingRanges),'cooling_enabled','config_source','profile_name','profile_approved'];
  if (Object.keys(c).some(k => !allowed.includes(k))) throw new AppError('Unknown configuration field; use Start to enter AUTO',400);
+ if(c.config_source!==undefined && !['LEGACY','FLOOR'].includes(c.config_source))throw new AppError('Invalid config_source',400);
+ if(c.config_source==='FLOOR' && c.mushroom_type_id!=null)throw new AppError('Floor profiles derive mushroom types from tray cultivation sessions',400);
  for (const [key,[min,max]] of Object.entries(ranges)) {
+  if(key==='mushroom_type_id' && c.config_source==='FLOOR')continue;
   if (typeof c[key] !== 'number' || !Number.isFinite(c[key]) || c[key]<min || c[key]>max
    || (!key.startsWith('humidity_') && key!=='max_sensor_spread_percent' && !Number.isInteger(c[key]))) {
    throw new AppError(`Invalid ${key}: expected ${min}..${max}`,400);
   }
  }
+ if(c.cooling_enabled!==undefined && typeof c.cooling_enabled!=='boolean')throw new AppError('Invalid cooling_enabled',400);
+ for(const [key,[min,max]] of Object.entries(coolingRanges)) {
+  if(c[key]==null && !c.cooling_enabled)continue;
+  if(typeof c[key]!=='number' || !Number.isFinite(c[key]) || c[key]<min || c[key]>max)
+   throw new AppError(`Invalid ${key}: expected ${min}..${max}`,400);
+ }
+ if(c.cooling_enabled && !(c.temperature_min<c.temperature_max
+  && c.temperature_stop_threshold>=c.temperature_min
+  && c.temperature_stop_threshold<c.temperature_start_threshold
+  && c.temperature_start_threshold<=c.temperature_max
+  && c.cooling_humidity_limit>c.humidity_stop_threshold && c.cooling_humidity_limit<=c.humidity_max))
+  throw new AppError('Inconsistent cooling thresholds or humidity limit',400);
  if (!(c.humidity_min<c.humidity_max && c.humidity_start_threshold<c.humidity_stop_threshold
   && c.humidity_start_threshold<=c.humidity_min && c.humidity_stop_threshold<=c.humidity_max
   && c.max_cumulative_on_ms_per_hour>=c.misting_pulse_ms)) throw new AppError('Inconsistent humidity thresholds or pulse budget',400);
@@ -34,11 +55,14 @@ function aggregate(rows, c, now = Date.now()) {
  });
  const good=sensors.filter(s=>s.valid);
  const averageHumidity=good.length?good.reduce((a,s)=>a+s.humidity,0)/good.length:null;
- const temperatures=good.filter(s=>Number.isFinite(s.temperature));
+ const temperatures=good.filter(s=>Number.isFinite(s.temperature) && s.temperature>=-40 && s.temperature<=80);
  const averageTemperature=temperatures.length?temperatures.reduce((a,s)=>a+s.temperature,0)/temperatures.length:null;
  const spread=good.length?Math.max(...good.map(s=>s.humidity))-Math.min(...good.map(s=>s.humidity)):null;
- const reason=good.length<c.required_valid_sensors?'Missing, invalid, retained or stale sensors':spread>c.max_sensor_spread_percent?'Sensor disagreement exceeds configured spread':null;
- return { sensors, averageHumidity, averageTemperature, spread, healthy:!reason, reason };
+ const temperatureSpread=temperatures.length?Math.max(...temperatures.map(s=>s.temperature))-Math.min(...temperatures.map(s=>s.temperature)):null;
+ const reason=good.length<c.required_valid_sensors?'Missing, invalid, retained or stale sensors':spread>c.max_sensor_spread_percent?'Sensor disagreement exceeds configured spread':
+  c.cooling_enabled && temperatures.length<c.required_valid_sensors?'Missing or invalid temperature sensors':
+  c.cooling_enabled && temperatureSpread>c.max_temperature_spread_c?'Temperature sensor disagreement exceeds configured spread':null;
+ return { sensors, averageHumidity, averageTemperature, spread, temperatureSpread, healthy:!reason, reason };
 }
 // Demand latches below start; clears at/above stop. While latched, repeat bounded
 // pulses after cooldown, including inside the hysteresis band. No continuous ON.
@@ -49,10 +73,17 @@ function decide({ running, config:c, runtime:r={}, environment:e, online=true, c
  if (active && now>=new Date(r.pulse_deadline_at).getTime()) return {action:'OFF',state:'OFF_PENDING',reason:'Pulse deadline reached'};
  if (!online || !e.healthy) return {action:active?'OFF':'FAULT',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT or master offline'};
  const demand=e.averageHumidity>=c.humidity_stop_threshold?false:e.averageHumidity<c.humidity_start_threshold?true:!!r.demand;
- if (active) return {action:e.averageHumidity>=c.humidity_max?'OFF':'NONE',state:r.control_state,demand,reason:'Pulse in progress'};
- if (r.cooldown_until && now<new Date(r.cooldown_until).getTime()) return {action:'NONE',state:'COOLDOWN',demand,reason:'Cooldown'};
- if (!demand || e.averageHumidity>=c.humidity_max) return {action:'NONE',state:'IDLE',demand,reason:'Humidity demand cleared'};
- if (count>=c.max_activations_per_hour || duration+c.misting_pulse_ms>c.max_cumulative_on_ms_per_hour) return {action:'NONE',state:'IDLE',demand,reason:'Hourly safety budget exhausted'};
- return {action:'ON',state:'ON_REQUESTED',demand,reason:'Low humidity demand'};
+ const coolingDemand=!!c.cooling_enabled && (e.averageTemperature>=c.temperature_start_threshold?true:
+  e.averageTemperature<=c.temperature_stop_threshold?false:!!r.cooling_demand);
+ const blocked=!!c.cooling_enabled && e.averageHumidity>=c.cooling_humidity_limit;
+ const flags={demand,coolingDemand};
+ const reason=coolingDemand && blocked?'Cooling blocked by humidity limit; ventilation or other cooling required':
+  demand?'Low humidity demand':coolingDemand?'High temperature demand':'Climate demand cleared';
+ if (active) return {action:e.averageHumidity>=c.humidity_max || blocked?'OFF':'NONE',state:r.control_state,...flags,
+  reason:blocked?reason:'Pulse in progress'};
+ if (r.cooldown_until && now<new Date(r.cooldown_until).getTime()) return {action:'NONE',state:'COOLDOWN',...flags,reason:'Cooldown'};
+ if ((!demand && !coolingDemand) || blocked || e.averageHumidity>=c.humidity_max) return {action:'NONE',state:'IDLE',...flags,reason};
+ if (count>=c.max_activations_per_hour || duration+c.misting_pulse_ms>c.max_cumulative_on_ms_per_hour) return {action:'NONE',state:'IDLE',...flags,reason:'Hourly safety budget exhausted'};
+ return {action:'ON',state:'ON_REQUESTED',...flags,reason};
 }
-module.exports={ranges,validateConfig,aggregate,decide};
+module.exports={ranges,coolingRanges,validateConfig,aggregate,decide};

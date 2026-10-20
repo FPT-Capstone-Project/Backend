@@ -57,7 +57,7 @@ function createRepository(db = pool) {
    return one(`INSERT INTO iot_auto_control_configs(floor_id,${keys.join(',')},configured_by)
     VALUES($1,${keys.map((_,i)=>`$${i+2}`).join(',')},$${keys.length+2}) ON CONFLICT(floor_id)
     DO UPDATE SET ${keys.map(k=>`${k}=EXCLUDED.${k}`).join(',')},configured_by=EXCLUDED.configured_by,updated_at=now()
-    RETURNING *`,[id,...Object.values(c),user]);
+    RETURNING *`,[id,...keys.map(k=>k==='source_profiles' && c[k]!=null?JSON.stringify(c[k]):c[k]),user]);
   },
   async runtimeSet(id,values) {
    const keys=Object.keys(values);
@@ -70,9 +70,9 @@ function createRepository(db = pool) {
   endRun:(id,user,reason,status='STOPPED')=>rows(`UPDATE iot_auto_control_runs SET status=$4,stopped_by=$2,
    stopped_at=now(),stop_reason=$3 WHERE floor_id=$1 AND status='RUNNING' RETURNING *`,[id,user,reason,status]),
   log:(id,run,event,reason,details={})=>one(`INSERT INTO iot_auto_control_logs
-   (floor_id,run_id,event_type,reason,average_humidity,sensor_values_json,thresholds_snapshot_json,command_id,reserved_on_ms)
-   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,[id,run?.id || null,event,reason,details.averageHumidity??null,
-   details.sensors?JSON.stringify(details.sensors):null,run?JSON.stringify(run.config_snapshot):null,details.commandId||null,details.reservedOnMs||0]),
+   (floor_id,run_id,event_type,reason,average_humidity,sensor_values_json,thresholds_snapshot_json,command_id,reserved_on_ms,average_temperature)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,[id,run?.id || null,event,reason,details.averageHumidity??null,
+   details.sensors?JSON.stringify(details.sensors):null,run?JSON.stringify(run.config_snapshot):null,details.commandId||null,details.reservedOnMs||0,details.averageTemperature??null]),
   budget:id=>one(`SELECT count(*)::int AS count,COALESCE(sum(reserved_on_ms),0)::int AS duration
    FROM iot_auto_control_logs WHERE floor_id=$1 AND event_type='PULSE_RESERVED'
    AND created_at>now()-interval '1 hour' - interval '60 seconds'`,[id]),
@@ -92,7 +92,10 @@ function createRepository(db = pool) {
     const highs=profiles.map(p=>p[`${k}_max`]).filter(v=>v!=null).map(Number);
     return lows.length && highs.length && Math.max(...lows)>Math.min(...highs);
    });
-   return {profiles,conflict,unassignedTrays:unassigned.count,requiresApproval:profiles.length>1 || conflict || unassigned.count>0};
+   const trays=await rows(`SELECT t.tray_id,t.tray_code,s.session_id,s.rental_id,s.mushroom_type_id,s.status AS cultivation_status
+    FROM cultivation_trays t LEFT JOIN cultivation_sessions s ON s.tray_id=t.tray_id
+    AND s.status IN ('PLANNED','ACTIVE','IN_PROGRESS') WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);
+   return {profiles,trays,conflict,unassignedTrays:unassigned.count,requiresApproval:profiles.length>1 || conflict || unassigned.count>0};
   },
   async acquireLeader() {
    const client=await db.connect();

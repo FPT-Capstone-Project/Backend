@@ -9,6 +9,8 @@ const config={mushroom_type_id:1,humidity_min:85,humidity_max:95,humidity_start_
  max_sensor_spread_percent:10,max_activations_per_hour:20,max_cumulative_on_ms_per_hour:100000};
 
 test('automation migrations and service against isolated PostgreSQL; MQTT is mocked',async t=>{
+ const previousEnabled=process.env.AUTO_MISTING_REAL_ENABLED,previousWatchdogs=process.env.AUTO_MISTING_VERIFIED_WATCHDOGS;
+ process.env.AUTO_MISTING_REAL_ENABLED='false';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{}';
  const db=new PGlite();
  let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn;
  const calls=[];
@@ -39,8 +41,12 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
  try{
   await db.exec(fs.readFileSync('database.sql','utf8'));
   await db.exec("INSERT INTO roles(role_name) VALUES('Farm Operator'),('Admin'),('Customer'); INSERT INTO cultivation_rooms(room_code,room_name) VALUES('R1','Room one'),('R2','Room two'); INSERT INTO cultivation_trays(room_id,tray_code) VALUES(1,'T1'); INSERT INTO mushroom_types(name,growing_days,price) VALUES('Test mushroom',30,1);");
-  await db.exec(fs.readFileSync('migrations/004_add_iot_integration.sql','utf8'));
-  await db.exec(fs.readFileSync('migrations/005_add_auto_misting_control.sql','utf8'));
+  // Fresh database.sql already includes IoT and automation. Roles are seeded
+  // afterward, so apply the same named-role grants to this test fixture.
+  await db.exec(`INSERT INTO role_permissions(role_id,permission_id)
+   SELECT r.role_id,p.permission_id FROM roles r CROSS JOIN permissions p
+   WHERE lower(regexp_replace(r.role_name,'[ _-]','','g')) IN ('admin','farmoperator')
+   AND p.permission_name='iot.automation.manage' ON CONFLICT DO NOTHING`);
   await db.exec('INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())');
   await db.exec("INSERT INTO users(role_id,email,password_hash,full_name) VALUES(1,'operator@example.test','test','Operator')");
   await db.exec('UPDATE iot_masters SET cultivation_room_id=1 WHERE id=1');
@@ -166,5 +172,71 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    const saved=await repo.config(id);assert.equal(saved.configured_by,1);
    assert.equal((await repo.run(id)).started_by,1);assert.equal((await repo.run(id)).stopped_by,1);
   });
- }finally{delete process.env.AUTO_MISTING_REAL_ENABLED;delete process.env.AUTO_MISTING_VERIFIED_WATCHDOGS;await db.close();}
+  await t.test('shared floor config is saved without a representative mushroom; hot humid-safe readings trigger real mocked ON',async()=>{
+    assert.equal((await service.suggestions(id)).config,null);
+    await db.exec(`
+     INSERT INTO mushroom_types(name,growing_days,price) VALUES('Second mushroom',30,1);
+     INSERT INTO mushroom_conditions(mushroom_type_id,temperature_min,temperature_max,humidity_min,humidity_max)
+      VALUES(1,24,28,85,95),(2,25,29,88,96);
+     INSERT INTO rental_packages(package_name,duration_days,price) VALUES('Test package',30,1);
+     INSERT INTO orders(user_id) VALUES(1),(1);
+     INSERT INTO order_items(order_id,item_type,rental_package_id,unit_price,total_price)
+      VALUES(1,'RENTAL',1,1,1),(2,'RENTAL',1,1,1);
+     INSERT INTO rentals(user_id,order_id,duration_days,tray_id,start_date,end_date,status)
+      VALUES(1,1,30,1,CURRENT_DATE-1,CURRENT_DATE+30,'ACTIVE'),(1,2,30,2,CURRENT_DATE-1,CURRENT_DATE+30,'ACTIVE');
+    `);
+    await assert.rejects(()=>service.cultivation(id,2,{rental_id:2,mushroom_type_id:2},1),/Assign this tray/);
+    await service.assignTray(id,2);
+    await assert.rejects(()=>service.cultivation(id,1,{rental_id:2,mushroom_type_id:1},1),/active rental/);
+    await service.cultivation(id,1,{rental_id:1,mushroom_type_id:1},1);
+    await service.cultivation(id,1,{rental_id:1,mushroom_type_id:1},1);
+    await service.cultivation(id,2,{rental_id:2,mushroom_type_id:2},1);
+    assert.equal((await repo.rows('SELECT * FROM cultivation_sessions')).length,2);
+    assert.equal((await service.configuration(id)).cultivation.trays.length,2);
+    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE tray_id=1");
+    await assert.rejects(()=>service.cultivation(id,1,{rental_id:1,mushroom_type_id:2},1),/active cultivation/);
+    const suggestion=await service.suggestions(id);
+    assert.equal(suggestion.common.humidity_min,88);
+    assert.equal(suggestion.common.temperature_max,28);
+    await assert.rejects(()=>service.save(id,suggestion.config,1),/approve/);
+    await service.save(id,{...suggestion.config,profile_approved:true},1);
+    const saved=await repo.config(id);
+    assert.equal(saved.mushroom_type_id,null);assert.equal(saved.source_profiles.length,2);
+    await db.exec('UPDATE iot_sensor_latest SET temperature=30,humidity=93,is_valid=true');
+    await fresh();await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
+    await service.start(id,{dryRun:false},1);
+    await assert.rejects(()=>service.cultivation(id,2,{rental_id:2,mushroom_type_id:1},1),/Stop/);
+    await service.evaluate(id);
+    assert.equal(calls.at(-1).action,'ON');
+    assert.equal((await repo.runtime(id)).cooling_demand,true);
+    assert.equal((await repo.runtime(id)).demand,false);
+    const entry=await repo.one("SELECT * FROM iot_auto_control_logs WHERE floor_id=$1 AND event_type='PULSE_RESERVED' ORDER BY id DESC LIMIT 1",[id]);
+    assert.equal(entry.average_temperature,30);
+    await db.exec('UPDATE iot_sensor_latest SET humidity=94');
+    now+=250;await service.evaluate(id);
+    assert.equal(calls.at(-1).action,'OFF');
+    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);
+    await service.evaluate(id);await service.stop(id,1);
+    await db.exec('UPDATE mushroom_conditions SET temperature_max=27 WHERE mushroom_type_id=2');
+    await assert.rejects(()=>service.start(id,{},1),/changed/);
+    const revised=await service.suggestions(id);
+    await service.save(id,{...revised.config,profile_approved:true},1);
+    await db.exec('UPDATE iot_sensor_latest SET humidity=93');
+    await fresh();await service.start(id,{},1);
+    await service.evaluate(id);
+    assert.equal((await repo.runtime(id)).control_state,'MISTING');
+    await db.exec('UPDATE mushroom_conditions SET humidity_min=89 WHERE mushroom_type_id=2');
+    await assert.rejects(()=>service.evaluate(id,true),/changed/);
+    assert.equal((await repo.run(id)).status,'RUNNING');
+    await service.evaluate(id);
+    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+    await db.exec('UPDATE mushroom_conditions SET humidity_min=96,humidity_max=99 WHERE mushroom_type_id=2');
+    assert.equal((await service.suggestions(id)).config,null);
+  });
+ }finally{
+  for(const [key,value] of [['AUTO_MISTING_REAL_ENABLED',previousEnabled],['AUTO_MISTING_VERIFIED_WATCHDOGS',previousWatchdogs]])
+   if(value===undefined)delete process.env[key];else process.env[key]=value;
+  await db.close();
+ }
 });
