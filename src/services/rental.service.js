@@ -119,6 +119,12 @@ async function createRentalFromOrderForAdmin(orderId) {
   return { rental, created: result.created };
 }
 
+async function startCultivationForAdmin(rentalId, payload = {}) {
+  const id = parseId(rentalId, 'rentalId');
+  const trayId = parseId(payload.trayId ?? payload.tray_id, 'trayId');
+  return rentalModel.startCultivationForAdmin(id, trayId);
+}
+
 async function updateRentalForAdmin(rentalId, payload = {}) {
   const id = parseId(rentalId, 'rentalId');
   if (!payload || Object.keys(payload).length === 0) {
@@ -164,5 +170,6 @@ module.exports = {
   getAllRentalsForAdmin,
   getRentalByIdForAdmin,
   createRentalFromOrderForAdmin,
+  startCultivationForAdmin,
   updateRentalForAdmin,
 };

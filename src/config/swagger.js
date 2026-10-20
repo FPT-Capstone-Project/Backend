@@ -254,6 +254,11 @@ const options = {
           properties: {
             tray_id: { type: 'integer', example: 1 },
             room_id: { type: 'integer', example: 1 },
+            room_code: { type: 'string', example: 'ROOM-01' },
+            room_name: { type: 'string', example: 'Growing room 1' },
+            floor_id: { type: 'integer', nullable: true, example: 1 },
+            floor_number: { type: 'integer', nullable: true, example: 1 },
+            floor_name: { type: 'string', nullable: true, example: 'Floor 1' },
             tray_code: { type: 'string', example: 'TRAY-01' },
             tray_name: { type: 'string', nullable: true, example: 'Rack A, level 1' },
             status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'], example: 'AVAILABLE' },
@@ -266,6 +271,7 @@ const options = {
           required: ['roomId', 'trayCode'],
           properties: {
             roomId: { type: 'integer', example: 1 },
+            floorId: { type: 'integer', nullable: true, example: 1, description: 'Optional floor within the selected room. Trays without a floor cannot start cultivation.' },
             trayCode: { type: 'string', example: 'TRAY-01' },
             trayName: { type: 'string', example: 'Rack A, level 1' },
             status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'], example: 'AVAILABLE' },
@@ -275,6 +281,7 @@ const options = {
           type: 'object',
           properties: {
             roomId: { type: 'integer', example: 1 },
+            floorId: { type: 'integer', nullable: true, example: 1, description: 'Assign a floor in the selected room, or null to unassign it.' },
             trayCode: { type: 'string', example: 'TRAY-01' },
             trayName: { type: 'string', nullable: true },
             status: { type: 'string', enum: ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'] },

@@ -28,21 +28,34 @@ async function ensureRoomExists(roomId) {
   if (!await cultivationRoomModel.findById(roomId)) throw new AppError('Cultivation room not found', 404);
 }
 
+async function ensureFloorBelongsToRoom(floorId, roomId) {
+  if (floorId == null) return;
+  const floor = await cultivationTrayModel.findFloorById(floorId);
+  if (!floor) throw new AppError('Cultivation floor not found', 404);
+  if (Number(floor.room_id) !== Number(roomId)) {
+    throw new AppError('Cultivation floor must belong to the selected room', 400);
+  }
+}
+
 function handleDatabaseError(error, operation) {
   if (error.code === '23505') throw new AppError('trayCode already exists', 409);
   if (error.code === '23503' && operation === 'delete') {
     throw new AppError('Tray cannot be deleted while it is used by a cultivation session', 409);
   }
-  if (error.code === '23503') throw new AppError('Cultivation room not found', 404);
+  if (error.code === '23503') throw new AppError('Cultivation room or floor does not match the tray', 400);
   throw error;
 }
 
 async function getAllCultivationTrays(filters = {}) {
   let roomId;
+  let floorId;
   let status;
   if (filters.roomId !== undefined && String(filters.roomId).trim() !== '') roomId = parseId(filters.roomId, 'roomId');
+  if (filters.floorId !== undefined && String(filters.floorId).trim() !== '') floorId = parseId(filters.floorId, 'floorId');
   if (filters.status !== undefined && String(filters.status).trim() !== '') status = normalizeStatus(filters.status);
-  return cultivationTrayModel.findAll({ roomId, status });
+  const parsedFilters = { roomId, status };
+  if (floorId !== undefined) parsedFilters.floorId = floorId;
+  return cultivationTrayModel.findAll(parsedFilters);
 }
 
 async function getCultivationTraysByRoomId(roomId, filters = {}) {
@@ -59,14 +72,19 @@ async function getCultivationTrayById(trayId) {
 
 async function createCultivationTray(payload = {}) {
   const roomId = parseId(payload.roomId ?? payload.room_id, 'roomId');
+  const rawFloorId = payload.floorId !== undefined ? payload.floorId : payload.floor_id;
+  const floorId = rawFloorId === undefined || rawFloorId === null || rawFloorId === ''
+    ? null
+    : parseId(rawFloorId, 'floorId');
   const trayCode = normalizeRequiredText(payload.trayCode ?? payload.tray_code, 'trayCode');
   const trayNameValue = payload.trayName ?? payload.tray_name;
   const trayName = trayNameValue == null || trayNameValue === '' ? null : String(trayNameValue).trim();
   const status = normalizeStatus(payload.status ?? 'AVAILABLE');
   await ensureRoomExists(roomId);
+  await ensureFloorBelongsToRoom(floorId, roomId);
 
   try {
-    return await cultivationTrayModel.create({ roomId, trayCode, trayName, status });
+    return await cultivationTrayModel.create({ roomId, floorId, trayCode, trayName, status });
   } catch (error) {
     handleDatabaseError(error, 'create');
   }
@@ -74,15 +92,27 @@ async function createCultivationTray(payload = {}) {
 
 async function updateCultivationTray(trayId, payload = {}) {
   const id = parseId(trayId, 'trayId');
-  if (!await cultivationTrayModel.findById(id)) throw new AppError('Cultivation tray not found', 404);
+  const existing = await cultivationTrayModel.findById(id);
+  if (!existing) throw new AppError('Cultivation tray not found', 404);
   if (!payload || Object.keys(payload).length === 0) throw new AppError('No update data provided', 400);
 
   const data = {};
+  let targetRoomId = existing.room_id;
+  let targetFloorId = existing.floor_id;
   if (payload.roomId !== undefined || payload.room_id !== undefined) {
     const roomId = parseId(payload.roomId ?? payload.room_id, 'roomId');
     await ensureRoomExists(roomId);
     data.room_id = roomId;
+    targetRoomId = roomId;
   }
+  if (payload.floorId !== undefined || payload.floor_id !== undefined) {
+    const rawFloorId = payload.floorId !== undefined ? payload.floorId : payload.floor_id;
+    targetFloorId = rawFloorId === null || rawFloorId === ''
+      ? null
+      : parseId(rawFloorId, 'floorId');
+    data.floor_id = targetFloorId;
+  }
+  await ensureFloorBelongsToRoom(targetFloorId, targetRoomId);
   if (payload.trayCode !== undefined || payload.tray_code !== undefined) {
     data.tray_code = normalizeRequiredText(payload.trayCode ?? payload.tray_code, 'trayCode');
   }

@@ -23,6 +23,7 @@ const rentalJoins = `
   ) mushroom ON TRUE
   LEFT JOIN cultivation_trays ct ON ct.tray_id = r.tray_id
   LEFT JOIN cultivation_rooms cr ON cr.room_id = ct.room_id
+  LEFT JOIN cultivation_floors cf ON cf.floor_id = ct.floor_id
 `;
 
 const rentalFields = `
@@ -31,6 +32,7 @@ const rentalFields = `
   rp.package_id, rp.package_name, mushroom.mushroom_type_id, mushroom.mushroom_name,
   r.duration_days, r.tray_id,
   ct.tray_code, ct.tray_name, cr.room_id, cr.room_code, cr.room_name,
+  cf.floor_id, cf.floor_number, cf.floor_name,
   r.start_date, r.end_date, r.status, o.payment_status,
   r.created_at, r.updated_at
 `;
@@ -143,6 +145,150 @@ async function createFromOrderForAdmin(orderId) {
 
     await client.query('COMMIT');
     return { rentalId: existingResult.rows[0].rental_id, created: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function startCultivationForAdmin(rentalId, trayId) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const rentalResult = await client.query(
+      `SELECT r.rental_id, r.order_id, r.user_id, r.status, r.duration_days,
+              o.status AS order_status, o.payment_status
+       FROM rentals r
+       INNER JOIN orders o ON o.order_id = r.order_id
+       WHERE r.rental_id = $1
+       FOR UPDATE OF r, o`,
+      [rentalId],
+    );
+    const rental = rentalResult.rows[0];
+    if (!rental) throw new AppError('Rental not found', 404);
+    if (rental.payment_status !== 'PAID') {
+      throw new AppError('Only paid rentals can start cultivation', 409);
+    }
+    if (rental.order_status === 'CANCELLED') {
+      throw new AppError('Cancelled orders cannot start cultivation', 409);
+    }
+    if (!['CONFIRMED', 'PREPARING'].includes(rental.status)) {
+      throw new AppError('Only confirmed or preparing rentals can start cultivation', 409);
+    }
+
+    const trayResult = await client.query(
+      `SELECT t.tray_id, t.status, t.floor_id
+       FROM cultivation_trays t
+       WHERE t.tray_id = $1
+       FOR UPDATE OF t`,
+      [trayId],
+    );
+    const tray = trayResult.rows[0];
+    if (!tray) throw new AppError('Cultivation tray not found', 404);
+    if (tray.status !== 'AVAILABLE') {
+      throw new AppError('Cultivation tray is unavailable', 409);
+    }
+    if (tray.floor_id == null) {
+      throw new AppError('Assign the cultivation tray to a floor before starting cultivation', 409);
+    }
+
+    const floorResult = await client.query(
+      `SELECT floor_id, status
+       FROM cultivation_floors
+       WHERE floor_id = $1
+       FOR SHARE`,
+      [tray.floor_id],
+    );
+    const floor = floorResult.rows[0];
+    if (!floor) throw new AppError('Cultivation tray floor not found', 409);
+    if (floor.status !== 'ACTIVE') {
+      throw new AppError('Cultivation tray floor is not active', 409);
+    }
+
+    const orderItemResult = await client.query(
+      `SELECT oi.order_item_id, oi.mushroom_type_id
+       FROM order_items oi
+       WHERE oi.order_id = $1
+         AND (
+           (oi.item_type = 'RENTAL' AND oi.rental_package_id IS NOT NULL)
+           OR oi.item_type = 'MUSHROOM'
+         )
+       ORDER BY CASE
+         WHEN oi.item_type = 'RENTAL' AND oi.mushroom_type_id IS NOT NULL THEN 0
+         WHEN oi.item_type = 'MUSHROOM' THEN 1
+         ELSE 2
+       END, oi.order_item_id
+       LIMIT 1`,
+      [rental.order_id],
+    );
+    const orderItem = orderItemResult.rows[0];
+    if (!orderItem || orderItem.mushroom_type_id == null) {
+      throw new AppError('No mushroom type is associated with this rental order', 409);
+    }
+
+    const mushroomResult = await client.query(
+      `SELECT mushroom_type_id, name, growing_days, status
+       FROM mushroom_types
+       WHERE mushroom_type_id = $1`,
+      [orderItem.mushroom_type_id],
+    );
+    const mushroom = mushroomResult.rows[0];
+    if (!mushroom) {
+      throw new AppError('The ordered mushroom type was not found', 409);
+    }
+    if (mushroom.status !== 'ACTIVE') {
+      throw new AppError('The ordered mushroom type is not active', 409);
+    }
+    if (Number(mushroom.growing_days) > Number(rental.duration_days)) {
+      throw new AppError('Mushroom growing time exceeds the rental duration', 409);
+    }
+
+    const existingSession = await client.query(
+      `SELECT session_id
+       FROM cultivation_sessions
+       WHERE rental_id = $1
+          OR (tray_id = $2 AND status IN ('PLANNED', 'ACTIVE'))
+       FOR UPDATE`,
+      [rentalId, trayId],
+    );
+    if (existingSession.rows.length > 0) {
+      throw new AppError('Rental or tray already has a cultivation session', 409);
+    }
+
+    const sessionResult = await client.query(
+      `INSERT INTO cultivation_sessions (
+         rental_id, tray_id, mushroom_type_id, start_at, duration_days, status, harvest_date
+       )
+       VALUES ($1, $2, $3, CURRENT_TIMESTAMP, $4::integer, 'ACTIVE', CURRENT_DATE + $4::integer)
+       RETURNING *`,
+      [rentalId, trayId, mushroom.mushroom_type_id, mushroom.growing_days],
+    );
+
+    await client.query(
+      `UPDATE rentals
+       SET tray_id = $2,
+           status = 'ACTIVE',
+           start_date = CURRENT_TIMESTAMP,
+           end_date = CURRENT_TIMESTAMP + duration_days * INTERVAL '1 day',
+           updated_at = CURRENT_TIMESTAMP
+       WHERE rental_id = $1`,
+      [rentalId, trayId],
+    );
+    await client.query(
+      `UPDATE cultivation_trays
+       SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
+       WHERE tray_id = $1`,
+      [trayId],
+    );
+
+    await client.query('COMMIT');
+    return {
+      session: sessionResult.rows[0],
+      rental: await findByIdForAdmin(rentalId),
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -310,5 +456,6 @@ module.exports = {
   findAllForAdmin,
   findByIdForAdmin,
   createFromOrderForAdmin,
+  startCultivationForAdmin,
   updateForAdmin,
 };

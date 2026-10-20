@@ -18,6 +18,10 @@ const router = express.Router();
  *         schema:
  *           type: integer
  *       - in: query
+ *         name: floorId
+ *         schema:
+ *           type: integer
+ *       - in: query
  *         name: status
  *         schema:
  *           type: string
