@@ -1,9 +1,12 @@
 const express = require('express');
+const cors = require('cors');
+const env = require('./config/env');
 const rootRouter = require('./routes/root.routes');
 const swaggerRoutes = require('./routes/swagger.routes');
 
 const app = express();
 
+app.use(cors({ origin: env.corsOrigins.includes('*') ? '*' : env.corsOrigins }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

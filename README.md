@@ -103,6 +103,7 @@ Sau đó mở `.env` và cập nhật các giá trị:
 NODE_ENV=development
 PORT=3000
 SERVER_URL=http://localhost:3000
+CORS_ORIGINS=*
 
 # Dùng DATABASE_URL cho Supabase hoặc PostgreSQL cloud
 DATABASE_URL=postgresql://postgres:your-password@your-host:5432/postgres
@@ -126,6 +127,8 @@ PAYOS_CANCEL_URL=https://your-app.example/payment/cancel
 PAYOS_PAYMENT_EXPIRE_MINUTES=15
 PAYOS_WEBHOOK_URL=https://your-api.example/api/payments/payos/webhook
 ```
+
+`CORS_ORIGINS=*` cho phép mọi origin trong development để thuận tiện khi FE chạy local trên bất kỳ cổng nào. Khi deploy production, hãy đặt `CORS_ORIGINS` thành danh sách domain FE cụ thể, phân tách bằng dấu phẩy, ví dụ `https://your-frontend.example.com`. Origin phải gồm scheme và port nếu có, không thêm path hoặc dấu `/` cuối. Production không cho phép origin nào nếu chưa cấu hình biến này.
 
 ### Kết nối Supabase
 
