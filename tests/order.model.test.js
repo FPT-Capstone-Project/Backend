@@ -39,17 +39,17 @@ function loadOrderModel({
         return { rows: [{ order_id: 11, user_id: values[0], subtotal: String(amount), total_amount: String(amount) }] };
       }
       if (statement.startsWith('INSERT INTO order_items')) {
-        const isRental = statement.includes("'RENTAL'");
+        const isRental = values[1] === 'RENTAL';
         return {
           rows: [{
-            order_item_id: isRental ? 15 : 16,
+            order_item_id: 15,
             order_id: values[0],
             item_type: isRental ? 'RENTAL' : 'MUSHROOM',
-            rental_package_id: isRental ? values[1] : null,
-            mushroom_type_id: isRental ? null : values[1],
+            rental_package_id: values[2],
+            mushroom_type_id: values[3],
             quantity: 1,
-            unit_price: values[2],
-            total_price: values[2],
+            unit_price: String(Number(values[4]) + Number(values[5])),
+            total_price: String(Number(values[4]) + Number(values[5])),
           }],
         };
       }
@@ -73,23 +73,38 @@ function loadOrderModel({
   return { model: require('../src/models/order.model'), statements };
 }
 
-test('creates separate rental and mushroom order items with combined pricing', async () => {
+test('creates one rental item containing the package and mushroom with combined pricing', async () => {
   const { model, statements } = loadOrderModel();
   const order = await model.createRentalOrder({ userId: 3, packageId: 7, mushroomTypeId: 9 });
 
   assert.equal(order.user_id, 3);
   assert.equal(order.subtotal, '530000');
-  assert.equal(order.items.length, 2);
+  assert.equal(order.items.length, 1);
   assert.equal(order.items[0].item_type, 'RENTAL');
   assert.equal(order.items[0].rental_package_id, 7);
-  assert.equal(order.items[0].mushroom_type_id, null);
+  assert.equal(order.items[0].mushroom_type_id, 9);
   assert.equal(order.items[0].package_name, '30 days');
-  assert.equal(order.items[1].item_type, 'MUSHROOM');
-  assert.equal(order.items[1].rental_package_id, null);
-  assert.equal(order.items[1].mushroom_type_id, 9);
-  assert.equal(order.items[1].mushroom_name, 'Oyster');
+  assert.equal(order.items[0].mushroom_name, 'Oyster');
+  assert.equal(order.items[0].unit_price, '530000');
+  assert.equal(order.items[0].total_price, '530000');
+  assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
   assert.ok(!statements.some(({ statement }) => statement === 'ROLLBACK'));
+});
+
+test('creates one mushroom item without a rental package', async () => {
+  const { model, statements } = loadOrderModel();
+  const order = await model.createRentalOrder({ userId: 3, packageId: null, mushroomTypeId: 9 });
+
+  assert.equal(order.subtotal, '30000');
+  assert.equal(order.items.length, 1);
+  assert.equal(order.items[0].item_type, 'MUSHROOM');
+  assert.equal(order.items[0].rental_package_id, null);
+  assert.equal(order.items[0].mushroom_type_id, 9);
+  assert.equal(order.items[0].mushroom_name, 'Oyster');
+  assert.equal(statements.filter(({ statement }) => statement.startsWith('SELECT package_id')).length, 0);
+  assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
+  assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
 });
 
 test('rejects a mushroom that takes longer than the rental and rolls back', async () => {

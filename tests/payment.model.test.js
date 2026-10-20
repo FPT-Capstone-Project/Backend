@@ -39,6 +39,7 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
     nextPaymentId: 21,
     paymentPaidUpdates: 0,
     orderPaidUpdates: 0,
+    rentalsCreated: 0,
     paymentFailedUpdates: 0,
     orderFailedUpdates: 0,
   };
@@ -115,6 +116,11 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
         state.order.payment_status = 'PAID';
         state.order.status = 'CONFIRMED';
         state.orderPaidUpdates += 1;
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('INSERT INTO rentals')) {
+        state.rentalsCreated += 1;
         return { rows: [] };
       }
 
@@ -231,8 +237,13 @@ test('marks a completed PayOS payment and order paid exactly once in one transac
   assert.equal(first.transaction_code, 'PAYOS-REFERENCE-21');
   assert.equal(state.paymentPaidUpdates, 1);
   assert.equal(state.orderPaidUpdates, 1);
+  assert.equal(state.rentalsCreated, 1);
   assert.equal(state.order.payment_status, 'PAID');
   assert.equal(state.order.status, 'CONFIRMED');
+  const rentalInsert = statements.find(({ statement }) => statement.startsWith('INSERT INTO rentals'));
+  assert.match(rentalInsert.statement, /order_id, user_id, duration_days, status/);
+  assert.match(rentalInsert.statement, /SELECT o\.order_id, o\.user_id, rp\.duration_days, 'CONFIRMED'/);
+  assert.match(rentalInsert.statement, /ON CONFLICT \(order_id\) DO NOTHING/);
   assert.ok(statements.some(({ statement }) => statement.includes("status IN ('PENDING', 'CANCELLED', 'FAILED')")));
 });
 

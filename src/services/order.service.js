@@ -11,8 +11,14 @@ function parseId(value, fieldName) {
 
 async function createRentalOrder(userId, payload = {}) {
   const customerId = parseId(userId, 'userId');
-  const packageId = parseId(payload.packageId ?? payload.package_id, 'packageId');
-  const mushroomTypeId = parseId(payload.mushroomTypeId ?? payload.mushroom_type_id, 'mushroomTypeId');
+  const rawPackageId = payload.packageId ?? payload.package_id;
+  const packageId = rawPackageId === undefined || rawPackageId === null || rawPackageId === ''
+    ? null
+    : parseId(rawPackageId, 'packageId');
+  const mushroomTypeId = parseId(
+    payload.mushroomTypeId ?? payload.mushroom_type_id,
+    'mushroomTypeId',
+  );
 
   return orderModel.createRentalOrder({ userId: customerId, packageId, mushroomTypeId });
 }

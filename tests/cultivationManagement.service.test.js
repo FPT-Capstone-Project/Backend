@@ -68,6 +68,20 @@ test('creates a tray only for an existing room', async () => {
   );
 });
 
+test('lists only trays belonging to an existing room', async () => {
+  const service = loadTrayService();
+  assert.deepEqual(
+    await service.getCultivationTraysByRoomId('1', { status: 'available' }),
+    { roomId: 1, status: 'AVAILABLE' },
+  );
+
+  const missingRoomService = loadTrayService({ roomExists: false });
+  await assert.rejects(
+    () => missingRoomService.getCultivationTraysByRoomId('5'),
+    { statusCode: 404, message: 'Cultivation room not found' },
+  );
+});
+
 test('blocks deletion when database references prevent it', async () => {
   const roomService = loadRoomService({ deleteError: { code: '23503' } });
   await assert.rejects(() => roomService.deleteCultivationRoom(1), { statusCode: 409 });

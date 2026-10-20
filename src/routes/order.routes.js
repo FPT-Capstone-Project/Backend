@@ -76,8 +76,8 @@ router.get('/:orderId', authenticate, orderController.getById);
  * /api/orders/rentals:
  *   post:
  *     tags: [Orders]
- *     summary: Create an order for a rental package and mushroom type
- *     description: The authenticated customer is assigned as the order owner. The mushroom growing time must not exceed the package duration.
+ *     summary: Create an order for a mushroom, optionally with a rental package
+ *     description: The authenticated customer is assigned as the order owner. When packageId is provided, one RENTAL order item stores both the rental package and mushroom type, and mushroom growing time must not exceed package duration. Without packageId, one MUSHROOM order item is created.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -88,7 +88,7 @@ router.get('/:orderId', authenticate, orderController.getById);
  *             $ref: '#/components/schemas/CreateRentalOrderRequest'
  *     responses:
  *       201:
- *         description: Order and rental order item created
+ *         description: Order and a single MUSHROOM or RENTAL order item created
  *       400:
  *         description: Invalid selection or mushroom growing time exceeds the rental duration
  *       401:

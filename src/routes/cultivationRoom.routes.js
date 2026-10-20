@@ -1,5 +1,6 @@
 const express = require('express');
 const cultivationRoomController = require('../controllers/cultivationRoom.controller');
+const cultivationTrayController = require('../controllers/cultivationTray.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
@@ -25,6 +26,38 @@ const router = express.Router();
  *         description: Missing or invalid JWT token
  */
 router.get('/', authenticate, cultivationRoomController.list);
+
+/**
+ * @openapi
+ * /api/cultivation-rooms/{id}/trays:
+ *   get:
+ *     tags: [Cultivation Trays]
+ *     summary: List cultivation trays belonging to a room
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         description: Cultivation room ID
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [AVAILABLE, OCCUPIED, MAINTENANCE, INACTIVE]
+ *     responses:
+ *       200:
+ *         description: Trays belonging to the room
+ *       400:
+ *         description: Invalid room ID or status
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: Cultivation room not found
+ */
+router.get('/:id/trays', authenticate, cultivationTrayController.listByRoom);
 
 /**
  * @openapi

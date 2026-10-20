@@ -370,7 +370,6 @@ CREATE TABLE order_items (
             (
                 item_type = 'RENTAL'
                 AND rental_package_id IS NOT NULL
-                AND mushroom_type_id IS NULL
             )
         ),
 
@@ -392,60 +391,47 @@ CREATE TABLE order_items (
 CREATE TABLE rentals (
     rental_id SERIAL PRIMARY KEY,
 
+    -- Rental order
+    order_id INT NOT NULL,
+
+    -- Customer renting
     user_id INT NOT NULL,
-
-    order_item_id INT NOT NULL,
-
-    package_id INT NOT NULL,
 
     tray_id INT,
 
-    start_date DATE NOT NULL,
-    end_date DATE NOT NULL,
+    duration_days INT NOT NULL
+        CHECK (duration_days > 0),
 
-    total_price NUMERIC(12,2) NOT NULL DEFAULT 0,
+    start_date TIMESTAMP,
+    end_date TIMESTAMP,
 
-    status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+    status VARCHAR(20) NOT NULL DEFAULT 'CONFIRMED'
+        CHECK (status IN ('CONFIRMED', 'PREPARING', 'ACTIVE', 'COMPLETED', 'CANCELLED')),
 
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT fk_rentals_user
         FOREIGN KEY (user_id)
-        REFERENCES users(user_id)
-        ON DELETE RESTRICT,
+        REFERENCES users(user_id),
 
-    CONSTRAINT fk_rentals_order_item
-        FOREIGN KEY (order_item_id)
-        REFERENCES order_items(order_item_id)
-        ON DELETE RESTRICT,
+    CONSTRAINT uq_rentals_order_id UNIQUE (order_id),
 
-    CONSTRAINT fk_rentals_package
-        FOREIGN KEY (package_id)
-        REFERENCES rental_packages(package_id)
-        ON DELETE RESTRICT,
+    CONSTRAINT fk_rentals_order
+        FOREIGN KEY (order_id)
+        REFERENCES orders(order_id),
 
     CONSTRAINT fk_rentals_tray
         FOREIGN KEY (tray_id)
-        REFERENCES cultivation_trays(tray_id)
-        ON DELETE SET NULL,
+        REFERENCES cultivation_trays(tray_id),
 
-    CONSTRAINT chk_rental_dates
-        CHECK (end_date >= start_date),
-
-    CONSTRAINT chk_rental_price
-        CHECK (total_price >= 0),
-
-    CONSTRAINT chk_rental_status
-        CHECK (
-            status IN (
-                'PENDING',
-                'ACTIVE',
-                'COMPLETED',
-                'CANCELLED'
-            )
-        )
+    CONSTRAINT rentals_date_check
+        CHECK (start_date IS NULL OR end_date IS NULL OR end_date > start_date)
 );
 
+CREATE INDEX idx_rentals_user_id ON rentals(user_id);
+CREATE INDEX idx_rentals_status ON rentals(status);
+CREATE INDEX idx_rentals_tray_id ON rentals(tray_id);
 
 -- ============================================================
 -- 13. PAYMENTS
@@ -849,23 +835,6 @@ CREATE INDEX idx_order_items_mushroom_type_id
     ON order_items(mushroom_type_id);
 
 
--- RENTALS
-CREATE INDEX idx_rentals_user_id
-    ON rentals(user_id);
-
-CREATE INDEX idx_rentals_order_item_id
-    ON rentals(order_item_id);
-
-CREATE INDEX idx_rentals_package_id
-    ON rentals(package_id);
-
-CREATE INDEX idx_rentals_tray_id
-    ON rentals(tray_id);
-
-CREATE INDEX idx_rentals_status
-    ON rentals(status);
-
-
 -- PAYMENTS
 CREATE INDEX idx_payments_order_id
     ON payments(order_id);
@@ -936,15 +905,6 @@ CREATE INDEX idx_notifications_unread
 
 
 -- ============================================================
--- UNIQUE BUSINESS RULES
--- ============================================================
-
--- Một ORDER_ITEM rental chỉ tạo tối đa một RENTAL
-CREATE UNIQUE INDEX uq_rentals_order_item
-    ON rentals(order_item_id);
-
-
--- ============================================================
 -- UPDATED_AT TRIGGER
 -- ============================================================
 
@@ -983,6 +943,11 @@ EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER trg_orders_updated_at
 BEFORE UPDATE ON orders
+FOR EACH ROW
+EXECUTE FUNCTION update_updated_at_column();
+
+CREATE TRIGGER trg_rentals_updated_at
+BEFORE UPDATE ON rentals
 FOR EACH ROW
 EXECUTE FUNCTION update_updated_at_column();
 
