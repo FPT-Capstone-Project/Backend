@@ -108,9 +108,14 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    for(const k of ['room_id','floor_number','master_id','node_address','misting_ssr_channel']) data[k]=positive(data[k],k);
    if(data.node_address>247 || data.misting_ssr_channel>8 || typeof data.floor_name!=='string' || !data.floor_name.trim() || data.floor_name.length>200 || !['ACTIVE','INACTIVE'].includes(data.status)) throw new AppError('Invalid floor mapping',400);
    const write=async id=>{
+    try {
     const keys=allowed;
-    if(id) {await editable(id);return repo.one(`UPDATE cultivation_floors SET ${keys.map((k,i)=>`${k}=$${i+2}`).join(',')},updated_at=now() WHERE floor_id=$1 RETURNING *`,[id,...keys.map(k=>data[k])]);}
-    return repo.one(`INSERT INTO cultivation_floors(${keys.join(',')}) VALUES(${keys.map((_,i)=>`$${i+1}`).join(',')}) RETURNING *`,keys.map(k=>data[k]));
+    if(id) {await editable(id);return await repo.one(`UPDATE cultivation_floors SET ${keys.map((k,i)=>`${k}=$${i+2}`).join(',')},updated_at=now() WHERE floor_id=$1 RETURNING *`,[id,...keys.map(k=>data[k])]);}
+    return await repo.one(`INSERT INTO cultivation_floors(${keys.join(',')}) VALUES(${keys.map((_,i)=>`$${i+1}`).join(',')}) RETURNING *`,keys.map(k=>data[k]));
+    } catch(error) {
+     if(error.constraint==='light_mapping_conflict')throw new AppError(error.message,409);
+     throw error;
+    }
    };
    if(!value)return write(null);
    const id=positive(value);return repo.lockFloor(id,async()=>{const f=await repo.floor(id);return repo.lockChannel(f.master_id,f.misting_ssr_channel,()=>write(id));});
@@ -122,33 +127,6 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     if(!found || found.room_id!==f.room_id)throw new AppError('Tray must exist in this floor room',400);
     if(found.floor_id && found.floor_id!==id)throw new AppError('Unassign the tray through reviewed database maintenance before moving floors',409);
     return repo.one('UPDATE cultivation_trays SET floor_id=$1 WHERE tray_id=$2 RETURNING *',[id,tray]);
-   });
-  },
-  async cultivation(value,trayValue,body={},user) {
-   const id=positive(value),tray=positive(trayValue,'trayId');
-   if(!body || Object.keys(body).some(k=>!['rental_id','mushroom_type_id'].includes(k)))throw new AppError('Invalid cultivation fields',400);
-   const rental=positive(body.rental_id,'rental_id'),mushroom=positive(body.mushroom_type_id,'mushroom_type_id');
-   return repo.lockFloor(id,async()=>{
-    await repo.floor(id);await editable(id);
-    return repo.transaction(async()=>{
-     const assigned=await repo.one('SELECT * FROM cultivation_trays WHERE tray_id=$1 AND floor_id=$2 FOR UPDATE',[tray,id]);
-     if(!assigned)throw new AppError('Assign this tray to the floor first',409);
-     const lease=await repo.one("SELECT * FROM rentals WHERE rental_id=$1 AND tray_id=$2 AND status='ACTIVE' AND CURRENT_DATE BETWEEN start_date AND end_date FOR UPDATE",[rental,tray]);
-     if(!lease)throw new AppError('An active rental assigned to this tray within its rental dates is required',409);
-     const type=await repo.one("SELECT * FROM mushroom_types WHERE mushroom_type_id=$1 AND status='ACTIVE'",[mushroom]);
-     if(!type)throw new AppError('Active mushroom type required',409);
-     const sessions=await repo.rows("SELECT * FROM cultivation_sessions WHERE tray_id=$1 AND status IN ('PLANNED','ACTIVE','IN_PROGRESS') FOR UPDATE",[tray]);
-     if(sessions.length>1 || (sessions[0] && sessions[0].rental_id!==rental))
-      throw new AppError('Tray already has a different cultivation session',409);
-     const current=sessions[0];
-     if(current && current.status!=='PLANNED' && current.mushroom_type_id!==mushroom)
-      throw new AppError('Cannot change the mushroom type of an active cultivation session',409);
-     const session=current
-      ?await repo.one('UPDATE cultivation_sessions SET mushroom_type_id=$2 WHERE session_id=$1 RETURNING *',[current.session_id,mushroom])
-      :await repo.one("INSERT INTO cultivation_sessions(rental_id,tray_id,mushroom_type_id,start_at,status) VALUES($1,$2,$3,now(),'PLANNED') RETURNING *",[rental,tray,mushroom]);
-     await log(id,null,'CULTIVATION_SELECTED',`Operator ${user} selected mushroom ${mushroom} for tray ${tray}; review floor suggestions`);
-     return {session,mode:'MANUAL'};
-    });
    });
   },
   async start(value,body={},user) {

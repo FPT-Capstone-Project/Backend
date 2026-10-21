@@ -4,16 +4,22 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 
 test('JWT protects IoT routes; all active users can control SSR without role or user allowlists', async () => {
+  // Email delivery is unrelated to JWT authentication and device routing.
+  require.cache[require.resolve('../src/services/email.service')] = { exports: { sendOtpEmail: async () => {} } };
   const modelPath = require.resolve('../src/models/user.model');
   require.cache[modelPath] = { exports: { findById: async (id) => id === 99 ? null : ({ user_id: id, role_id: id === 5 || id === 6 ? 7 : 3, status: id === 8 ? 'INACTIVE' : 'ACTIVE' }) } };
   // Existing middleware remains real; only data access and IoT business service are mocked.
   const servicePath = require.resolve('../src/services/iot.service');
+  const dbPath = require.resolve('../src/config/db');
+  require.cache[dbPath] = { exports: { query: async (sql, params) => ({ rows: params[0] === 3 ? [{}] : [] }) } };
   let calls = 0;
+  let lightCalls = 0;
   require.cache[servicePath] = { exports: {
     control: async (masterId, channel, body, userId) => {
       calls += 1; assert.ok([3, 5, 6].includes(userId));
       return { commandId: '45c7c591-aacd-480d-934a-3cd2021a871e', masterId, channel: Number(channel), action: body.action, status: 'PUBLISHED' };
     }, listMasters: async () => [],
+    configureLight: async (masterId, body) => { lightCalls++; return { masterId, light_ssr_channel: body.channel }; },
   } };
   const env = require('../src/config/env');
   const app = express(); app.use(express.json());
@@ -31,6 +37,16 @@ test('JWT protects IoT routes; all active users can control SSR without role or 
       assert.equal(response.status, code); await response.json();
     }
     assert.equal(calls, 3);
+    for (const [user, status] of [[null, 401], [5, 403], [3, 200]]) {
+      const mapped = await fetch(`${url}/masters/master01/light`, {
+        method: 'PUT', headers: { 'content-type': 'application/json', ...(user ? {authorization: `Bearer ${token(user)}`} : {}) },
+        body: JSON.stringify({channel: 3}),
+      });
+      assert.equal(mapped.status, status);
+      const result = await mapped.json();
+      if (status === 200) assert.equal(result.data.light_ssr_channel, 3);
+    }
+    assert.equal(lightCalls, 1);
     assert.equal((await fetch(`${url}/masters`)).status, 401);
     const response = await fetch(`${url}/masters`, { headers: { authorization: `Bearer ${token(3)}` } });
     assert.equal(response.status, 200); assert.deepEqual(await response.json(), { data: [] });
@@ -39,10 +55,10 @@ test('JWT protects IoT routes; all active users can control SSR without role or 
   }
 });
 
-test('Swagger documents all seven APIs, JWT, schemas and command errors', () => {
+test('Swagger documents all eight APIs, JWT, schemas and command errors', () => {
   const spec = require('../src/config/swagger');
   const entries = Object.entries(spec.paths).filter(([key]) => key.startsWith('/api/iot/') && !key.startsWith('/api/iot/floors'));
-  assert.equal(entries.length, 7);
+  assert.equal(entries.length, 8);
   for (const [, path] of entries) for (const operation of Object.values(path)) {
     assert.deepEqual(operation.security, [{ bearerAuth: [] }]);
     assert.ok(operation.responses[401]); assert.ok(operation.responses[400]);

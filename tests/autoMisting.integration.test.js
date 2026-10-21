@@ -15,6 +15,11 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
  let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn;
  const calls=[];
  const repo=createRepository(db);
+ const dbPath=require.resolve('../src/config/db'),originalDb=require.cache[dbPath];
+ require.cache[dbPath]={exports:{query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})}};
+ delete require.cache[require.resolve('../src/models/rental.model')];
+ const rentals=require('../src/models/rental.model');
+ require.cache[dbPath]=originalDb;
  // PGlite runs one session. Emulate separate-process mutex ordering here;
  // production uses PostgreSQL session advisory locks tested separately below.
  const tails=new Map();
@@ -179,22 +184,27 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
      INSERT INTO mushroom_conditions(mushroom_type_id,temperature_min,temperature_max,humidity_min,humidity_max)
       VALUES(1,24,28,85,95),(2,25,29,88,96);
      INSERT INTO rental_packages(package_name,duration_days,price) VALUES('Test package',30,1);
-     INSERT INTO orders(user_id) VALUES(1),(1);
-     INSERT INTO order_items(order_id,item_type,rental_package_id,unit_price,total_price)
-      VALUES(1,'RENTAL',1,1,1),(2,'RENTAL',1,1,1);
-     INSERT INTO rentals(user_id,order_id,duration_days,tray_id,start_date,end_date,status)
-      VALUES(1,1,30,1,CURRENT_DATE-1,CURRENT_DATE+30,'ACTIVE'),(1,2,30,2,CURRENT_DATE-1,CURRENT_DATE+30,'ACTIVE');
+     INSERT INTO orders(user_id,status,payment_status) VALUES(1,'CONFIRMED','PAID'),(1,'CONFIRMED','PAID');
+     INSERT INTO order_items(order_id,item_type,rental_package_id,mushroom_type_id,unit_price,total_price)
+      VALUES(1,'RENTAL',1,1,1,1),(2,'RENTAL',1,2,1,1);
+     INSERT INTO rentals(user_id,order_id,duration_days) VALUES(1,1,30),(1,2,30);
     `);
-    await assert.rejects(()=>service.cultivation(id,2,{rental_id:2,mushroom_type_id:2},1),/Assign this tray/);
+    await assert.rejects(()=>rentals.startCultivationForAdmin(2,2),/floor/);
     await service.assignTray(id,2);
-    await assert.rejects(()=>service.cultivation(id,1,{rental_id:2,mushroom_type_id:1},1),/active rental/);
-    await service.cultivation(id,1,{rental_id:1,mushroom_type_id:1},1);
-    await service.cultivation(id,1,{rental_id:1,mushroom_type_id:1},1);
-    await service.cultivation(id,2,{rental_id:2,mushroom_type_id:2},1);
+    await rentals.startCultivationForAdmin(1,1);
+    await rentals.startCultivationForAdmin(2,2);
     assert.equal((await repo.rows('SELECT * FROM cultivation_sessions')).length,2);
-    assert.equal((await service.configuration(id)).cultivation.trays.length,2);
-    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE tray_id=1");
-    await assert.rejects(()=>service.cultivation(id,1,{rental_id:1,mushroom_type_id:2},1),/active cultivation/);
+    const cultivation=(await service.configuration(id)).cultivation;
+    assert.equal(cultivation.trays.length,2);
+    assert.equal(cultivation.trays[0].rental_id,1);
+    assert.equal(cultivation.trays[1].mushroom_name,'Second mushroom');
+    await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE tray_id=2");
+    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
+    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE tray_id=2; UPDATE rentals SET status='COMPLETED' WHERE rental_id=2");
+    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
+    await db.exec("UPDATE rentals SET status='ACTIVE',tray_id=1 WHERE rental_id=2");
+    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
+    await db.exec('UPDATE rentals SET tray_id=2 WHERE rental_id=2');
     const suggestion=await service.suggestions(id);
     assert.equal(suggestion.common.humidity_min,88);
     assert.equal(suggestion.common.temperature_max,28);
@@ -205,7 +215,6 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     await db.exec('UPDATE iot_sensor_latest SET temperature=30,humidity=93,is_valid=true');
     await fresh();await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
     await service.start(id,{dryRun:false},1);
-    await assert.rejects(()=>service.cultivation(id,2,{rental_id:2,mushroom_type_id:1},1),/Stop/);
     await service.evaluate(id);
     assert.equal(calls.at(-1).action,'ON');
     assert.equal((await repo.runtime(id)).cooling_demand,true);
@@ -233,6 +242,21 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal((await repo.runtime(id)).control_state,'DISABLED');
     await db.exec('UPDATE mushroom_conditions SET humidity_min=96,humidity_max=99 WHERE mushroom_type_id=2');
     assert.equal((await service.suggestions(id)).config,null);
+    await db.exec('UPDATE mushroom_conditions SET humidity_min=88,humidity_max=96 WHERE mushroom_type_id=2');
+    const currentSuggestion=await service.suggestions(id);
+    await service.save(id,{...currentSuggestion.config,profile_approved:true},1);
+    await fresh();await service.start(id,{},1);await service.evaluate(id);
+    assert.equal((await repo.runtime(id)).control_state,'MISTING');
+    // The rental lifecycle may finish before the session row is updated.
+    // AUTO must notice the changed effective floor profile and stop the pulse.
+    await db.exec("UPDATE rentals SET status='COMPLETED' WHERE rental_id=2");
+    await service.evaluate(id);
+    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
+    await db.exec("UPDATE rentals SET status='CANCELLED' WHERE rental_id=1");
+    assert.equal((await service.suggestions(id)).config,null);
+    await assert.rejects(()=>service.start(id,{},1),/No ACTIVE cultivation/);
   });
  }finally{
   for(const [key,value] of [['AUTO_MISTING_REAL_ENABLED',previousEnabled],['AUTO_MISTING_VERIFIED_WATCHDOGS',previousWatchdogs]])

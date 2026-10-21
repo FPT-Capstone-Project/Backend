@@ -24,6 +24,25 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
   }
   return {
     listMasters: () => repository.findMasters(),
+    async configureLight(id, body) {
+      if (!body || Array.isArray(body) || typeof body !== 'object'
+          || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'channel')
+          || (body.channel !== null && (!Number.isInteger(body.channel) || body.channel < 1 || body.channel > 8))) {
+        throw new AppError('channel must be an integer from 1 to 8, or null', 400);
+      }
+      const m = await master(id);
+      if (body.channel !== null && m.cultivationRoomId == null) {
+        throw new AppError('Assign the master to a room before configuring its light', 409);
+      }
+      try {
+        const updated = await repository.setLightChannel(m.id, body.channel);
+        if (!updated) throw new AppError('IoT master not found', 404);
+        return updated;
+      } catch (error) {
+        if (error.constraint === 'light_mapping_conflict') throw new AppError(error.message, 409);
+        throw error;
+      }
+    },
     async sensors(id) { const m = await master(id); return { masterId: id, sensors: await repository.findSensors(m.id) }; },
     async sensor(id, node, sensor) {
       const args = address(node, sensor);

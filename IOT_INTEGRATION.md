@@ -223,3 +223,25 @@ New: `migrations/004_add_iot_integration.sql`, `src/config/iot.js`,
 
 Modified: `.env.example`, `package.json`, `package-lock.json`, `src/config/swagger.js`,
 `src/routes/root.routes.js`, `src/server.js`. Your `.env` is unchanged.
+
+
+### Shared room light
+
+Apply `migrations/009_add_master_light_channel.sql` to existing databases before deploying
+this backend. The consolidated `database.sql` includes it for fresh databases.
+
+`PUT /api/iot/masters/:masterId/light` requires JWT and `iot.automation.manage`.
+Use the master identifier (for example `master01`), with JSON `{"channel":3}`
+to map the shared room light to SSR3 (GPIO6), or `{"channel":null}` to unassign.
+The master must already belong to a room. The response is `{data: <master>}`.
+`GET /api/iot/masters` now includes nullable `light_ssr_channel` on every master.
+Invalid bodies return 400, unknown masters 404, missing permission 403, and
+room/channel conflicts 409. Both light assignment and floor mapping reject
+sharing a channel on the same master, including direct database writes.
+
+Mobile should select the master by `cultivationRoomId`, read `light_ssr_channel`,
+and disable the light controls when null. Read state using the existing SSR API;
+send ON/OFF through the existing SSR commands API using the configured channel.
+If a room has multiple configured masters, show each light separately rather than
+silently selecting the first. Mapping changes do not send device commands or turn
+off the previously mapped channel. GPIO wiring must match the firmware mapping.

@@ -84,17 +84,23 @@ function createRepository(db = pool) {
    const f=await api.floor(id);
    const profiles=await rows(`SELECT DISTINCT s.mushroom_type_id,c.temperature_min,c.temperature_max,c.humidity_min,c.humidity_max,c.co2_min,c.co2_max
     FROM cultivation_sessions s JOIN cultivation_trays t ON t.tray_id=s.tray_id
+    JOIN rentals r ON r.rental_id=s.rental_id AND r.tray_id=s.tray_id AND r.status='ACTIVE'
     LEFT JOIN mushroom_conditions c ON c.mushroom_type_id=s.mushroom_type_id
-    WHERE t.floor_id=$1 AND s.status IN ('PLANNED','ACTIVE','IN_PROGRESS')`,[id]);
+    WHERE t.floor_id=$1 AND s.status='ACTIVE'`,[id]);
    const unassigned=await one(`SELECT count(*)::int AS count FROM cultivation_trays WHERE room_id=$1 AND floor_id IS NULL`,[f.room_id]);
    const conflict=['temperature','humidity','co2'].some(k=>{
     const lows=profiles.map(p=>p[`${k}_min`]).filter(v=>v!=null).map(Number);
     const highs=profiles.map(p=>p[`${k}_max`]).filter(v=>v!=null).map(Number);
     return lows.length && highs.length && Math.max(...lows)>Math.min(...highs);
    });
-   const trays=await rows(`SELECT t.tray_id,t.tray_code,s.session_id,s.rental_id,s.mushroom_type_id,s.status AS cultivation_status
-    FROM cultivation_trays t LEFT JOIN cultivation_sessions s ON s.tray_id=t.tray_id
-    AND s.status IN ('PLANNED','ACTIVE','IN_PROGRESS') WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);
+   const trays=await rows(`SELECT t.tray_id,t.tray_code,t.status AS tray_status,
+    s.session_id,s.rental_id,s.mushroom_type_id,s.status AS cultivation_status,m.name AS mushroom_name
+    FROM cultivation_trays t LEFT JOIN (
+     cultivation_sessions s JOIN rentals r ON r.rental_id=s.rental_id
+      AND r.tray_id=s.tray_id AND r.status='ACTIVE'
+    ) ON s.tray_id=t.tray_id AND s.status='ACTIVE'
+    LEFT JOIN mushroom_types m ON m.mushroom_type_id=s.mushroom_type_id
+    WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);
    return {profiles,trays,conflict,unassignedTrays:unassigned.count,requiresApproval:profiles.length>1 || conflict || unassigned.count>0};
   },
   async acquireLeader() {

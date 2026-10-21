@@ -1,6 +1,7 @@
 const service = require('../services/iot.service');
 
 module.exports = {
+  configureLight: async (req, res) => res.json({ data: await service.configureLight(req.params.masterId, req.body) }),
   list: async (req, res) => res.json({ data: await service.listMasters() }),
   sensors: async (req, res) => res.json({ data: await service.sensors(req.params.masterId) }),
   sensor: async (req, res) => res.json({ data: await service.sensor(req.params.masterId, req.params.nodeId, req.params.sensorId) }),
