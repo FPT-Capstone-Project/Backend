@@ -2,6 +2,7 @@ const rentalModel = require('../models/rental.model');
 const AppError = require('../utils/app-error');
 
 const RENTAL_STATUSES = ['CONFIRMED', 'PREPARING', 'ACTIVE', 'COMPLETED', 'CANCELLED'];
+const PROGRESS_STAGES = ['PREPARATION', 'INCUBATION', 'PINNING', 'FRUITING', 'HARVEST'];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 
@@ -55,6 +56,70 @@ function parsePositiveInteger(value, fieldName) {
     throw new AppError(`${fieldName} must be a positive integer`, 400);
   }
   return parsed;
+}
+
+function parseDecimal(value, fieldName, { min, max, exclusiveMin = false } = {}) {
+  if ((typeof value !== 'number' && typeof value !== 'string')
+    || (typeof value === 'string' && value.trim() === '')) {
+    throw new AppError(`${fieldName} must be a number`, 400);
+  }
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    throw new AppError(`${fieldName} must be a number`, 400);
+  }
+  if (min !== undefined && (exclusiveMin ? parsed <= min : parsed < min)) {
+    throw new AppError(
+      `${fieldName} must be ${exclusiveMin ? 'greater than' : 'at least'} ${min}`,
+      400,
+    );
+  }
+  if (max !== undefined && parsed > max) {
+    throw new AppError(`${fieldName} must be at most ${max}`, 400);
+  }
+  return parsed;
+}
+
+function parseText(value, fieldName, {
+  required = false,
+  minLength = 0,
+  maxLength = Number.POSITIVE_INFINITY,
+} = {}) {
+  if (value === undefined || value === null) {
+    if (required) throw new AppError(`${fieldName} is required`, 400);
+    return undefined;
+  }
+  if (typeof value !== 'string') {
+    throw new AppError(`${fieldName} must be a string`, 400);
+  }
+  const text = value.trim();
+  if (text.length < minLength) {
+    throw new AppError(`${fieldName} must be at least ${minLength} characters`, 400);
+  }
+  if (text.length > maxLength) {
+    throw new AppError(`${fieldName} must be at most ${maxLength} characters`, 400);
+  }
+  return text;
+}
+
+function parseDate(value, fieldName) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    throw new AppError(`${fieldName} must be a valid YYYY-MM-DD date`, 400);
+  }
+  const [year, month, day] = value.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year
+    || date.getUTCMonth() !== month - 1
+    || date.getUTCDate() !== day) {
+    throw new AppError(`${fieldName} must be a valid YYYY-MM-DD date`, 400);
+  }
+  return value;
+}
+
+function invokeWithPerformedBy(method, args, performedBy, trailingArgs = []) {
+  if (trailingArgs.length > 0) return method(...args, performedBy, ...trailingArgs);
+  return performedBy === undefined
+    ? method(...args)
+    : method(...args, performedBy);
 }
 
 function parsePagination(query = {}) {
@@ -119,13 +184,13 @@ async function createRentalFromOrderForAdmin(orderId) {
   return { rental, created: result.created };
 }
 
-async function startCultivationForAdmin(rentalId, payload = {}) {
+async function startCultivationForAdmin(rentalId, payload = {}, performedBy) {
   const id = parseId(rentalId, 'rentalId');
   const trayId = parseId(payload.trayId ?? payload.tray_id, 'trayId');
-  return rentalModel.startCultivationForAdmin(id, trayId);
+  return invokeWithPerformedBy(rentalModel.startCultivationForAdmin, [id, trayId], performedBy);
 }
 
-async function updateRentalForAdmin(rentalId, payload = {}) {
+async function updateRentalForAdmin(rentalId, payload = {}, performedBy) {
   const id = parseId(rentalId, 'rentalId');
   if (!payload || Object.keys(payload).length === 0) {
     throw new AppError('No update data provided', 400);
@@ -135,6 +200,18 @@ async function updateRentalForAdmin(rentalId, payload = {}) {
   if (payload.status !== undefined) {
     const status = parseStatus(payload.status);
     if (!status) throw new AppError('status is required', 400);
+    if (status === 'ACTIVE') {
+      throw new AppError(
+        'Use POST /api/rentals/admin/:rentalId/cultivation-session to start cultivation',
+        409,
+      );
+    }
+    if (status === 'COMPLETED') {
+      throw new AppError('Use POST /api/rentals/admin/:rentalId/complete to complete a rental', 409);
+    }
+    if (status === 'CANCELLED') {
+      throw new AppError('Use POST /api/rentals/admin/:rentalId/cancel to cancel a rental', 409);
+    }
     changes.status = status;
   }
   if (payload.trayId !== undefined || payload.tray_id !== undefined) {
@@ -163,7 +240,69 @@ async function updateRentalForAdmin(rentalId, payload = {}) {
     throw new AppError('endDate must be after startDate', 400);
   }
 
-  return rentalModel.updateForAdmin(id, changes);
+  return invokeWithPerformedBy(rentalModel.updateForAdmin, [id, changes], performedBy);
+}
+
+async function createProgressForAdmin(rentalId, payload = {}, performedBy) {
+  const id = parseId(rentalId, 'rentalId');
+  const stageValue = payload.currentStage ?? payload.current_stage;
+  const currentStage = parseText(stageValue, 'currentStage', { required: true, minLength: 1 })
+    .toUpperCase();
+  if (!PROGRESS_STAGES.includes(currentStage)) {
+    throw new AppError(`currentStage must be one of: ${PROGRESS_STAGES.join(', ')}`, 400);
+  }
+
+  const progressValue = payload.progressPercent ?? payload.progress_percent;
+  const progressPercent = parseDecimal(progressValue, 'progressPercent', { min: 0, max: 100 });
+  const description = parseText(payload.description, 'description', { maxLength: 1000 });
+
+  return invokeWithPerformedBy(
+    rentalModel.createProgressForAdmin,
+    [id, { currentStage, progressPercent, description }],
+    performedBy,
+    [PROGRESS_STAGES],
+  );
+}
+
+async function createHarvestForAdmin(rentalId, payload = {}, performedBy) {
+  const id = parseId(rentalId, 'rentalId');
+  const quantity = parseDecimal(payload.quantity, 'quantity', { min: 0, exclusiveMin: true });
+  const unit = parseText(payload.unit, 'unit', { required: true, minLength: 1, maxLength: 20 });
+  const qualityGrade = parseText(
+    payload.qualityGrade ?? payload.quality_grade,
+    'qualityGrade',
+    { maxLength: 20 },
+  );
+  const notes = parseText(payload.notes, 'notes', { maxLength: 1000 });
+  const harvestDateValue = payload.harvestDate ?? payload.harvest_date;
+  const harvestDate = harvestDateValue === undefined
+    ? undefined
+    : parseDate(harvestDateValue, 'harvestDate');
+  if (harvestDate && harvestDate > new Date().toISOString().slice(0, 10)) {
+    throw new AppError('harvestDate cannot be in the future', 400);
+  }
+
+  return invokeWithPerformedBy(
+    rentalModel.createHarvestForAdmin,
+    [id, { quantity, unit, qualityGrade, notes, harvestDate }],
+    performedBy,
+  );
+}
+
+async function completeRentalForAdmin(rentalId, payload = {}, performedBy) {
+  const id = parseId(rentalId, 'rentalId');
+  const note = parseText(payload.note, 'note', { maxLength: 1000 });
+  return invokeWithPerformedBy(rentalModel.completeForAdmin, [id, note], performedBy);
+}
+
+async function cancelRentalForAdmin(rentalId, payload = {}, performedBy) {
+  const id = parseId(rentalId, 'rentalId');
+  const reason = parseText(payload.reason, 'reason', {
+    required: true,
+    minLength: 3,
+    maxLength: 500,
+  });
+  return invokeWithPerformedBy(rentalModel.cancelForAdmin, [id, reason], performedBy);
 }
 
 module.exports = {
@@ -172,4 +311,9 @@ module.exports = {
   createRentalFromOrderForAdmin,
   startCultivationForAdmin,
   updateRentalForAdmin,
+  createProgressForAdmin,
+  createHarvestForAdmin,
+  completeRentalForAdmin,
+  cancelRentalForAdmin,
+  PROGRESS_STAGES,
 };

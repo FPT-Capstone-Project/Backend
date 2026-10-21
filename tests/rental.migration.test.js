@@ -8,6 +8,26 @@ const migration = fs.readFileSync(
   path.join(__dirname, '../migrations/007_backfill_paid_rentals.sql'),
   'utf8',
 );
+const lifecycleMigration = fs.readFileSync(
+  path.join(__dirname, '../migrations/009_add_rental_lifecycle_support.sql'),
+  'utf8',
+);
+
+test('rental lifecycle migration has a guarded session FK and status log table', () => {
+  assert.match(
+    lifecycleMigration,
+    /IF NOT EXISTS\s*\(\s*SELECT 1\s*FROM pg_constraint[\s\S]*fk_sessions_rental/i,
+  );
+  assert.match(
+    lifecycleMigration,
+    /FOREIGN KEY \(rental_id\)[\s\S]*REFERENCES rentals\(rental_id\)[\s\S]*ON DELETE RESTRICT/i,
+  );
+  assert.match(lifecycleMigration, /CREATE TABLE IF NOT EXISTS rental_status_logs/i);
+  assert.match(
+    lifecycleMigration,
+    /rental_id INT NOT NULL REFERENCES rentals\(rental_id\) ON DELETE CASCADE/i,
+  );
+});
 
 test('fresh rental schema backfills paid orders idempotently', async () => {
   const db = new PGlite();
