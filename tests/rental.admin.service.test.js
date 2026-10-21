@@ -26,6 +26,22 @@ function loadRentalService(modelOverrides = {}) {
       calls.push(['updateForAdmin', ...args]);
       return { rental_id: args[0] };
     },
+    createProgressForAdmin: async (...args) => {
+      calls.push(['createProgressForAdmin', ...args]);
+      return { progress_id: 21 };
+    },
+    createHarvestForAdmin: async (...args) => {
+      calls.push(['createHarvestForAdmin', ...args]);
+      return { harvest_id: 22 };
+    },
+    completeForAdmin: async (...args) => {
+      calls.push(['completeForAdmin', ...args]);
+      return { rentalId: args[0], rentalStatus: 'COMPLETED' };
+    },
+    cancelForAdmin: async (...args) => {
+      calls.push(['cancelForAdmin', ...args]);
+      return { rentalId: args[0], rentalStatus: 'CANCELLED' };
+    },
     ...modelOverrides,
   };
   delete require.cache[modelPath];
@@ -159,4 +175,88 @@ test('rejects start cultivation requests without a valid tray ID', async () => {
     { statusCode: 400 },
   );
   assert.equal(calls.length, 0);
+});
+
+test('validates progress stage and percent before calling the model', async () => {
+  const { service, calls } = loadRentalService();
+
+  await assert.rejects(
+    () => service.createProgressForAdmin('12', { currentStage: 'sprouting', progressPercent: 25 }, 3),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.createProgressForAdmin('12', { currentStage: 'PINNING', progressPercent: 101 }, 3),
+    { statusCode: 400 },
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('validates harvest quantity, unit, and future date before calling the model', async () => {
+  const { service, calls } = loadRentalService();
+
+  await assert.rejects(
+    () => service.createHarvestForAdmin('12', { quantity: 0, unit: 'kg' }, 3),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.createHarvestForAdmin('12', { quantity: 1, unit: '   ' }, 3),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.createHarvestForAdmin('12', {
+      quantity: 1,
+      unit: 'kg',
+      harvestDate: '2999-01-01',
+    }, 3),
+    { statusCode: 400 },
+  );
+  assert.equal(calls.length, 0);
+});
+
+test('blocks lifecycle status changes through the admin update endpoint', async () => {
+  const { service, calls } = loadRentalService();
+
+  for (const status of ['ACTIVE', 'COMPLETED', 'CANCELLED']) {
+    await assert.rejects(
+      () => service.updateRentalForAdmin('12', { status }, 3),
+      { statusCode: 409 },
+    );
+  }
+  assert.equal(calls.length, 0);
+});
+
+test('normalizes lifecycle data and passes the actor to the new model methods', async () => {
+  const { service, calls } = loadRentalService();
+
+  await service.createProgressForAdmin('12', {
+    currentStage: ' fruiting ',
+    progressPercent: '65.5',
+    description: '  Fruiting bodies visible.  ',
+  }, 9);
+  await service.createHarvestForAdmin('12', {
+    quantity: '1.25',
+    unit: ' kg ',
+    qualityGrade: ' A ',
+    notes: ' First harvest ',
+    harvestDate: '2026-01-02',
+  }, 9);
+  await service.completeRentalForAdmin('12', { note: ' Finished ' }, 9);
+  await service.cancelRentalForAdmin('12', { reason: ' Customer request ' }, 9);
+
+  assert.deepEqual(calls, [
+    ['createProgressForAdmin', 12, {
+      currentStage: 'FRUITING',
+      progressPercent: 65.5,
+      description: 'Fruiting bodies visible.',
+    }, 9, ['PREPARATION', 'INCUBATION', 'PINNING', 'FRUITING', 'HARVEST']],
+    ['createHarvestForAdmin', 12, {
+      quantity: 1.25,
+      unit: 'kg',
+      qualityGrade: 'A',
+      notes: 'First harvest',
+      harvestDate: '2026-01-02',
+    }, 9],
+    ['completeForAdmin', 12, 'Finished', 9],
+    ['cancelForAdmin', 12, 'Customer request', 9],
+  ]);
 });

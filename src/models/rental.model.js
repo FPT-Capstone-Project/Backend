@@ -96,6 +96,143 @@ async function findByIdForAdmin(rentalId) {
   return result.rows[0] || null;
 }
 
+async function writeStatusLog(client, {
+  rentalId,
+  action,
+  fromStatus,
+  toStatus,
+  performedBy,
+  note,
+}) {
+  const result = await client.query(
+    `INSERT INTO rental_status_logs (
+       rental_id, action, from_status, to_status, performed_by, note
+     )
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [rentalId, action, fromStatus ?? null, toStatus ?? null, performedBy ?? null, note ?? null],
+  );
+  return result.rows[0] || null;
+}
+
+async function insertNotification(client, userId, type, title, message) {
+  const result = await client.query(
+    `INSERT INTO notifications (user_id, notification_type, title, message)
+     VALUES ($1, $2, $3, $4)
+     RETURNING *`,
+    [userId, type, title, message],
+  );
+  return result.rows[0] || null;
+}
+
+async function lockActiveSession(client, rentalId) {
+  const result = await client.query(
+    `SELECT session_id, rental_id, tray_id, mushroom_type_id, start_at, end_at,
+            duration_days, status, harvest_date
+     FROM cultivation_sessions
+     WHERE rental_id = $1 AND status = 'ACTIVE'
+     ORDER BY session_id DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [rentalId],
+  );
+  return result.rows[0] || null;
+}
+
+async function lockRentalForLifecycle(client, rentalId) {
+  const result = await client.query(
+    `SELECT r.rental_id, r.order_id, r.user_id, r.tray_id, r.status,
+            o.status AS order_status, o.payment_status
+     FROM rentals r
+     INNER JOIN orders o ON o.order_id = r.order_id
+     WHERE r.rental_id = $1
+     FOR UPDATE OF r, o`,
+    [rentalId],
+  );
+  return result.rows[0] || null;
+}
+
+async function lockTray(client, trayId) {
+  const result = await client.query(
+    `SELECT tray_id, status
+     FROM cultivation_trays
+     WHERE tray_id = $1
+     FOR UPDATE`,
+    [trayId],
+  );
+  return result.rows[0] || null;
+}
+
+async function findLatestProgress(client, sessionId) {
+  const result = await client.query(
+    `SELECT progress_id, current_stage, progress_percent, start_date,
+            expected_harvest_date, description, updated_at
+     FROM cultivation_progress
+     WHERE session_id = $1
+     ORDER BY progress_id DESC
+     LIMIT 1
+     FOR UPDATE`,
+    [sessionId],
+  );
+  return result.rows[0] || null;
+}
+
+function notificationContent(type) {
+  const content = {
+    RENTAL_APPROVED: {
+      title: 'Yêu cầu thuê đã được duyệt',
+      message: 'Đơn thuê của bạn đang được chuẩn bị.',
+    },
+    CULTIVATION_STARTED: {
+      title: 'Phiên trồng trọt đã bắt đầu',
+      message: 'Nấm của bạn đã được đưa vào khay trồng.',
+    },
+    HARVEST_RECORDED: {
+      title: 'Đã ghi nhận thu hoạch',
+      message: 'Một đợt thu hoạch mới đã được ghi nhận.',
+    },
+    RENTAL_COMPLETED: {
+      title: 'Phiên thuê đã hoàn tất',
+      message: 'Phiên trồng trọt và thuê của bạn đã hoàn tất.',
+    },
+    RENTAL_CANCELLED: {
+      title: 'Phiên thuê đã bị hủy',
+      message: 'Phiên thuê của bạn đã bị hủy.',
+    },
+  };
+  return content[type];
+}
+
+async function notifyRentalUser(client, userId, type) {
+  const content = notificationContent(type);
+  return insertNotification(client, userId, type, content.title, content.message);
+}
+
+async function getHarvestSummary(client, sessionId) {
+  const countResult = await client.query(
+    `SELECT COUNT(*)::int AS "totalHarvests"
+     FROM harvests
+     WHERE session_id = $1`,
+    [sessionId],
+  );
+  const totalsResult = await client.query(
+    `SELECT unit, COALESCE(SUM(quantity), 0)::numeric AS "totalQuantity"
+     FROM harvests
+     WHERE session_id = $1
+     GROUP BY unit
+     ORDER BY unit`,
+    [sessionId],
+  );
+  const countRow = countResult.rows[0] || {};
+  return {
+    totalHarvests: Number(countRow.totalHarvests ?? countRow.total_harvests ?? 0),
+    totals: totalsResult.rows.map((row) => ({
+      unit: row.unit,
+      totalQuantity: Number(row.totalQuantity ?? row.total_quantity),
+    })),
+  };
+}
+
 async function createFromOrderForAdmin(orderId) {
   const client = await pool.connect();
 
@@ -153,7 +290,331 @@ async function createFromOrderForAdmin(orderId) {
   }
 }
 
-async function startCultivationForAdmin(rentalId, trayId) {
+async function createProgressForAdmin(rentalId, data, performedBy, progressStages) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const rental = await lockRentalForLifecycle(client, rentalId);
+    if (!rental) throw new AppError('Rental not found', 404);
+    if (rental.status !== 'ACTIVE') {
+      throw new AppError('Only active rentals can record cultivation progress', 409);
+    }
+
+    const session = await lockActiveSession(client, rentalId);
+    if (!session) throw new AppError('Rental has no active cultivation session', 409);
+    const tray = await lockTray(client, session.tray_id);
+    if (!tray) throw new AppError('Cultivation tray not found', 409);
+
+    const latest = await findLatestProgress(client, session.session_id);
+    const stages = Array.isArray(progressStages) ? progressStages : [];
+    if (latest && Number(data.progressPercent) < Number(latest.progress_percent)) {
+      throw new AppError('progressPercent cannot be lower than the latest progress', 409);
+    }
+    if (latest) {
+      const currentStageIndex = stages.indexOf(data.currentStage);
+      const latestStageIndex = stages.indexOf(latest.current_stage);
+      if (latestStageIndex !== -1 && currentStageIndex < latestStageIndex) {
+        throw new AppError('currentStage cannot be earlier than the latest stage', 409);
+      }
+    }
+
+    const result = await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date,
+         expected_harvest_date, description
+       )
+       VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6)
+       RETURNING *`,
+      [
+        session.session_id,
+        data.currentStage,
+        data.progressPercent,
+        session.start_at,
+        session.harvest_date,
+        data.description ?? null,
+      ],
+    );
+    const progress = result.rows[0];
+    await client.query('COMMIT');
+    return { ...progress, rentalId, sessionId: session.session_id };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+function dateOnly(value) {
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}/.test(value)) return value.slice(0, 10);
+  return new Date(value).toISOString().slice(0, 10);
+}
+
+async function createHarvestForAdmin(rentalId, data, performedBy) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const rental = await lockRentalForLifecycle(client, rentalId);
+    if (!rental) throw new AppError('Rental not found', 404);
+    if (rental.status !== 'ACTIVE') {
+      throw new AppError('Only active rentals can record harvests', 409);
+    }
+
+    const session = await lockActiveSession(client, rentalId);
+    if (!session) throw new AppError('Rental has no active cultivation session', 409);
+    const tray = await lockTray(client, session.tray_id);
+    if (!tray) throw new AppError('Cultivation tray not found', 409);
+
+    const latest = await findLatestProgress(client, session.session_id);
+    if (!latest || latest.current_stage !== 'HARVEST') {
+      throw new AppError('Cultivation progress must be at HARVEST before recording a harvest', 409);
+    }
+    if (data.harvestDate && data.harvestDate < dateOnly(session.start_at)) {
+      throw new AppError('harvestDate cannot be before the cultivation session start date', 400);
+    }
+
+    const harvestResult = data.harvestDate === undefined
+      ? await client.query(
+        `INSERT INTO harvests (session_id, harvest_date, quantity, unit, quality_grade, notes)
+         VALUES ($1, CURRENT_DATE, $2, $3, $4, $5)
+         RETURNING *`,
+        [
+          session.session_id,
+          data.quantity,
+          data.unit,
+          data.qualityGrade ?? null,
+          data.notes ?? null,
+        ],
+      )
+      : await client.query(
+        `INSERT INTO harvests (session_id, harvest_date, quantity, unit, quality_grade, notes)
+         VALUES ($1, $2::date, $3, $4, $5, $6)
+         RETURNING *`,
+        [
+          session.session_id,
+          data.harvestDate,
+          data.quantity,
+          data.unit,
+          data.qualityGrade ?? null,
+          data.notes ?? null,
+        ],
+      );
+    await notifyRentalUser(client, rental.user_id, 'HARVEST_RECORDED');
+    const summary = await getHarvestSummary(client, session.session_id);
+    await client.query('COMMIT');
+    return { harvest: harvestResult.rows[0], ...summary };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function completeForAdmin(rentalId, note, performedBy) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const rental = await lockRentalForLifecycle(client, rentalId);
+    if (!rental) throw new AppError('Rental not found', 404);
+    if (rental.status !== 'ACTIVE') {
+      throw new AppError('Only active rentals can be completed', 409);
+    }
+    if (rental.order_status === 'CANCELLED') {
+      throw new AppError('Cancelled orders cannot complete a rental', 409);
+    }
+
+    const session = await lockActiveSession(client, rentalId);
+    if (!session) throw new AppError('Rental has no active cultivation session', 409);
+    const tray = await lockTray(client, session.tray_id);
+    if (!tray) throw new AppError('Cultivation tray not found', 409);
+
+    const summary = await getHarvestSummary(client, session.session_id);
+    if (summary.totalHarvests < 1) {
+      throw new AppError('At least one harvest is required before completing a rental', 409);
+    }
+    const latest = await findLatestProgress(client, session.session_id);
+    if (!latest) throw new AppError('Active cultivation session has no progress', 409);
+
+    const sessionResult = await client.query(
+      `UPDATE cultivation_sessions
+       SET status = 'COMPLETED', end_at = CURRENT_TIMESTAMP
+       WHERE session_id = $1
+       RETURNING session_id, status, end_at`,
+      [session.session_id],
+    );
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date,
+         expected_harvest_date, description
+       )
+       VALUES ($1, $2, 100, $3::timestamp::date, $4::date, $5)
+       RETURNING progress_id`,
+      [
+        session.session_id,
+        latest.current_stage,
+        session.start_at,
+        session.harvest_date,
+        note || 'Completed',
+      ],
+    );
+    const rentalResult = await client.query(
+      `UPDATE rentals
+       SET status = 'COMPLETED', updated_at = CURRENT_TIMESTAMP
+       WHERE rental_id = $1
+       RETURNING status`,
+      [rentalId],
+    );
+    const trayResult = await client.query(
+      `UPDATE cultivation_trays
+       SET status = 'AVAILABLE', updated_at = CURRENT_TIMESTAMP
+       WHERE tray_id = $1 AND status = 'OCCUPIED'
+       RETURNING tray_id, status`,
+      [session.tray_id],
+    );
+    const orderResult = await client.query(
+      `UPDATE orders
+       SET status = 'COMPLETED'
+       WHERE order_id = $1 AND status IN ('CONFIRMED', 'PROCESSING')
+       RETURNING status`,
+      [rental.order_id],
+    );
+    await writeStatusLog(client, {
+      rentalId,
+      action: 'COMPLETE',
+      fromStatus: rental.status,
+      toStatus: 'COMPLETED',
+      performedBy,
+      note,
+    });
+    await notifyRentalUser(client, rental.user_id, 'RENTAL_COMPLETED');
+
+    await client.query('COMMIT');
+    const completedSession = sessionResult.rows[0] || {
+      session_id: session.session_id,
+      status: 'COMPLETED',
+      end_at: null,
+    };
+    const updatedTray = trayResult.rows[0] || tray;
+    return {
+      rentalId,
+      rentalStatus: (rentalResult.rows[0] || {}).status || 'COMPLETED',
+      orderStatus: (orderResult.rows[0] || {}).status || rental.order_status,
+      session: {
+        sessionId: completedSession.session_id,
+        status: completedSession.status,
+        endAt: completedSession.end_at,
+      },
+      tray: {
+        trayId: updatedTray.tray_id,
+        status: updatedTray.status,
+      },
+      harvestSummary: summary,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function cancelForAdmin(rentalId, reason, performedBy) {
+  const client = await pool.connect();
+
+  try {
+    await client.query('BEGIN');
+    const rental = await lockRentalForLifecycle(client, rentalId);
+    if (!rental) throw new AppError('Rental not found', 404);
+    if (!['CONFIRMED', 'PREPARING', 'ACTIVE'].includes(rental.status)) {
+      throw new AppError('Only confirmed, preparing, or active rentals can be cancelled', 409);
+    }
+
+    const sessionsResult = await client.query(
+      `SELECT session_id, tray_id, status, start_at
+       FROM cultivation_sessions
+       WHERE rental_id = $1 AND status IN ('PLANNED', 'ACTIVE')
+       ORDER BY session_id DESC
+       FOR UPDATE`,
+      [rentalId],
+    );
+    const activeSessions = sessionsResult.rows.filter((session) => session.status === 'ACTIVE');
+    const activeTrays = [];
+    for (const session of activeSessions) {
+      const tray = await lockTray(client, session.tray_id);
+      if (tray) activeTrays.push(tray);
+    }
+
+    await client.query(
+      `UPDATE cultivation_sessions
+       SET status = 'CANCELLED',
+           end_at = CASE
+             WHEN CURRENT_TIMESTAMP >= start_at THEN CURRENT_TIMESTAMP
+             ELSE start_at
+           END
+       WHERE rental_id = $1 AND status IN ('PLANNED', 'ACTIVE')`,
+      [rentalId],
+    );
+    for (const tray of activeTrays) {
+      await client.query(
+        `UPDATE cultivation_trays
+         SET status = 'AVAILABLE', updated_at = CURRENT_TIMESTAMP
+         WHERE tray_id = $1 AND status = 'OCCUPIED'`,
+        [tray.tray_id],
+      );
+    }
+    await client.query(
+      `UPDATE rentals
+       SET status = 'CANCELLED', updated_at = CURRENT_TIMESTAMP
+       WHERE rental_id = $1`,
+      [rentalId],
+    );
+    const orderResult = await client.query(
+      `UPDATE orders
+       SET status = 'CANCELLED',
+           payment_status = CASE
+             WHEN payment_status = 'PAID' THEN 'REFUND_PENDING'
+             ELSE payment_status
+           END
+       WHERE order_id = $1
+       RETURNING status, payment_status`,
+      [rental.order_id],
+    );
+    await writeStatusLog(client, {
+      rentalId,
+      action: 'CANCEL',
+      fromStatus: rental.status,
+      toStatus: 'CANCELLED',
+      performedBy,
+      note: reason,
+    });
+    await notifyRentalUser(client, rental.user_id, 'RENTAL_CANCELLED');
+
+    await client.query('COMMIT');
+    const order = orderResult.rows[0] || {
+      status: 'CANCELLED',
+      payment_status: rental.payment_status,
+    };
+    return {
+      rentalId,
+      rentalStatus: 'CANCELLED',
+      orderStatus: order.status,
+      paymentStatus: order.payment_status,
+      refundRequired: rental.payment_status === 'PAID',
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function startCultivationForAdmin(rentalId, trayId, performedBy) {
   const client = await pool.connect();
 
   try {
@@ -283,6 +744,28 @@ async function startCultivationForAdmin(rentalId, trayId) {
        WHERE tray_id = $1`,
       [trayId],
     );
+    await client.query(
+      `UPDATE orders
+       SET status = 'PROCESSING'
+       WHERE order_id = $1 AND status = 'CONFIRMED'`,
+      [rental.order_id],
+    );
+    await writeStatusLog(client, {
+      rentalId,
+      action: 'START_CULTIVATION',
+      fromStatus: rental.status,
+      toStatus: 'ACTIVE',
+      performedBy,
+    });
+    await notifyRentalUser(client, rental.user_id, 'CULTIVATION_STARTED');
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date, expected_harvest_date, description
+       )
+       VALUES ($1, 'PREPARATION', 0, CURRENT_DATE, $2::date, 'Cultivation started')
+       RETURNING *`,
+      [sessionResult.rows[0].session_id, sessionResult.rows[0].harvest_date],
+    );
 
     await client.query('COMMIT');
     return {
@@ -303,13 +786,13 @@ function dateMilliseconds(value) {
   return Number.isNaN(time) ? null : time;
 }
 
-async function updateForAdmin(rentalId, changes) {
+async function updateForAdmin(rentalId, changes, performedBy) {
   const client = await pool.connect();
 
   try {
     await client.query('BEGIN');
     const rentalResult = await client.query(
-      `SELECT r.rental_id, r.order_id, r.status, r.tray_id, r.duration_days,
+      `SELECT r.rental_id, r.order_id, r.user_id, r.status, r.tray_id, r.duration_days,
               r.start_date, r.end_date, o.payment_status
        FROM rentals r
        INNER JOIN orders o ON o.order_id = r.order_id
@@ -350,16 +833,36 @@ async function updateForAdmin(rentalId, changes) {
     }
 
     if (changes.status !== undefined) {
-      const transitions = {
-        CONFIRMED: ['PREPARING', 'CANCELLED'],
-        PREPARING: ['ACTIVE', 'CANCELLED'],
-        ACTIVE: ['COMPLETED', 'CANCELLED'],
+      const endpointByStatus = {
+        ACTIVE: 'Use POST /api/rentals/admin/:rentalId/cultivation-session to start cultivation',
+        COMPLETED: 'Use POST /api/rentals/admin/:rentalId/complete to complete a rental',
+        CANCELLED: 'Use POST /api/rentals/admin/:rentalId/cancel to cancel a rental',
       };
-      if (!transitions[rental.status] || !transitions[rental.status].includes(status)) {
+      if (endpointByStatus[status]) {
+        throw new AppError(endpointByStatus[status], 409);
+      }
+      if (rental.status !== 'CONFIRMED' || status !== 'PREPARING') {
         throw new AppError('Rental status transition is not allowed', 409);
       }
-      if (status === 'ACTIVE' && rental.payment_status !== 'PAID') {
-        throw new AppError('Only rentals with paid orders can be activated', 409);
+    }
+
+    let activeSession = null;
+    if (rental.status === 'ACTIVE') {
+      const activeSessionResult = await client.query(
+        `SELECT session_id, tray_id
+         FROM cultivation_sessions
+         WHERE rental_id = $1 AND status = 'ACTIVE'
+         ORDER BY session_id DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [rentalId],
+      );
+      activeSession = activeSessionResult.rows[0];
+      if (!activeSession) {
+        throw new AppError('Active rental has no active cultivation session', 409);
+      }
+      if (activeSession.tray_id !== rental.tray_id) {
+        throw new AppError('Active rental tray does not match its cultivation session', 409);
       }
     }
 
@@ -408,11 +911,27 @@ async function updateForAdmin(rentalId, changes) {
     }
 
     if (rental.status === 'ACTIVE' && rental.tray_id !== trayId) {
+      const oldTrayResult = await client.query(
+        `SELECT tray_id, status
+         FROM cultivation_trays
+         WHERE tray_id = $1
+         FOR UPDATE`,
+        [rental.tray_id],
+      );
+      if (!oldTrayResult.rows[0]) throw new AppError('Cultivation tray not found', 404);
       await client.query(
         `UPDATE cultivation_trays
          SET status = 'AVAILABLE', updated_at = NOW()
          WHERE tray_id = $1 AND status = 'OCCUPIED'`,
         [rental.tray_id],
+      );
+    }
+    if (activeSession && activeSession.tray_id !== trayId) {
+      await client.query(
+        `UPDATE cultivation_sessions
+         SET tray_id = $2
+         WHERE session_id = $1`,
+        [activeSession.session_id, trayId],
       );
     }
     if (status === 'ACTIVE') {
@@ -442,6 +961,16 @@ async function updateForAdmin(rentalId, changes) {
        WHERE rental_id = $1`,
       [rentalId, status, trayId, durationDays, startDate, endDate],
     );
+    if (rental.status === 'CONFIRMED' && status === 'PREPARING') {
+      await writeStatusLog(client, {
+        rentalId,
+        action: 'APPROVE',
+        fromStatus: rental.status,
+        toStatus: 'PREPARING',
+        performedBy,
+      });
+      await notifyRentalUser(client, rental.user_id, 'RENTAL_APPROVED');
+    }
     await client.query('COMMIT');
     return await findByIdForAdmin(rentalId);
   } catch (error) {
@@ -456,6 +985,13 @@ module.exports = {
   findAllForAdmin,
   findByIdForAdmin,
   createFromOrderForAdmin,
+  writeStatusLog,
+  insertNotification,
+  lockActiveSession,
+  createProgressForAdmin,
+  createHarvestForAdmin,
+  completeForAdmin,
+  cancelForAdmin,
   startCultivationForAdmin,
   updateForAdmin,
 };

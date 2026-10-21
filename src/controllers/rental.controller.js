@@ -24,6 +24,7 @@ async function adminStartCultivation(req, res) {
   const result = await rentalService.startCultivationForAdmin(
     req.params.rentalId,
     req.body || {},
+    req.user.user_id,
   );
   res.status(201).json({
     message: 'Cultivation session started successfully',
@@ -32,8 +33,48 @@ async function adminStartCultivation(req, res) {
 }
 
 async function adminUpdate(req, res) {
-  const rental = await rentalService.updateRentalForAdmin(req.params.rentalId, req.body || {});
+  const rental = await rentalService.updateRentalForAdmin(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
   res.json({ message: 'Rental updated successfully', data: rental });
+}
+
+async function adminCreateProgress(req, res) {
+  const progress = await rentalService.createProgressForAdmin(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.status(201).json({ message: 'Cultivation progress recorded successfully', data: progress });
+}
+
+async function adminCreateHarvest(req, res) {
+  const harvest = await rentalService.createHarvestForAdmin(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.status(201).json({ message: 'Harvest recorded successfully', data: harvest });
+}
+
+async function adminComplete(req, res) {
+  const result = await rentalService.completeRentalForAdmin(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.json({ message: 'Rental completed successfully', data: result });
+}
+
+async function adminCancel(req, res) {
+  const result = await rentalService.cancelRentalForAdmin(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.json({ message: 'Rental cancelled successfully', data: result });
 }
 
 module.exports = {
@@ -42,4 +83,8 @@ module.exports = {
   adminCreateFromOrder,
   adminStartCultivation,
   adminUpdate,
+  adminCreateProgress,
+  adminCreateHarvest,
+  adminComplete,
+  adminCancel,
 };
