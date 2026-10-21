@@ -17,11 +17,13 @@ Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
    `PUT /api/iot/floors/:floorId`. Gán đúng `master_id` (ID database),
    `node_address`, `misting_ssr_channel`. Không suy ra kênh van từ số tầng.
 2. Gán các khay cùng phòng bằng `PUT /api/iot/floors/:floorId/trays/:trayId`.
-3. Chọn loại nấm bằng `PUT /api/iot/floors/:floorId/trays/:trayId/cultivation`
-   với `{"rental_id":123,"mushroom_type_id":2}`. Lượt thuê phải ACTIVE, đã gán
-   đúng khay và còn trong thời hạn thuê. API tạo/cập nhật phiên PLANNED,
-   không đổi loại của phiên ACTIVE. Tầng phải dừng AUTO và giải quyết OFF trước.
-   Không chọn một loại đại diện cho cả tầng.
+3. Dùng API rentals hiện có:
+   `POST /api/rentals/admin/:rentalId/cultivation-session` với `{"trayId":123}`.
+   API tự lấy loại nấm từ đơn đã thanh toán, tạo phiên ACTIVE, gán khay cho rental,
+   bắt đầu thời hạn thuê và chuyển khay sang OCCUPIED.
+   AUTO không tạo phiên trồng và không yêu cầu chọn lại loại nấm.
+   Endpoint cũ `PUT /api/iot/floors/:floorId/trays/:trayId/cultivation` đã bỏ;
+   mobile dùng API rentals ở trên.
 4. Gọi `GET /api/iot/floors/:floorId/auto-control/suggestions`.
 5. Hiển thị `common`, `sourceProfiles`, `warnings`. Nếu `config=null`,
    hiển thị `issues` và chưa cho lưu gợi ý. Nếu có config, dùng nó để điền form.
@@ -39,8 +41,13 @@ Không tự đổi ngưỡng hoặc tự Start khi người dùng chọn loại 
 
 ## Dữ liệu chung và preset
 
-Nguồn là các loại nấm DISTINCT của phiên `PLANNED`, `ACTIVE`, `IN_PROGRESS`
-trên các khay có `floor_id` tương ứng. Phiên đã kết thúc không tham gia.
+Nguồn là các loại nấm DISTINCT của phiên `ACTIVE` trên các khay có `floor_id`
+tương ứng. Phiên phải thuộc rental `ACTIVE` với cùng `tray_id`.
+Phiên PLANNED/COMPLETED/CANCELLED, rental đã kết thúc/hủy, hoặc liên kết khay
+không khớp không tham gia. Khay OCCUPIED nhưng không có phiên hợp lệ không tự
+đóng góp loại nấm. Không có phiên hợp lệ thì không sinh cấu hình gợi ý.
+Thời hạn thuê chỉ là kế hoạch; AUTO dùng trạng thái phiên/rental để xác định
+đang trồng, không tự ngừng chăm sóc chỉ vì qua ngày dự kiến.
 Khay chưa gán ở nơi khác trong phòng không ảnh hưởng profile FLOOR.
 
 Với nhiệt độ, độ ẩm và CO₂, khoảng chung là:

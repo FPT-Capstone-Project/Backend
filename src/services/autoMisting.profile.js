@@ -13,7 +13,7 @@ function summarize(profiles) {
    .map(k=>[k,p[k]==null?null:Number(p[k])])))
   .sort((a,b)=>a.mushroom_type_id-b.mushroom_type_id);
  const issues=[], warnings=[], common={};
- if(!sourceProfiles.length)issues.push('No PLANNED, ACTIVE or IN_PROGRESS cultivation sessions on this floor');
+ if(!sourceProfiles.length)issues.push('No ACTIVE cultivation sessions linked to ACTIVE rentals on this floor');
  for(const metric of ['temperature','humidity','co2']) {
   const complete=sourceProfiles.length>0 && sourceProfiles.every(p=>
    Number.isFinite(p[`${metric}_min`]) && Number.isFinite(p[`${metric}_max`])

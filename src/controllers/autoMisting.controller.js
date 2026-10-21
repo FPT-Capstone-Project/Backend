@@ -14,7 +14,6 @@ module.exports={
  create:handler(r=>service.map(null,r.body),201),
  map:handler(r=>service.map(r.params.floorId,r.body)),
  tray:handler(r=>service.assignTray(r.params.floorId,r.params.trayId)),
- cultivation:handler(r=>service.cultivation(r.params.floorId,r.params.trayId,r.body,r.user.user_id)),
  environment:handler(r=>service.environment(r.params.floorId)),
  configuration:handler(r=>service.configuration(r.params.floorId)),
  suggestions:handler(r=>service.suggestions(r.params.floorId)),

@@ -33,6 +33,13 @@ test('IoT migration and model SQL against isolated PostgreSQL', async (t) => {
       assert.equal(states.length, 8);
       assert.ok(states.every((s) => s.reportedState === null && s.desiredState === null && s.statesMatch === null));
     });
+    await t.test('light mapping persists and is returned in master reads', async () => {
+      await db.exec("INSERT INTO cultivation_rooms(room_code,room_name) VALUES('LIGHT','Light room'); UPDATE iot_masters SET cultivation_room_id=1 WHERE id=1");
+      assert.equal((await model.setLightChannel(1, 3)).light_ssr_channel, 3);
+      assert.equal((await model.findMasters())[0].light_ssr_channel, 3);
+      assert.equal((await model.findMaster('master01')).light_ssr_channel, 3);
+      assert.equal((await model.setLightChannel(1, null)).light_ssr_channel, null);
+    });
     await t.test('successful then failed poll retains last valid values with separate timestamps', async () => {
       await model.receive(message, first, false);
       await model.receive({ ...message, ok: false, temperature: null, humidity: null }, second, false);
