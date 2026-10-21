@@ -6,6 +6,7 @@
 -- Existing databases: apply the relevant migrations instead of rerunning this file.
 -- Paid-rental backfill in 007_backfill_paid_rentals.sql is for existing data;
 -- its final rental schema is already defined below.
+-- Rental lifecycle additions from 009 are represented below.
 -- Seed roles separately, then grant iot.automation.manage to Admin/Farm Operator.
 -- ============================================================
 
@@ -437,6 +438,39 @@ CREATE TABLE rentals (
 CREATE INDEX idx_rentals_user_id ON rentals(user_id);
 CREATE INDEX idx_rentals_status ON rentals(status);
 CREATE INDEX idx_rentals_tray_id ON rentals(tray_id);
+
+-- ============================================================
+-- 12A. RENTAL_STATUS_LOGS
+-- ============================================================
+
+CREATE TABLE rental_status_logs (
+    log_id SERIAL PRIMARY KEY,
+
+    rental_id INT NOT NULL,
+
+    action VARCHAR(40) NOT NULL,
+
+    from_status VARCHAR(20),
+    to_status VARCHAR(20),
+
+    performed_by INT,
+
+    note TEXT,
+
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT fk_rental_status_logs_rental
+        FOREIGN KEY (rental_id)
+        REFERENCES rentals(rental_id)
+        ON DELETE CASCADE,
+
+    CONSTRAINT fk_rental_status_logs_performed_by
+        FOREIGN KEY (performed_by)
+        REFERENCES users(user_id)
+);
+
+CREATE INDEX idx_rental_status_logs_rental
+    ON rental_status_logs(rental_id, created_at);
 
 -- ============================================================
 -- 13. PAYMENTS
@@ -877,6 +911,9 @@ CREATE INDEX idx_sessions_status
 
 CREATE INDEX idx_progress_session_id
     ON cultivation_progress(session_id);
+
+CREATE INDEX idx_progress_session_latest
+    ON cultivation_progress(session_id, progress_id DESC);
 
 
 CREATE INDEX idx_harvests_session_id

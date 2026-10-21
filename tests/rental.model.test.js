@@ -99,76 +99,46 @@ function loadRentalModel({
   return { model: require('../src/models/rental.model'), statements };
 }
 
-test('activates a paid preparing rental, assigns its tray, and marks tray occupied transactionally', async () => {
-  const { model, statements } = loadRentalModel();
-
-  const rental = await model.updateForAdmin(12, { status: 'ACTIVE', trayId: 8 });
-
-  assert.equal(rental.status, 'ACTIVE');
-  assert.equal(rental.tray_id, 8);
-  assert.ok(statements.some(({ statement }) => (
-    statement === "UPDATE cultivation_trays SET status = 'OCCUPIED', updated_at = NOW() WHERE tray_id = $1"
-  )));
-  assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
+test('blocks lifecycle status changes through PATCH', async () => {
+  for (const [status, endpoint] of [
+    ['ACTIVE', 'cultivation-session'],
+    ['COMPLETED', 'complete'],
+    ['CANCELLED', 'cancel'],
+  ]) {
+    const { model, statements } = loadRentalModel();
+    await assert.rejects(
+      () => model.updateForAdmin(12, { status }),
+      { statusCode: 409, message: new RegExp(endpoint) },
+    );
+    assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+    assert.ok(!statements.some(({ statement }) => statement.startsWith('UPDATE rentals')));
+  }
 });
 
-test('rejects activating an unpaid rental', async () => {
+test('approves a confirmed rental and writes the approval audit records', async () => {
   const { model, statements } = loadRentalModel({
     rental: {
       rental_id: 12,
       order_id: 11,
-      status: 'PREPARING',
+      status: 'CONFIRMED',
       tray_id: null,
       duration_days: 30,
-      start_date: '2026-04-01T00:00:00.000Z',
-      end_date: '2026-05-01T00:00:00.000Z',
-      payment_status: 'UNPAID',
-    },
-  });
-
-  await assert.rejects(
-    () => model.updateForAdmin(12, { status: 'ACTIVE', trayId: 8 }),
-    { statusCode: 409, message: 'Only rentals with paid orders can be activated' },
-  );
-  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
-  assert.ok(!statements.some(({ statement }) => statement.startsWith('UPDATE rentals')));
-});
-
-test('rejects activation when the tray is occupied or overlaps another rental', async () => {
-  const occupiedTray = loadRentalModel({ tray: { tray_id: 8, status: 'OCCUPIED' } });
-  await assert.rejects(
-    () => occupiedTray.model.updateForAdmin(12, { status: 'ACTIVE', trayId: 8 }),
-    { statusCode: 409, message: 'Cultivation tray is unavailable' },
-  );
-
-  const overlap = loadRentalModel({ conflict: true });
-  await assert.rejects(
-    () => overlap.model.updateForAdmin(12, { status: 'ACTIVE', trayId: 8 }),
-    { statusCode: 409, message: /overlapping active rental/ },
-  );
-  assert.ok(overlap.statements.some(({ statement }) => statement === 'ROLLBACK'));
-  assert.ok(!overlap.statements.some(({ statement }) => statement.startsWith('UPDATE rentals')));
-});
-
-test('completing an active rental releases its occupied tray', async () => {
-  const { model, statements } = loadRentalModel({
-    rental: {
-      rental_id: 12,
-      order_id: 11,
-      status: 'ACTIVE',
-      tray_id: 8,
-      duration_days: 30,
-      start_date: '2026-04-01T00:00:00.000Z',
-      end_date: '2026-05-01T00:00:00.000Z',
+      start_date: null,
+      end_date: null,
       payment_status: 'PAID',
     },
   });
 
-  await model.updateForAdmin(12, { status: 'COMPLETED' });
+  await model.updateForAdmin(12, { status: 'PREPARING' }, 1);
 
   assert.ok(statements.some(({ statement, values }) => (
-    statement === "UPDATE cultivation_trays SET status = 'AVAILABLE', updated_at = NOW() WHERE tray_id = $1 AND status = 'OCCUPIED'"
-      && values[0] === 8
+    statement.startsWith('INSERT INTO rental_status_logs')
+      && values[1] === 'APPROVE'
+      && values[4] === 1
+  )));
+  assert.ok(statements.some(({ statement, values }) => (
+    statement.startsWith('INSERT INTO notifications')
+      && values[1] === 'RENTAL_APPROVED'
   )));
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
 });
