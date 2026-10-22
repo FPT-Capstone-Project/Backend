@@ -25,6 +25,9 @@ const env = {
   cloudinaryCloudName: process.env.CLOUDINARY_CLOUD_NAME || '',
   cloudinaryApiKey: process.env.CLOUDINARY_API_KEY || '',
   cloudinaryApiSecret: process.env.CLOUDINARY_API_SECRET || '',
+  imouAppId: process.env.IMOU_APP_ID || '',
+  imouAppSecret: process.env.IMOU_APP_SECRET || '',
+  imouRegion: process.env.IMOU_REGION || '',
 
   googleClientId: process.env.GOOGLE_CLIENT_ID || '',
   googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || '',

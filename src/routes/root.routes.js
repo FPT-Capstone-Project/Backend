@@ -23,5 +23,6 @@ rootRouter.use('/orders', orderRoutes);
 rootRouter.use('/rentals', rentalRoutes);
 rootRouter.use('/payments', paymentRoutes);
 rootRouter.use('/iot', require('./iot.routes'));
+rootRouter.use('/cameras', require('./camera.routes'));
 
 module.exports = rootRouter;

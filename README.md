@@ -142,6 +142,82 @@ Khi có `DATABASE_URL`, ứng dụng sẽ ưu tiên connection string này và b
 
 Nếu password database có ký tự đặc biệt như `@`, `:`, `/`, `#` hoặc khoảng trắng, cần URL-encode password trước khi đưa vào `DATABASE_URL`.
 
+### Lấy link video live từ camera Imou
+
+API `GET /api/cameras/{cameraId}/live-stream` gọi Imou Open Platform và trả về URL HLS tạm thời. Route yêu cầu JWT của admin hoặc nhân viên vận hành (role 1 hoặc 2). Trường `cameras.camera_code` phải chứa đúng device ID đã bind trong tài khoản Imou Open Platform.
+
+Cấu hình `IMOU_APP_ID` và `IMOU_APP_SECRET` trong environment của Render (không gửi các giá trị này trong chat hoặc commit vào Git). Nếu ứng dụng Imou được cấp region riêng, đặt thêm `IMOU_REGION` theo mã region từ Imou; để trống nếu dùng endpoint mặc định. Sau đó deploy lại backend.
+
+Ví dụ:
+
+```http
+GET /api/cameras/1/live-stream?channelId=0
+Authorization: Bearer <JWT>
+```
+
+Response có dạng:
+
+```json
+{
+  "data": {
+    "cameraId": 1,
+    "cameraName": "Camera 1",
+    "channelId": "0",
+    "stream": {
+      "url": "https://...",
+      "protocol": "hls",
+      "streamId": 1
+    }
+  }
+}
+```
+
+URL do Imou cấp có thể hết hạn; frontend nên gọi API lại khi URL không còn xem được và không lưu link lâu dài.
+
+Quản lý các phiên live đang tồn tại trên tài khoản Imou (JWT admin):
+
+```http
+GET /api/cameras/live-streams?start=1&limit=20
+```
+
+API dùng Imou `liveList`; mỗi mục trả `liveToken`, `deviceId`, `channelId`, trạng thái và URL stream. Endpoint chỉ cho admin truy cập vì `liveToken` được dùng để dừng phiên:
+
+```http
+POST /api/cameras/live-streams/stop
+Content-Type: application/json
+
+{
+  "liveToken": "<liveToken from list>"
+}
+```
+
+Để bắt đầu/lấy luồng từ camera đã đăng ký, dùng `POST /api/cameras/{cameraId}/live-stream?channelId=0`. `GET` cũ vẫn được giữ tương thích. Có thể dừng phiên của camera đã đăng ký bằng `POST /api/cameras/{cameraId}/live-stream/stop?channelId=0`.
+
+### Quản lý camera
+
+Các API CRUD camera yêu cầu JWT của admin (role 1):
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/cameras?roomId=1&status=ACTIVE` | Danh sách camera, có thể lọc theo phòng/trạng thái |
+| `GET` | `/api/cameras/{cameraId}` | Chi tiết camera |
+| `POST` | `/api/cameras` | Tạo camera |
+| `PUT` | `/api/cameras/{cameraId}` | Cập nhật một phần thông tin |
+| `DELETE` | `/api/cameras/{cameraId}` | Xóa camera |
+
+Ví dụ tạo camera; `cameraCode` là device ID Imou, không phải mã tự đặt:
+
+```json
+{
+  "roomId": 1,
+  "cameraCode": "DEVICE_ID_FROM_IMOU",
+  "cameraName": "Camera phòng trồng",
+  "status": "ACTIVE"
+}
+```
+
+`status` nhận `ACTIVE`, `INACTIVE` hoặc `OFFLINE`. `streamUrl` là trường tùy chọn tương thích với schema camera hiện tại; API lấy live Imou dùng `cameraCode` và Imou Cloud.
+
 ### Gửi OTP bằng Gmail API
 
 OTP được gửi qua Gmail API (HTTPS), không dùng SMTP. Trong Google Cloud, bật Gmail API, tạo OAuth client loại Web application và đăng ký redirect URI khớp chính xác với `GOOGLE_REDIRECT_URI`. Cấu hình trên máy local và Render:
