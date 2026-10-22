@@ -9,8 +9,6 @@ const mushroomConditionColumns = `
   humidity_max,
   co2_min,
   co2_max,
-  substrate_moisture_min,
-  substrate_moisture_max,
   created_at,
   updated_at
 `;
@@ -53,8 +51,6 @@ async function create({
   humidityMax,
   co2Min,
   co2Max,
-  substrateMoistureMin,
-  substrateMoistureMax,
 }) {
   const result = await pool.query(
     `INSERT INTO mushroom_conditions (
@@ -64,10 +60,8 @@ async function create({
       humidity_min,
       humidity_max,
       co2_min,
-      co2_max,
-      substrate_moisture_min,
-      substrate_moisture_max
-    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      co2_max
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
     RETURNING ${mushroomConditionColumns}`,
     [
       mushroomTypeId,
@@ -77,8 +71,6 @@ async function create({
       humidityMax,
       co2Min,
       co2Max,
-      substrateMoistureMin,
-      substrateMoistureMax,
     ],
   );
 

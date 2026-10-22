@@ -95,14 +95,11 @@ async function createMushroomCondition(payload = {}) {
     humidityMax: parseNullableNumber(payload.humidityMax ?? payload.humidity_max, 'humidityMax'),
     co2Min: parseNullableNumber(payload.co2Min ?? payload.co2_min, 'co2Min'),
     co2Max: parseNullableNumber(payload.co2Max ?? payload.co2_max, 'co2Max'),
-    substrateMoistureMin: parseNullableNumber(payload.substrateMoistureMin ?? payload.substrate_moisture_min, 'substrateMoistureMin'),
-    substrateMoistureMax: parseNullableNumber(payload.substrateMoistureMax ?? payload.substrate_moisture_max, 'substrateMoistureMax'),
   };
 
   validateRange(data.temperatureMin, data.temperatureMax, 'Temperature');
   validateRange(data.humidityMin, data.humidityMax, 'Humidity');
   validateRange(data.co2Min, data.co2Max, 'CO2');
-  validateRange(data.substrateMoistureMin, data.substrateMoistureMax, 'Substrate moisture');
 
   return mushroomConditionModel.create(data);
 }
@@ -151,12 +148,6 @@ async function updateMushroomCondition(conditionId, payload = {}) {
     co2_max: co2Ranges.co2Max,
   });
 
-  const substrateMoistureRanges = buildRangeUpdate(payload, 'substrateMoisture');
-  Object.assign(updateData, {
-    substrate_moisture_min: substrateMoistureRanges.substrateMoistureMin,
-    substrate_moisture_max: substrateMoistureRanges.substrateMoistureMax,
-  });
-
   const filteredUpdateData = Object.fromEntries(
     Object.entries(updateData).filter(([, value]) => value !== undefined),
   );
@@ -184,13 +175,6 @@ async function updateMushroomCondition(conditionId, payload = {}) {
     && filteredUpdateData.co2_min > filteredUpdateData.co2_max
   ) {
     throw new AppError('CO2 minimum cannot be greater than maximum', 400);
-  }
-
-  if (
-    filteredUpdateData.substrate_moisture_min !== undefined && filteredUpdateData.substrate_moisture_max !== undefined
-    && filteredUpdateData.substrate_moisture_min > filteredUpdateData.substrate_moisture_max
-  ) {
-    throw new AppError('Substrate moisture minimum cannot be greater than maximum', 400);
   }
 
   const updatedCondition = await mushroomConditionModel.updateById(id, filteredUpdateData);
