@@ -40,20 +40,6 @@ BEGIN
 END
 $$;
 
-CREATE TABLE IF NOT EXISTS rental_status_logs (
-    log_id SERIAL PRIMARY KEY,
-    rental_id INT NOT NULL REFERENCES rentals(rental_id) ON DELETE CASCADE,
-    action VARCHAR(40) NOT NULL,
-    from_status VARCHAR(20),
-    to_status VARCHAR(20),
-    performed_by INT REFERENCES users(user_id),
-    note TEXT,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_rental_status_logs_rental
-    ON rental_status_logs(rental_id, created_at);
-
 CREATE INDEX IF NOT EXISTS idx_progress_session_latest
     ON cultivation_progress(session_id, progress_id DESC);
 

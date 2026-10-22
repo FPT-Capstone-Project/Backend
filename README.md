@@ -158,6 +158,8 @@ GMAIL_SENDER=sender@gmail.com
 
 ## 6. Chuẩn bị database
 
+Ứng dụng không chạy migration tự động khi khởi động. Với database đã tồn tại, không chạy lại `database.sql`; hãy áp dụng các migration cần thiết cho database production trước khi deploy.
+
 Bảng `users` cần tồn tại trước khi gọi API đăng ký. Bảng `users` có foreign key tới bảng `roles`, vì vậy bảng `roles` và role tương ứng cũng phải tồn tại trước.
 
 Ví dụ cấu trúc bảng `users`:
