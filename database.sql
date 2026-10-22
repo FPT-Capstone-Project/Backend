@@ -430,39 +430,6 @@ CREATE INDEX idx_rentals_status ON rentals(status);
 CREATE INDEX idx_rentals_tray_id ON rentals(tray_id);
 
 -- ============================================================
--- 12A. RENTAL_STATUS_LOGS
--- ============================================================
-
-CREATE TABLE rental_status_logs (
-    log_id SERIAL PRIMARY KEY,
-
-    rental_id INT NOT NULL,
-
-    action VARCHAR(40) NOT NULL,
-
-    from_status VARCHAR(20),
-    to_status VARCHAR(20),
-
-    performed_by INT,
-
-    note TEXT,
-
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_rental_status_logs_rental
-        FOREIGN KEY (rental_id)
-        REFERENCES rentals(rental_id)
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_rental_status_logs_performed_by
-        FOREIGN KEY (performed_by)
-        REFERENCES users(user_id)
-);
-
-CREATE INDEX idx_rental_status_logs_rental
-    ON rental_status_logs(rental_id, created_at);
-
--- ============================================================
 -- 13. PAYMENTS
 -- ============================================================
 
