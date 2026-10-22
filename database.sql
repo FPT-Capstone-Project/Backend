@@ -137,9 +137,6 @@ CREATE TABLE mushroom_conditions (
     co2_min NUMERIC(10,2),
     co2_max NUMERIC(10,2),
 
-    substrate_moisture_min NUMERIC(6,2),
-    substrate_moisture_max NUMERIC(6,2),
-
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -167,13 +164,6 @@ CREATE TABLE mushroom_conditions (
             co2_min IS NULL
             OR co2_max IS NULL
             OR co2_min <= co2_max
-        ),
-
-    CONSTRAINT chk_substrate_moisture_range
-        CHECK (
-            substrate_moisture_min IS NULL
-            OR substrate_moisture_max IS NULL
-            OR substrate_moisture_min <= substrate_moisture_max
         )
 );
 
