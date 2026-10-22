@@ -12,7 +12,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
  const previousEnabled=process.env.AUTO_MISTING_REAL_ENABLED,previousWatchdogs=process.env.AUTO_MISTING_VERIFIED_WATCHDOGS;
  process.env.AUTO_MISTING_REAL_ENABLED='false';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{}';
  const db=new PGlite();
- let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn;
+ let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn,startFeedback='live';
  const calls=[];
  const repo=createRepository(db);
  const dbPath=require.resolve('../src/config/db'),originalDb=require.cache[dbPath];
@@ -37,11 +37,15 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
   if(internal?.beforePublish)await internal.beforePublish();
   calls.push({master,channel,action:body.action});
   if((body.action==='ON' && failOn) || (body.action==='OFF' && failOff))throw new Error('Mock MQTT publication failed');
+  if(body.action==='OFF' && internal.beforePublish && startFeedback!=='none') {
+   now+=1;
+   await db.query("UPDATE iot_ssr_states SET reported_state='OFF',desired_state='OFF',reported_retained=$3,state_reported_at=$1 WHERE master_id=1 AND channel=$2",[new Date(now),channel,startFeedback==='retained']);
+  }
   return {};
   };
   return internal.lockHeld?publish():repo.lockChannel(1,channel,publish);
  };
- const service=createService(repo,{isReady:()=>connected},command,()=>now);
+ const service=createService(repo,{isReady:()=>connected},command,()=>now,async ms=>{now+=ms;});
  const fresh=async()=>{await db.query('UPDATE iot_sensor_latest SET last_received_at=$1',[new Date(now)]);await db.exec('UPDATE iot_auto_control_worker SET heartbeat_at=now()');};
  try{
   await db.exec(fs.readFileSync('database.sql','utf8'));
@@ -112,10 +116,28 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
    assert.equal((await service.evaluate(id)).action,'NONE');assert.equal(calls.length,0);
   });
+  await t.test('real Start sends OFF and refuses old, retained or missing feedback without creating a run',async()=>{
+   process.env.AUTO_MISTING_REAL_ENABLED='true';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{"master01":10000}';
+   await db.query("INSERT INTO iot_ssr_states(master_id,channel,reported_state,reported_retained,state_reported_at) VALUES(1,1,'OFF',false,$1)",[new Date(now)]);
+   const previous=(await repo.run(id)).id;
+   for(const feedback of ['none','retained']) {
+    await fresh();startFeedback=feedback;
+    await assert.rejects(()=>service.start(id,{dryRun:false},null),error=>error.statusCode===504 && /AUTO was not started/.test(error.message));
+    assert.equal(calls.at(-1).action,'OFF');
+    assert.equal((await repo.run(id)).id,previous);
+    assert.equal((await service.status(id)).mode,'MANUAL');
+   }
+   startFeedback='live';failOff=true;await fresh();
+   await assert.rejects(()=>service.start(id,{dryRun:false},null),/publication failed/);
+   assert.equal((await repo.run(id)).id,previous);failOff=false;
+  });
   await t.test('real mocked pulse uses existing command service and OFF never waits for delayed ON feedback',async()=>{
    process.env.AUTO_MISTING_REAL_ENABLED='true';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{"master01":10000}';
-   await fresh();await db.query("INSERT INTO iot_ssr_states(master_id,channel,reported_state,reported_retained,state_reported_at) VALUES(1,1,'OFF',false,$1)",[new Date(now)]);
-   await service.start(id,{dryRun:false},null);await service.evaluate(id);
+   await fresh();await db.query("UPDATE iot_ssr_states SET reported_state='ON',desired_state='ON',state_reported_at=$1 WHERE master_id=1 AND channel=1",[new Date(now-30000)]);
+   await service.start(id,{dryRun:false},null);
+   assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   await service.evaluate(id);
    assert.equal(calls.at(-1).action,'ON');
    now+=5000;await fresh();await service.evaluate(id);assert.equal(calls.at(-1).action,'OFF');
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');

@@ -9,7 +9,7 @@ function positive(value,name='floorId') {
  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value)<1 || Number(value)>2147483647) throw new AppError(`Invalid ${name}`,400);
  return Number(value);
 }
-function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now()) {
+function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now(), wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
  const online=f=>publisher.isReady() && f.reported_status!=='offline';
  function watchdog(f) {
   let verified={};
@@ -25,6 +25,25 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   const age=ssr?.state_reported_at?now()-new Date(ssr.state_reported_at):NaN;
   if(ssr?.reported_state!=='OFF' || ssr.reported_retained!==false || !Number.isFinite(age) || age<0
    || age>c.sensor_max_age_ms || ssr.desired_state==='ON')throw new AppError('Fresh live SSR OFF feedback required',409);
+ }
+ async function prepareStartOff(f,c,user) {
+  const previous=await repo.ssr(f);
+  let requestedAt=now();
+  await command(f.master_identifier,f.misting_ssr_channel,{action:'OFF'},user,{
+   automatic:true,lockHeld:true,beforePublish:()=>{requestedAt=now();}
+  });
+  // Publication acknowledgement is not device feedback. Keep the channel locked
+  // until a new live OFF arrives, so another publisher cannot turn it on here.
+  for(let elapsed=0;elapsed<=5000;elapsed+=100) {
+   const ssr=await repo.ssr(f);
+   const reportedAt=ssr?.state_reported_at?new Date(ssr.state_reported_at).getTime():NaN;
+   const age=now()-reportedAt;
+   if(ssr?.reported_state==='OFF' && ssr.reported_retained===false && ssr.desired_state!=='ON'
+    && reportedAt>=requestedAt && (!previous?.state_reported_at || reportedAt>new Date(previous.state_reported_at).getTime())
+    && age>=0 && age<=c.sensor_max_age_ms)return;
+   if(elapsed<5000)await wait(100);
+  }
+  throw new AppError('Start cancelled: device did not confirm a fresh live SSR OFF within 5 seconds; AUTO was not started',504);
  }
  async function editable(id) {
   const run=await repo.run(id); const rt=await repo.runtime(id);
@@ -149,7 +168,13 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Real automation disabled: verified device watchdog required',409);
       if(!online(f))throw new AppError('MQTT or master offline',503);
-      await requireLiveOff(f,c);
+      await prepareStartOff(f,c,user);
+      // Device feedback may take several seconds; recheck prerequisites before
+      // creating a running session.
+      if(!await repo.workerReady())throw new AppError('Automation worker is not ready',503);
+      if(!online(await repo.floor(id)))throw new AppError('MQTT or master offline',503);
+      const fresh=await env(id,c);if(!fresh.healthy)throw new AppError(fresh.reason,409);
+      await verifyProfile(id,c);
      }
      return repo.transaction(async()=>{
      const run=await repo.createRun(id,c,user,dry);
