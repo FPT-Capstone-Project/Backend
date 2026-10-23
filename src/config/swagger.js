@@ -77,6 +77,53 @@ const options = {
             updated_at: { type: 'string', format: 'date-time' },
           },
         },
+        UserWithRole: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'integer', example: 1 },
+            role_id: { type: 'integer', example: 3 },
+            role_name: { type: 'string', example: 'Customer' },
+            role_description: { type: 'string', nullable: true },
+            email: { type: 'string', format: 'email', example: 'user@example.com' },
+            full_name: { type: 'string', example: 'Nguyen Van A' },
+            phone: { type: 'string', nullable: true, example: '0900000000' },
+            address: { type: 'string', nullable: true, example: 'Ho Chi Minh City' },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], example: 'ACTIVE' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        UserAccountDetail: {
+          allOf: [
+            { $ref: '#/components/schemas/UserWithRole' },
+            {
+              type: 'object',
+              properties: {
+                order_count: { type: 'integer', minimum: 0, example: 12 },
+                rental_count: { type: 'integer', minimum: 0, example: 4 },
+              },
+            },
+          ],
+        },
+        CreateManagedUserRequest: {
+          type: 'object',
+          required: ['email', 'password', 'fullName', 'roleId'],
+          properties: {
+            email: { type: 'string', format: 'email', example: 'staff@example.com' },
+            password: { type: 'string', minLength: 8, example: 'password123' },
+            fullName: { type: 'string', example: 'Nguyen Van A' },
+            roleId: { type: 'integer', minimum: 1, example: 2 },
+            phone: { type: 'string', example: '0900000000' },
+            address: { type: 'string', example: 'Ho Chi Minh City' },
+          },
+        },
+        UpdateUserStatusRequest: {
+          type: 'object',
+          required: ['status'],
+          properties: {
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], example: 'BLOCKED' },
+          },
+        },
         MushroomType: {
           type: 'object',
           properties: {

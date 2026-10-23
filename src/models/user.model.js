@@ -12,6 +12,20 @@ const publicUserColumns = `
   updated_at
 `;
 
+const userWithRoleColumns = `
+  u.user_id,
+  u.role_id,
+  r.role_name,
+  r.description AS role_description,
+  u.email,
+  u.full_name,
+  u.phone,
+  u.address,
+  u.status,
+  u.created_at,
+  u.updated_at
+`;
+
 async function findByEmail(email) {
   const result = await pool.query(
     `SELECT ${publicUserColumns}, password_hash FROM users WHERE email = $1 LIMIT 1`,
@@ -38,7 +52,57 @@ async function create({ roleId, email, passwordHash, fullName, phone, address })
   return result.rows[0];
 }
 
-module.exports = { findByEmail, findById, create };
+async function findAllWithRole({ roleId } = {}) {
+  const values = [];
+  let query = `
+    SELECT ${userWithRoleColumns}
+    FROM users u
+    JOIN roles r ON r.role_id = u.role_id
+  `;
+
+  if (roleId !== undefined) {
+    values.push(roleId);
+    query += ' WHERE u.role_id = $1';
+  }
+
+  query += ' ORDER BY u.created_at DESC, u.user_id DESC';
+  const result = await pool.query(query, values);
+  return result.rows;
+}
+
+async function findDetailById(userId) {
+  const result = await pool.query(
+    `SELECT ${userWithRoleColumns},
+            (SELECT COUNT(*)::INTEGER FROM orders o WHERE o.user_id = u.user_id) AS order_count,
+            (SELECT COUNT(*)::INTEGER FROM rentals rt WHERE rt.user_id = u.user_id) AS rental_count
+     FROM users u
+     JOIN roles r ON r.role_id = u.role_id
+     WHERE u.user_id = $1
+     LIMIT 1`,
+    [userId],
+  );
+  return result.rows[0] || null;
+}
+
+async function updateStatusById(userId, status) {
+  const result = await pool.query(
+    `UPDATE users
+     SET status = $2, updated_at = NOW()
+     WHERE user_id = $1
+     RETURNING ${publicUserColumns}`,
+    [userId, status],
+  );
+  return result.rows[0] || null;
+}
+
+module.exports = {
+  findByEmail,
+  findById,
+  create,
+  findAllWithRole,
+  findDetailById,
+  updateStatusById,
+};
 
 async function findOtpUserByEmail(email) {
   const result = await pool.query(
