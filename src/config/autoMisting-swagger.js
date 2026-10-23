@@ -27,6 +27,7 @@ function add(path,method,summary,schema,description='') {
   [method==='post' && (path.endsWith('/start') || path.endsWith('/floors'))?'201':'200']:{description:'Result in {data: ...}. State includes mode, run, runtime, environment, ssr, cooldownRemainingMs and lastDecision.',content:{'application/json':{schema:{type:'object',properties:{data:{type:'object'}}}}}},
   400:{description:'Invalid fields, thresholds, ranges or pagination'},401:{description:'JWT missing or invalid'},403:{description:'Missing automation permission'},
   404:{description:'Floor not found'},409:{description:'Active run, unresolved OFF, invalid mapping, unhealthy sensors, unapproved profiles or hardware safety gate closed'},503:{description:'MQTT unavailable; OFF remains pending and is retried'}}};
+ if(path.endsWith('/start'))operation.responses[504]={description:'OFF publication timed out or no new live OFF feedback within 5 seconds after publication; AUTO was not started'};
  for(const name of ['floorId','trayId'])if(path.includes(`{${name}}`))operation.parameters.push({name,in:'path',required:true,schema:{type:'integer',minimum:1}});
  if(path.endsWith('/logs'))for(const [name,max] of [['limit',1000],['offset',1000000]])operation.parameters.push({name,in:'query',schema:{type:'integer',minimum:name==='limit'?1:0,maximum:max}});
  if(schema)operation.requestBody={required:true,content:{'application/json':{schema,...(schema===config?{example}:{})}}};
@@ -49,16 +50,12 @@ const base='/api/iot/floors',floor=base+'/{floorId}',auto=floor+'/auto-control';
 add(base,'get','List floor mappings');add(base,'post','Create floor mapping',mapping,'Master must already belong to this room. No inferred node/floor assignments.');
 add(floor,'put','Replace floor mapping',mapping,'Stop and resolve OFF first. Channels and nodes are unique per master.');
 add(floor+'/trays/{trayId}','put','Assign a same-room tray to a stopped floor');
-add(floor+'/trays/{trayId}/cultivation','put','Select a mushroom type for a rented tray',{
- type:'object',additionalProperties:false,required:['rental_id','mushroom_type_id'],
- properties:{rental_id:{type:'integer',minimum:1},mushroom_type_id:{type:'integer',minimum:1}}
-},'Stop AUTO and resolve OFF first. Requires an ACTIVE rental assigned to this tray within its rental dates. Creates or updates a PLANNED session; cannot change the mushroom type of an ACTIVE session. Review floor suggestions afterward.');
 add(floor+'/environment','get','Get three sensors, averages, freshness and thresholds');
 add(auto,'get','Read saved configuration, mode, cultivation conflicts and suggestions');
 add(auto+'/suggestions','get','Suggest a shared floor climate configuration',null,
- 'Requires iot.automation.manage. Uses PLANNED/ACTIVE/IN_PROGRESS tray sessions; returns sourceProfiles, common, issues, warnings, config. Config is null for missing, conflicting or too narrow conditions. No database writes or device commands. Review preset, set profile_approved=true and PUT config to auto-control.');
+ 'Requires iot.automation.manage. Uses ACTIVE tray sessions linked to ACTIVE rentals on the same tray; returns sourceProfiles, common, issues, warnings, config. Config is null for missing, conflicting or too narrow conditions. No database writes or device commands. Review preset, set profile_approved=true and PUT config to auto-control.');
 add(auto,'put','Save configuration without starting AUTO',config,'Example thresholds are for simulation only. Save remains MANUAL. Stop before edits.');
-add(auto+'/start','post','Explicitly start a run',{type:'object',additionalProperties:false,properties:{dryRun:{type:'boolean',default:true}}},'Fresh non-retained sensors required. Real runs also require MQTT, fresh SSR OFF and verified local watchdog. Default dryRun=true publishes nothing.');
+add(auto+'/start','post','Explicitly start a run',{type:'object',additionalProperties:false,properties:{dryRun:{type:'boolean',default:true}}},'Fresh non-retained sensors required. Real runs require MQTT and a verified local watchdog, then send OFF and wait up to 5 seconds after publication for new non-retained SSR OFF feedback before starting AUTO. Missing feedback returns 504 without starting a run. Default dryRun=true publishes nothing.');
 add(auto+'/stop','post','Stop AUTO and request OFF',null,'Blocks new ON; unresolved physical state remains OFF_PENDING. OFF publish success is not confirmation.');
 add(auto+'/status','get','Get run, operator, desired/reported SSR, deadlines and errors');
 add(auto+'/logs','get','Read paginated decision history');

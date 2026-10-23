@@ -137,9 +137,6 @@ CREATE TABLE mushroom_conditions (
     co2_min NUMERIC(10,2),
     co2_max NUMERIC(10,2),
 
-    substrate_moisture_min NUMERIC(6,2),
-    substrate_moisture_max NUMERIC(6,2),
-
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
@@ -167,13 +164,6 @@ CREATE TABLE mushroom_conditions (
             co2_min IS NULL
             OR co2_max IS NULL
             OR co2_min <= co2_max
-        ),
-
-    CONSTRAINT chk_substrate_moisture_range
-        CHECK (
-            substrate_moisture_min IS NULL
-            OR substrate_moisture_max IS NULL
-            OR substrate_moisture_min <= substrate_moisture_max
         )
 );
 
@@ -438,39 +428,6 @@ CREATE TABLE rentals (
 CREATE INDEX idx_rentals_user_id ON rentals(user_id);
 CREATE INDEX idx_rentals_status ON rentals(status);
 CREATE INDEX idx_rentals_tray_id ON rentals(tray_id);
-
--- ============================================================
--- 12A. RENTAL_STATUS_LOGS
--- ============================================================
-
-CREATE TABLE rental_status_logs (
-    log_id SERIAL PRIMARY KEY,
-
-    rental_id INT NOT NULL,
-
-    action VARCHAR(40) NOT NULL,
-
-    from_status VARCHAR(20),
-    to_status VARCHAR(20),
-
-    performed_by INT,
-
-    note TEXT,
-
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-    CONSTRAINT fk_rental_status_logs_rental
-        FOREIGN KEY (rental_id)
-        REFERENCES rentals(rental_id)
-        ON DELETE CASCADE,
-
-    CONSTRAINT fk_rental_status_logs_performed_by
-        FOREIGN KEY (performed_by)
-        REFERENCES users(user_id)
-);
-
-CREATE INDEX idx_rental_status_logs_rental
-    ON rental_status_logs(rental_id, created_at);
 
 -- ============================================================
 -- 13. PAYMENTS
@@ -1237,3 +1194,40 @@ ALTER TABLE iot_auto_control_runtime
  ADD COLUMN last_average_temperature DOUBLE PRECISION,
  ADD COLUMN last_reason TEXT;
 ALTER TABLE iot_auto_control_logs ADD COLUMN average_temperature DOUBLE PRECISION;
+
+-- Room light mapping (migration 009)
+-- Room light mapping; NULL means unconfigured. No GPIO or relay command is sent.
+ALTER TABLE iot_masters ADD COLUMN light_ssr_channel INT
+ CONSTRAINT chk_master_light_channel CHECK (light_ssr_channel BETWEEN 1 AND 8);
+
+CREATE FUNCTION check_master_light_channel() RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+ IF NEW.light_ssr_channel IS NOT NULL THEN
+  IF NEW.cultivation_room_id IS NULL THEN
+   RAISE EXCEPTION 'Assign the master to a room before configuring its light'
+    USING ERRCODE='23514', CONSTRAINT='light_mapping_conflict';
+  END IF;
+  IF EXISTS(SELECT 1 FROM cultivation_floors WHERE master_id=NEW.id
+    AND misting_ssr_channel=NEW.light_ssr_channel) THEN
+   RAISE EXCEPTION 'Light channel is already assigned to a floor valve'
+    USING ERRCODE='23514', CONSTRAINT='light_mapping_conflict';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER master_light_channel_guard BEFORE INSERT OR UPDATE ON iot_masters
+ FOR EACH ROW EXECUTE FUNCTION check_master_light_channel();
+
+CREATE FUNCTION check_floor_light_channel() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE light_channel INT;
+BEGIN
+ -- Serialize light and valve mapping writes on the same master row.
+ SELECT light_ssr_channel INTO light_channel FROM iot_masters WHERE id=NEW.master_id FOR UPDATE;
+ IF light_channel=NEW.misting_ssr_channel THEN
+  RAISE EXCEPTION 'Valve channel is already assigned to the room light'
+   USING ERRCODE='23514', CONSTRAINT='light_mapping_conflict';
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER floor_light_channel_guard BEFORE INSERT OR UPDATE ON cultivation_floors
+ FOR EACH ROW EXECUTE FUNCTION check_floor_light_channel();

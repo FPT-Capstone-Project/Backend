@@ -9,11 +9,11 @@ const migration = fs.readFileSync(
   'utf8',
 );
 const lifecycleMigration = fs.readFileSync(
-  path.join(__dirname, '../migrations/009_add_rental_lifecycle_support.sql'),
+  path.join(__dirname, '../migrations/010_add_rental_lifecycle_support.sql'),
   'utf8',
 );
 
-test('rental lifecycle migration has a guarded session FK and status log table', () => {
+test('rental lifecycle migration has a guarded session FK and does not require status log table', () => {
   assert.match(
     lifecycleMigration,
     /IF NOT EXISTS\s*\(\s*SELECT 1\s*FROM pg_constraint[\s\S]*fk_sessions_rental/i,
@@ -22,10 +22,10 @@ test('rental lifecycle migration has a guarded session FK and status log table',
     lifecycleMigration,
     /FOREIGN KEY \(rental_id\)[\s\S]*REFERENCES rentals\(rental_id\)[\s\S]*ON DELETE RESTRICT/i,
   );
-  assert.match(lifecycleMigration, /CREATE TABLE IF NOT EXISTS rental_status_logs/i);
-  assert.match(
-    lifecycleMigration,
-    /rental_id INT NOT NULL REFERENCES rentals\(rental_id\) ON DELETE CASCADE/i,
+  assert.doesNotMatch(lifecycleMigration, /rental_status_logs/i);
+  assert.doesNotMatch(
+    fs.readFileSync(path.join(__dirname, '../database.sql'), 'utf8'),
+    /rental_status_logs/i,
   );
 });
 

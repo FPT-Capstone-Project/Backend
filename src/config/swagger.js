@@ -380,8 +380,6 @@ const options = {
             humidity_max: { type: 'number', nullable: true, example: 90 },
             co2_min: { type: 'number', nullable: true, example: 350 },
             co2_max: { type: 'number', nullable: true, example: 500 },
-            substrate_moisture_min: { type: 'number', nullable: true, example: 55 },
-            substrate_moisture_max: { type: 'number', nullable: true, example: 70 },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
           },
@@ -397,8 +395,6 @@ const options = {
             humidityMax: { type: 'number', nullable: true, example: 90 },
             co2Min: { type: 'number', nullable: true, example: 350 },
             co2Max: { type: 'number', nullable: true, example: 500 },
-            substrateMoistureMin: { type: 'number', nullable: true, example: 55 },
-            substrateMoistureMax: { type: 'number', nullable: true, example: 70 },
           },
         },
         UpdateMushroomConditionRequest: {
@@ -411,8 +407,6 @@ const options = {
             humidityMax: { type: 'number', nullable: true, example: 88 },
             co2Min: { type: 'number', nullable: true, example: 300 },
             co2Max: { type: 'number', nullable: true, example: 600 },
-            substrateMoistureMin: { type: 'number', nullable: true, example: 50 },
-            substrateMoistureMax: { type: 'number', nullable: true, example: 68 },
           },
         },
         AuthResponse: {

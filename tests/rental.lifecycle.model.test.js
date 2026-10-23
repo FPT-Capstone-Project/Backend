@@ -94,8 +94,7 @@ function loadLifecycleModel({
           }],
         };
       }
-      if (statement.startsWith('INSERT INTO rental_status_logs')
-        || statement.startsWith('INSERT INTO notifications')
+      if (statement.startsWith('INSERT INTO notifications')
         || statement.startsWith('UPDATE cultivation_sessions')
         || statement.startsWith('UPDATE rentals')) {
         return { rows: [] };
@@ -222,9 +221,7 @@ test('completes a harvested rental, or rolls back after a failed write', async (
     tray: { trayId: 8, status: 'AVAILABLE' },
     harvestSummary: { totalHarvests: 2, totals: [{ unit: 'kg', totalQuantity: 1.5 }] },
   });
-  assert.ok(success.statements.some(({ statement, values }) => (
-    statement.startsWith('INSERT INTO rental_status_logs') && values[1] === 'COMPLETE'
-  )));
+  assert.ok(!success.statements.some(({ statement }) => statement.includes('rental_status_logs')));
 
   const failure = loadLifecycleModel({ failOn: "UPDATE rentals SET status = 'COMPLETED'" });
   await assert.rejects(() => failure.model.completeForAdmin(12, undefined, 2), /database write failed/);
@@ -245,9 +242,7 @@ test('cancels an active rental, marks paid orders for refund, and releases its t
   assert.ok(statements.some(({ statement }) => (
     statement.startsWith("UPDATE cultivation_trays SET status = 'AVAILABLE'")
   )));
-  assert.ok(statements.some(({ statement, values }) => (
-    statement.startsWith('INSERT INTO rental_status_logs') && values[1] === 'CANCEL'
-  )));
+  assert.ok(!statements.some(({ statement }) => statement.includes('rental_status_logs')));
 });
 
 test('cancellation releases the active session tray when the rental tray reference is stale', async () => {

@@ -115,7 +115,7 @@ test('blocks lifecycle status changes through PATCH', async () => {
   }
 });
 
-test('approves a confirmed rental and writes the approval audit records', async () => {
+test('approves a confirmed rental and sends the approval notification', async () => {
   const { model, statements } = loadRentalModel({
     rental: {
       rental_id: 12,
@@ -131,11 +131,7 @@ test('approves a confirmed rental and writes the approval audit records', async 
 
   await model.updateForAdmin(12, { status: 'PREPARING' }, 1);
 
-  assert.ok(statements.some(({ statement, values }) => (
-    statement.startsWith('INSERT INTO rental_status_logs')
-      && values[1] === 'APPROVE'
-      && values[4] === 1
-  )));
+  assert.ok(!statements.some(({ statement }) => statement.includes('rental_status_logs')));
   assert.ok(statements.some(({ statement, values }) => (
     statement.startsWith('INSERT INTO notifications')
       && values[1] === 'RENTAL_APPROVED'

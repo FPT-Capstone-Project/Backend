@@ -14,6 +14,7 @@ const schemas = {
   IotMaster: { type: 'object', properties: {
     id: { type: 'integer' }, masterId: { type: 'string', example: 'master01' },
     cultivationRoomId: { type: 'integer', nullable: true },
+    light_ssr_channel: { type: 'integer', minimum: 1, maximum: 8, nullable: true, description: 'Room light SSR channel; null means unconfigured. Channel 3 maps to GPIO6.' },
     reportedStatus: { type: 'string', enum: ['online', 'offline'], nullable: true },
     lastSeenAt: { ...timestamp, description: 'Last non-retained message arrival; not a connectivity guarantee.' },
     statusReceivedAt: timestamp, statusRetained: { type: 'boolean', nullable: true },
@@ -79,6 +80,18 @@ const paths = {
   } },
   [`${base}/commands/{commandId}`]: { get: operation('Persisted command publication status (no correlated acknowledgment)', ['commandId'], ref('IotCommand')) },
 };
+paths[`${base}/masters/{masterId}/light`] = { put: {
+  ...operation('Configure the shared room light channel', ['masterId'], ref('IotMaster')),
+  description: 'Requires iot.automation.manage. Master must belong to a room. Rejects channels assigned to floor valves. Null removes the mapping. Does not switch relays or publish MQTT.',
+  requestBody: { required: true, content: { 'application/json': { schema: {
+    type: 'object', additionalProperties: false, required: ['channel'],
+    properties: { channel: { type: 'integer', minimum: 1, maximum: 8, nullable: true } },
+  }, example: { channel: 3 } } } },
+} };
+Object.assign(paths[`${base}/masters/{masterId}/light`].put.responses, {
+  403: { description: 'Missing iot.automation.manage permission' },
+  409: { description: 'Master has no room or channel is assigned to a floor valve' },
+});
 paths[`${path}/history`].get.parameters.push(...Object.entries({
   from: { type: 'string', format: 'date-time' }, to: { type: 'string', format: 'date-time' },
   limit: { type: 'integer', minimum: 1, maximum: 1000, default: 100 },

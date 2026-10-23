@@ -103,6 +103,7 @@ Sau đó mở `.env` và cập nhật các giá trị:
 NODE_ENV=development
 PORT=3000
 SERVER_URL=http://localhost:3000
+CORS_ORIGINS=*
 
 # Dùng DATABASE_URL cho Supabase hoặc PostgreSQL cloud
 DATABASE_URL=postgresql://postgres:your-password@your-host:5432/postgres
@@ -127,6 +128,8 @@ PAYOS_PAYMENT_EXPIRE_MINUTES=15
 PAYOS_WEBHOOK_URL=https://your-api.example/api/payments/payos/webhook
 ```
 
+`CORS_ORIGINS=*` cho phép mọi origin trong development để thuận tiện khi FE chạy local trên bất kỳ cổng nào. Khi deploy production, hãy đặt `CORS_ORIGINS` thành danh sách domain FE cụ thể, phân tách bằng dấu phẩy, ví dụ `https://your-frontend.example.com`. Origin phải gồm scheme và port nếu có, không thêm path hoặc dấu `/` cuối. Production không cho phép origin nào nếu chưa cấu hình biến này.
+
 ### Kết nối Supabase
 
 Có thể dùng connection string PostgreSQL do Supabase cung cấp:
@@ -138,6 +141,82 @@ DATABASE_URL=postgresql://postgres:<password>@<host>:5432/postgres
 Khi có `DATABASE_URL`, ứng dụng sẽ ưu tiên connection string này và bật SSL cho PostgreSQL pool. Không commit file `.env` lên Git. Chỉ commit `.env.example` không chứa password thật.
 
 Nếu password database có ký tự đặc biệt như `@`, `:`, `/`, `#` hoặc khoảng trắng, cần URL-encode password trước khi đưa vào `DATABASE_URL`.
+
+### Lấy link video live từ camera Imou
+
+API `GET /api/cameras/{cameraId}/live-stream` gọi Imou Open Platform và trả về URL HLS tạm thời. Route yêu cầu JWT của admin hoặc nhân viên vận hành (role 1 hoặc 2). Trường `cameras.camera_code` phải chứa đúng device ID đã bind trong tài khoản Imou Open Platform.
+
+Cấu hình `IMOU_APP_ID` và `IMOU_APP_SECRET` trong environment của Render (không gửi các giá trị này trong chat hoặc commit vào Git). Nếu ứng dụng Imou được cấp region riêng, đặt thêm `IMOU_REGION` theo mã region từ Imou; để trống nếu dùng endpoint mặc định. Sau đó deploy lại backend.
+
+Ví dụ:
+
+```http
+GET /api/cameras/1/live-stream?channelId=0
+Authorization: Bearer <JWT>
+```
+
+Response có dạng:
+
+```json
+{
+  "data": {
+    "cameraId": 1,
+    "cameraName": "Camera 1",
+    "channelId": "0",
+    "stream": {
+      "url": "https://...",
+      "protocol": "hls",
+      "streamId": 1
+    }
+  }
+}
+```
+
+URL do Imou cấp có thể hết hạn; frontend nên gọi API lại khi URL không còn xem được và không lưu link lâu dài.
+
+Quản lý các phiên live đang tồn tại trên tài khoản Imou (JWT admin):
+
+```http
+GET /api/cameras/live-streams?start=1&limit=20
+```
+
+API dùng Imou `liveList`; mỗi mục trả `liveToken`, `deviceId`, `channelId`, trạng thái và URL stream. Endpoint chỉ cho admin truy cập vì `liveToken` được dùng để dừng phiên:
+
+```http
+POST /api/cameras/live-streams/stop
+Content-Type: application/json
+
+{
+  "liveToken": "<liveToken from list>"
+}
+```
+
+Để bắt đầu/lấy luồng từ camera đã đăng ký, dùng `POST /api/cameras/{cameraId}/live-stream?channelId=0`. `GET` cũ vẫn được giữ tương thích. Có thể dừng phiên của camera đã đăng ký bằng `POST /api/cameras/{cameraId}/live-stream/stop?channelId=0`.
+
+### Quản lý camera
+
+Các API CRUD camera yêu cầu JWT của admin (role 1):
+
+| Method | Endpoint | Chức năng |
+|---|---|---|
+| `GET` | `/api/cameras?roomId=1&status=ACTIVE` | Danh sách camera, có thể lọc theo phòng/trạng thái |
+| `GET` | `/api/cameras/{cameraId}` | Chi tiết camera |
+| `POST` | `/api/cameras` | Tạo camera |
+| `PUT` | `/api/cameras/{cameraId}` | Cập nhật một phần thông tin |
+| `DELETE` | `/api/cameras/{cameraId}` | Xóa camera |
+
+Ví dụ tạo camera; `cameraCode` là device ID Imou, không phải mã tự đặt:
+
+```json
+{
+  "roomId": 1,
+  "cameraCode": "DEVICE_ID_FROM_IMOU",
+  "cameraName": "Camera phòng trồng",
+  "status": "ACTIVE"
+}
+```
+
+`status` nhận `ACTIVE`, `INACTIVE` hoặc `OFFLINE`. `streamUrl` là trường tùy chọn tương thích với schema camera hiện tại; API lấy live Imou dùng `cameraCode` và Imou Cloud.
 
 ### Gửi OTP bằng Gmail API
 
@@ -154,6 +233,8 @@ GMAIL_SENDER=sender@gmail.com
 Để cấp quyền cho hộp thư gửi OTP, mở `/api/auth/google` trên backend đã deploy, đăng nhập đúng tài khoản gửi thư và chấp thuận quyền gửi email. Callback trả refresh token một lần trong response không-cache; lưu giá trị đó vào `GMAIL_REFRESH_TOKEN` trong Environment của Render. `GMAIL_SENDER` phải là chính hộp thư đã cấp quyền. Không ghi refresh token vào log hoặc chia sẻ công khai. Sau khi cấu hình, các API OTP hiện tại sẽ gửi qua Gmail API.
 
 ## 6. Chuẩn bị database
+
+Ứng dụng không chạy migration tự động khi khởi động. Với database đã tồn tại, không chạy lại `database.sql`; hãy áp dụng các migration cần thiết cho database production trước khi deploy.
 
 Bảng `users` cần tồn tại trước khi gọi API đăng ký. Bảng `users` có foreign key tới bảng `roles`, vì vậy bảng `roles` và role tương ứng cũng phải tồn tại trước.
 

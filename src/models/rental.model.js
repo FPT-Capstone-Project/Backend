@@ -985,7 +985,7 @@ module.exports = {
   findAllForAdmin,
   findByIdForAdmin,
   createFromOrderForAdmin,
-  writeStatusLog,
+
   insertNotification,
   lockActiveSession,
   createProgressForAdmin,

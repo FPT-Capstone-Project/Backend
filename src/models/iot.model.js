@@ -32,7 +32,7 @@ async function transaction(work, diagnostics) {
 }
 
 const masterColumns = `id, master_identifier AS "masterId", cultivation_room_id AS "cultivationRoomId",
-  reported_status AS "reportedStatus", last_seen_at AS "lastSeenAt",
+  light_ssr_channel, reported_status AS "reportedStatus", last_seen_at AS "lastSeenAt",
   status_received_at AS "statusReceivedAt", status_retained AS "statusRetained"`;
 const sensorColumns = `node_address AS "nodeId", sensor_address AS "sensorId", temperature, humidity,
   is_valid AS ok, last_received_at AS "lastReceivedAt", last_valid_at AS "lastValidAt", retained,
@@ -46,6 +46,11 @@ async function findMasters() {
 }
 async function findMaster(identifier) {
   return (await (require('./autoMisting.model').currentConnection() || pool).query(`SELECT ${masterColumns} FROM iot_masters WHERE master_identifier=$1`, [identifier])).rows[0];
+}
+async function setLightChannel(id, channel) {
+  const result = await pool.query(`UPDATE iot_masters SET light_ssr_channel=$2, updated_at=now()
+    WHERE id=$1 RETURNING ${masterColumns}`, [id, channel]);
+  return result.rows[0];
 }
 async function findSensors(id) {
   return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest WHERE master_id=$1
@@ -156,5 +161,5 @@ async function findCommand(id) {
     JOIN iot_masters m ON m.id=c.master_id WHERE c.id=$1`, [id])).rows[0];
 }
 
-module.exports = { findMasters, findMaster, findSensors, findSensor, history, findSsr,
+module.exports = { setLightChannel, findMasters, findMaster, findSensors, findSensor, history, findSsr,
   receive, createCommand, finishCommand, findCommand, expireCommands };

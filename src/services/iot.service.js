@@ -24,6 +24,25 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
   }
   return {
     listMasters: () => repository.findMasters(),
+    async configureLight(id, body) {
+      if (!body || Array.isArray(body) || typeof body !== 'object'
+          || Object.keys(body).length !== 1 || !Object.hasOwn(body, 'channel')
+          || (body.channel !== null && (!Number.isInteger(body.channel) || body.channel < 1 || body.channel > 8))) {
+        throw new AppError('channel must be an integer from 1 to 8, or null', 400);
+      }
+      const m = await master(id);
+      if (body.channel !== null && m.cultivationRoomId == null) {
+        throw new AppError('Assign the master to a room before configuring its light', 409);
+      }
+      try {
+        const updated = await repository.setLightChannel(m.id, body.channel);
+        if (!updated) throw new AppError('IoT master not found', 404);
+        return updated;
+      } catch (error) {
+        if (error.constraint === 'light_mapping_conflict') throw new AppError(error.message, 409);
+        throw error;
+      }
+    },
     async sensors(id) { const m = await master(id); return { masterId: id, sensors: await repository.findSensors(m.id) }; },
     async sensor(id, node, sensor) {
       const args = address(node, sensor);
@@ -74,9 +93,11 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
       if (activeChannels.has(key)) throw new AppError('A command is already being published for this channel', 409);
       activeChannels.add(key);
       try {
-        // Include persistence time without comparing database and host wall clocks.
-        const publicationDeadline = now() + (internal.maxPublishMs || 5000);
-        if (internal.beforePublish) await internal.beforePublish();
+        // Prerequisite checks precede the publication budget. Command persistence
+        // still consumes it, and automation may cap it at the reserved pulse end.
+        const prepared = internal.beforePublish ? await internal.beforePublish() : undefined;
+        const publicationDeadline = Math.min(now() + (internal.maxPublishMs || 5000),
+          prepared?.publicationDeadline ?? Infinity);
         const record = await repository.createCommand(m, number, value, userId);
         const context = { commandId: record.commandId, masterId: id, channel: number, action: value };
         trace(logger, 'ssr.command.publish.start', context);
