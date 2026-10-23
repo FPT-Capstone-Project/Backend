@@ -2,6 +2,7 @@ const repository = require('../models/autoMisting.model');
 const mqtt = require('./iotMqtt.service');
 const AppError = require('../utils/app-error');
 const {randomUUID}=require('node:crypto');
+const {performance}=require('node:perf_hooks');
 const {validateConfig,aggregate,decide}=require('./autoMisting.algorithm');
 const {suggest,assertCompatible}=require('./autoMisting.profile');
 
@@ -271,12 +272,15 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       if(latestDecision.action!=='ON')throw new AppError('Climate demand cleared before publication',409);
       Object.assign(decision,latestDecision);
       if(!run.dry_run)await requireLiveOff(f,c);
+      let publicationDeadline;
       await repo.transaction(async()=>{
+      publicationDeadline=performance.now()+c.misting_pulse_ms;
       await repo.runtimeSet(id,{control_state:'ON_REQUESTED',cycle_id:randomUUID(),demand:decision.demand,
        cooling_demand:decision.coolingDemand??false,last_reason:decision.reason,
        pulse_started_at:new Date(now()),pulse_deadline_at:new Date(now()+c.misting_pulse_ms),off_requested_at:null});
       await log(id,run,'PULSE_RESERVED',decision.reason,{...fresh,reservedOnMs});
       });
+      return {publicationDeadline};
      };
      try {
       let result;
