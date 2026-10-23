@@ -759,6 +759,10 @@ CREATE TABLE notifications (
 
     user_id INT NOT NULL,
 
+    rental_id INT,
+
+    created_by INT,
+
     notification_type VARCHAR(100) NOT NULL,
 
     title VARCHAR(255) NOT NULL,
@@ -775,6 +779,16 @@ CREATE TABLE notifications (
         FOREIGN KEY (user_id)
         REFERENCES users(user_id)
         ON DELETE CASCADE,
+
+    CONSTRAINT fk_notifications_rental
+        FOREIGN KEY (rental_id)
+        REFERENCES rentals(rental_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_notifications_created_by
+        FOREIGN KEY (created_by)
+        REFERENCES users(user_id)
+        ON DELETE SET NULL,
 
     CONSTRAINT chk_notification_read
         CHECK (
@@ -901,6 +915,12 @@ CREATE INDEX idx_notifications_user_id
 
 CREATE INDEX idx_notifications_unread
     ON notifications(user_id, is_read);
+
+CREATE INDEX idx_notifications_rental
+    ON notifications(rental_id);
+
+CREATE INDEX idx_notifications_user_created
+    ON notifications(user_id, created_at DESC);
 
 
 -- ============================================================

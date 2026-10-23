@@ -203,7 +203,9 @@ test('records harvests and returns totals grouped by unit', async () => {
   ]);
   assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO harvests')));
   assert.ok(statements.some(({ statement, values }) => (
-    statement.startsWith('INSERT INTO notifications') && values[1] === 'HARVEST_RECORDED'
+    statement.startsWith('INSERT INTO notifications')
+      && values[1] === 'HARVEST_RECORDED'
+      && values[4] === 12
   )));
 });
 
