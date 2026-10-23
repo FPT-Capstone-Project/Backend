@@ -36,7 +36,11 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
   const publish=async()=>{
   if(internal?.beforePublish)await internal.beforePublish();
   calls.push({master,channel,action:body.action});
-  if((body.action==='ON' && failOn) || (body.action==='OFF' && failOff))throw new Error('Mock MQTT publication failed');
+  if((body.action==='ON' && failOn) || (body.action==='OFF' && failOff)) {
+   const error=new Error('Mock MQTT publication failed');
+   if(typeof failOn==='number' && body.action==='ON')error.statusCode=failOn;
+   throw error;
+  }
   if(body.action==='OFF' && internal.beforePublish && startFeedback!=='none') {
    now+=1;
    await db.query("UPDATE iot_ssr_states SET reported_state='OFF',desired_state='OFF',reported_retained=$3,state_reported_at=$1 WHERE master_id=1 AND channel=$2",[new Date(now),channel,startFeedback==='retained']);
@@ -164,9 +168,15 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     now+=60001;await fresh();startFeedback=feedback;
     const before=calls.length;
     await service.evaluate(id);
-    assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
-    assert.equal((await repo.run(id)).status,'FAULT');
-    assert.match((await repo.runtime(id)).last_error,/Pulse cancelled.*fresh live SSR OFF/);
+    assert.ok(calls.slice(before).length>0);
+    assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
+    assert.equal((await repo.run(id)).status,'RUNNING');
+    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
+    now+=5001;await service.evaluate(id);
+    assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
+    await service.stop(id,null);
+    now+=1;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',reported_retained=false,state_reported_at=$1",[new Date(now)]);
+    await service.evaluate(id);
    }
    startFeedback='live';
   });
@@ -179,8 +189,44 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    const before=calls.length;
    await service.evaluate(id);
    assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
-   assert.equal((await repo.run(id)).status,'FAULT');
-   assert.match((await repo.runtime(id)).last_error,/Sensor or connection health/);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.match((await repo.runtime(id)).last_error,/stale/);
+   await service.stop(id,null);
+  });
+  await t.test('temporary sensor and connection failures wait and recover in the same AUTO run',async()=>{
+   await fresh();const started=await service.start(id,{dryRun:false},null);
+   now+=20001;const before=calls.length;
+   assert.equal((await service.evaluate(id)).action,'NONE');
+   assert.equal((await repo.runtime(id)).control_state,'SENSOR_FAULT');
+   assert.equal((await service.status(id)).mode,'AUTO');
+   now+=5001;await fresh();connected=false;
+   await service.evaluate(id);
+   assert.equal((await repo.runtime(id)).control_state,'DEVICE_OFFLINE');
+   assert.equal(calls.length,before);
+   connected=true;now+=5001;await fresh();await service.evaluate(id);
+   assert.equal((await repo.run(id)).id,started.run.id);
+   assert.equal((await repo.runtime(id)).control_state,'MISTING');
+   assert.equal((await repo.runtime(id)).last_error,null);
+   await service.stop(id,null);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
+  });
+  await t.test('ON timeout keeps AUTO but requires live OFF and cooldown before a new pulse',async()=>{
+   await fresh();const started=await service.start(id,{dryRun:false},null);
+   failOn=504;await service.evaluate(id);failOn=false;
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
+   const onCount=calls.filter(c=>c.action==='ON').length;
+   now+=5001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   now+=5001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
+   now+=60001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount+1);
+   assert.equal((await repo.run(id)).id,started.run.id);
+   await service.stop(id,null);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
   });
   await t.test('stale sensors and disconnected MQTT prevent real Start',async()=>{
    now+=30000;await assert.rejects(()=>service.start(id,{dryRun:false},null),/stale/);
@@ -216,13 +262,14 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
   });
-  await t.test('sensor fault during pulse stops run and requests OFF; no automatic resume',async()=>{
+  await t.test('sensor fault during pulse requests OFF and waits for recovery',async()=>{
    await fresh();await service.start(id,{dryRun:false},1);await service.evaluate(id);
    await db.exec('UPDATE iot_sensor_latest SET is_valid=false WHERE node_address=1 AND sensor_address=1');
    now+=1000;await service.evaluate(id);
-   assert.equal((await repo.run(id)).status,'FAULT');assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');assert.equal(calls.at(-1).action,'OFF');
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await service.evaluate(id)).action,'NONE');
+   await service.stop(id,null);
   });
   await t.test('unassigned trays require an explicitly named approved floor profile',async()=>{
    await db.exec("UPDATE iot_sensor_latest SET is_valid=true; INSERT INTO cultivation_trays(room_id,tray_code) VALUES(1,'T2')");await fresh();

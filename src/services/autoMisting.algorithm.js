@@ -71,7 +71,7 @@ function decide({ running, config:c, runtime:r={}, environment:e, online=true, c
  const active=['ON_REQUESTED','MISTING'].includes(r.control_state);
  if (r.control_state==='OFF_PENDING') return {action:'OFF',state:'OFF_PENDING',reason:'OFF confirmation pending'};
  if (active && now>=new Date(r.pulse_deadline_at).getTime()) return {action:'OFF',state:'OFF_PENDING',reason:'Pulse deadline reached'};
- if (!online || !e.healthy) return {action:active?'OFF':'FAULT',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT or master offline'};
+ if (!online || !e.healthy) return {action:active?'OFF':'NONE',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT or master offline'};
  const demand=e.averageHumidity>=c.humidity_stop_threshold?false:e.averageHumidity<c.humidity_start_threshold?true:!!r.demand;
  const coolingDemand=!!c.cooling_enabled && (e.averageTemperature>=c.temperature_start_threshold?true:
   e.averageTemperature<=c.temperature_stop_threshold?false:!!r.cooling_demand);
