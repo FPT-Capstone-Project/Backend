@@ -21,13 +21,16 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
  function hardware(f,c) {
   return process.env.AUTO_MISTING_REAL_ENABLED==='true' && watchdog(f)>=c.misting_pulse_ms;
  }
- async function requireLiveOff(f,c) {
+ async function hasLiveOff(f,c) {
   const ssr=await repo.ssr(f);
   const age=ssr?.state_reported_at?now()-new Date(ssr.state_reported_at):NaN;
-  if(ssr?.reported_state!=='OFF' || ssr.reported_retained!==false || !Number.isFinite(age) || age<0
-   || age>c.sensor_max_age_ms || ssr.desired_state==='ON')throw new AppError('Fresh live SSR OFF feedback required',409);
+  return ssr?.reported_state==='OFF' && ssr.reported_retained===false && Number.isFinite(age) && age>=0
+   && age<=c.sensor_max_age_ms && ssr.desired_state!=='ON';
  }
- async function prepareStartOff(f,c,user) {
+ async function requireLiveOff(f,c) {
+  if(!await hasLiveOff(f,c))throw new AppError('Fresh live SSR OFF feedback required',409);
+ }
+ async function prepareStartOff(f,c,user,starting=true) {
   const previous=await repo.ssr(f);
   let requestedAt=now();
   await command(f.master_identifier,f.misting_ssr_channel,{action:'OFF'},user,{
@@ -44,7 +47,8 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     && age>=0 && age<=c.sensor_max_age_ms)return;
    if(elapsed<5000)await wait(100);
   }
-  throw new AppError('Start cancelled: device did not confirm a fresh live SSR OFF within 5 seconds; AUTO was not started',504);
+  throw new AppError(starting?'Start cancelled: device did not confirm a fresh live SSR OFF within 5 seconds; AUTO was not started':
+   'Pulse cancelled: device did not confirm a fresh live SSR OFF within 5 seconds',504);
  }
  async function editable(id) {
   const run=await repo.run(id); const rt=await repo.runtime(id);
@@ -265,7 +269,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       const current=await repo.run(id);
       if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped before ON publication',409);
       const fresh=await env(id,c);
-      if(!fresh.healthy || (!run.dry_run && !online(f)))throw new AppError('Sensor or connection health changed before publication',409);
+      if(!fresh.healthy || (!run.dry_run && !online(await repo.floor(id))))throw new AppError('Sensor or connection health changed before publication',409);
       await verifyProfile(id,c);
       const latestDecision=decide({running:true,config:c,runtime:rt,environment:fresh,
        ...budget,duration:budget.duration+reservedOnMs-c.misting_pulse_ms,now:now()});
@@ -284,6 +288,17 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      };
      try {
       let result;
+      if(!run.dry_run) {
+       // Renew stale/retained feedback before entering the ON command service:
+       // nesting OFF inside its beforePublish hook would conflict with activeChannels.
+       await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+        const current=await repo.run(id);
+        if(!canActuate() || current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped or worker leadership lost before OFF refresh',409);
+        if(!await hasLiveOff(f,c))await prepareStartOff(f,c,null,false);
+       });
+       // reserve rechecks run, sensors, profile, connection, demand and OFF after
+       // the wait and after reacquiring the channel lock for ON.
+      }
       if(run.dry_run)await repo.lockChannel(f.master_id,f.misting_ssr_channel,reserve);
       else result=await command(f.master_identifier,f.misting_ssr_channel,{action:'ON'},null,{automatic:true,beforePublish:reserve,
        authorizePublish:()=>{if(!canActuate())throw new AppError('Worker leadership lost before publication',409);},

@@ -147,7 +147,40 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    now+=3000;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
    await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   now+=60001;await fresh();
+   const nextPulse=calls.length;
+   await service.evaluate(id);
+   assert.deepEqual(calls.slice(nextPulse).map(c=>c.action),['OFF','ON']);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.runtime(id)).control_state,'MISTING');
+   now+=5000;await fresh();await service.evaluate(id);
+   now+=1;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',reported_retained=false,state_reported_at=$1",[new Date(now)]);
+   await service.evaluate(id);
    await service.stop(id,null);assert.equal((await service.status(id)).mode,'MANUAL');
+  });
+  await t.test('OFF refresh rejects missing or retained feedback without publishing ON',async()=>{
+   for(const feedback of ['none','retained']) {
+    startFeedback='live';await fresh();await service.start(id,{dryRun:false},null);
+    now+=60001;await fresh();startFeedback=feedback;
+    const before=calls.length;
+    await service.evaluate(id);
+    assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
+    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.match((await repo.runtime(id)).last_error,/Pulse cancelled.*fresh live SSR OFF/);
+   }
+   startFeedback='live';
+  });
+  await t.test('retained OFF is refreshed and sensor health is rechecked before ON',async()=>{
+   await fresh();await service.start(id,{dryRun:false},null);
+   await fresh();
+   await db.exec('UPDATE iot_ssr_states SET reported_retained=true WHERE channel=1');
+   // Sensor data is still valid at evaluation, but expires during OFF refresh.
+   now+=config.sensor_max_age_ms;
+   const before=calls.length;
+   await service.evaluate(id);
+   assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
+   assert.equal((await repo.run(id)).status,'FAULT');
+   assert.match((await repo.runtime(id)).last_error,/Sensor or connection health/);
   });
   await t.test('stale sensors and disconnected MQTT prevent real Start',async()=>{
    now+=30000;await assert.rejects(()=>service.start(id,{dryRun:false},null),/stale/);
