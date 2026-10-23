@@ -115,12 +115,12 @@ async function writeStatusLog(client, {
   return result.rows[0] || null;
 }
 
-async function insertNotification(client, userId, type, title, message) {
+async function insertNotification(client, userId, type, title, message, rentalId = null) {
   const result = await client.query(
-    `INSERT INTO notifications (user_id, notification_type, title, message)
-     VALUES ($1, $2, $3, $4)
+    `INSERT INTO notifications (user_id, notification_type, title, message, rental_id)
+     VALUES ($1, $2, $3, $4, $5)
      RETURNING *`,
-    [userId, type, title, message],
+    [userId, type, title, message, rentalId],
   );
   return result.rows[0] || null;
 }
@@ -203,9 +203,9 @@ function notificationContent(type) {
   return content[type];
 }
 
-async function notifyRentalUser(client, userId, type) {
+async function notifyRentalUser(client, userId, type, rentalId) {
   const content = notificationContent(type);
-  return insertNotification(client, userId, type, content.title, content.message);
+  return insertNotification(client, userId, type, content.title, content.message, rentalId);
 }
 
 async function getHarvestSummary(client, sessionId) {
@@ -402,7 +402,7 @@ async function createHarvestForAdmin(rentalId, data, performedBy) {
           data.notes ?? null,
         ],
       );
-    await notifyRentalUser(client, rental.user_id, 'HARVEST_RECORDED');
+    await notifyRentalUser(client, rental.user_id, 'HARVEST_RECORDED', rentalId);
     const summary = await getHarvestSummary(client, session.session_id);
     await client.query('COMMIT');
     return { harvest: harvestResult.rows[0], ...summary };
@@ -491,7 +491,7 @@ async function completeForAdmin(rentalId, note, performedBy) {
       performedBy,
       note,
     });
-    await notifyRentalUser(client, rental.user_id, 'RENTAL_COMPLETED');
+    await notifyRentalUser(client, rental.user_id, 'RENTAL_COMPLETED', rentalId);
 
     await client.query('COMMIT');
     const completedSession = sessionResult.rows[0] || {
@@ -592,7 +592,7 @@ async function cancelForAdmin(rentalId, reason, performedBy) {
       performedBy,
       note: reason,
     });
-    await notifyRentalUser(client, rental.user_id, 'RENTAL_CANCELLED');
+    await notifyRentalUser(client, rental.user_id, 'RENTAL_CANCELLED', rentalId);
 
     await client.query('COMMIT');
     const order = orderResult.rows[0] || {
@@ -757,7 +757,7 @@ async function startCultivationForAdmin(rentalId, trayId, performedBy) {
       toStatus: 'ACTIVE',
       performedBy,
     });
-    await notifyRentalUser(client, rental.user_id, 'CULTIVATION_STARTED');
+    await notifyRentalUser(client, rental.user_id, 'CULTIVATION_STARTED', rentalId);
     await client.query(
       `INSERT INTO cultivation_progress (
          session_id, current_stage, progress_percent, start_date, expected_harvest_date, description
@@ -969,7 +969,7 @@ async function updateForAdmin(rentalId, changes, performedBy) {
         toStatus: 'PREPARING',
         performedBy,
       });
-      await notifyRentalUser(client, rental.user_id, 'RENTAL_APPROVED');
+      await notifyRentalUser(client, rental.user_id, 'RENTAL_APPROVED', rentalId);
     }
     await client.query('COMMIT');
     return await findByIdForAdmin(rentalId);

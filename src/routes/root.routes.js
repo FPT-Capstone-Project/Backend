@@ -9,6 +9,7 @@ const cultivationTrayRoutes = require('./cultivationTray.routes');
 const orderRoutes = require('./order.routes');
 const paymentRoutes = require('./payment.routes');
 const rentalRoutes = require('./rental.routes');
+const notificationRoutes = require('./notification.routes');
 
 const rootRouter = express.Router();
 
@@ -22,6 +23,7 @@ rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
 rootRouter.use('/orders', orderRoutes);
 rootRouter.use('/rentals', rentalRoutes);
 rootRouter.use('/payments', paymentRoutes);
+rootRouter.use('/notifications', notificationRoutes);
 rootRouter.use('/iot', require('./iot.routes'));
 
 module.exports = rootRouter;

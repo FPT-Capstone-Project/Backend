@@ -139,6 +139,7 @@ test('approves a confirmed rental and writes the approval audit records', async 
   assert.ok(statements.some(({ statement, values }) => (
     statement.startsWith('INSERT INTO notifications')
       && values[1] === 'RENTAL_APPROVED'
+      && values[4] === 12
   )));
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
 });

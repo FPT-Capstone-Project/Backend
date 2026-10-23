@@ -27,6 +27,7 @@ const options = {
       { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
       { name: 'Rentals', description: 'Rental records created after successful payment and managed by Admin/Farm Operator' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
+      { name: 'Notifications', description: 'Notifications for rental customers' },
     ],
     components: {
       securitySchemes: {
@@ -75,6 +76,40 @@ const options = {
             status: { type: 'string', example: 'ACTIVE' },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        Notification: {
+          type: 'object',
+          properties: {
+            notification_id: { type: 'integer', example: 10 },
+            notification_type: { type: 'string', example: 'RENTAL_MESSAGE' },
+            title: { type: 'string', example: 'Rental update' },
+            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            is_read: { type: 'boolean', example: false },
+            created_at: { type: 'string', format: 'date-time' },
+            read_at: { type: 'string', format: 'date-time', nullable: true },
+            rental_id: { type: 'integer', nullable: true, example: 12 },
+          },
+        },
+        SentRentalNotification: {
+          type: 'object',
+          properties: {
+            notification_id: { type: 'integer', example: 10 },
+            user_id: { type: 'integer', example: 3 },
+            rental_id: { type: 'integer', example: 12 },
+            notification_type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'] },
+            title: { type: 'string', example: 'Rental update' },
+            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            created_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateRentalNotificationRequest: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string', minLength: 1, maxLength: 1000, example: 'Your rental is ready for the next step.' },
+            title: { type: 'string', minLength: 1, maxLength: 100, default: 'Thông báo từ SmartMush Farm' },
+            type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'], default: 'OPERATOR_MESSAGE' },
           },
         },
         UserWithRole: {
