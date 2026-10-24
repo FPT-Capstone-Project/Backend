@@ -1,26 +1,51 @@
 const repository=require('../models/autoMisting.model');
 const service=require('./autoMisting.service');
+const {randomUUID}=require('node:crypto');
 
 // A dedicated session elects one worker. Losing that session closes the local
 // actuation gate; a replacement always stops old runs before doing evaluations.
 function createWorker(repo=repository,control=service,logger=console) {
  let timer,leader,busy=false,stopping=false,healthy=false;
+ const workerId=randomUUID();
+ let recoveryReason='Worker initial leadership acquisition (startup or takeover)';
+ let sessionFailure;
+ const diagnostics=stage=>({workerId,pid:process.pid,uptimeSeconds:Math.floor(process.uptime()),stage,at:new Date().toISOString()});
+ function failureReason(stage,error) {
+  // Persist a bounded error code, not arbitrary database error text in the API.
+  const code=/^[A-Z0-9_]{1,40}$/.test(error?.code || '')?` (${error.code})`:'';
+  return `Worker leadership reacquired after ${stage}${code}`;
+ }
  async function tick() {
   if(busy || stopping)return;
   busy=true;
+  let stage='leader acquisition';
   try {
    if(!leader) {
     leader=await repo.acquireLeader();
     if(!leader)return;
     healthy=true;
+    sessionFailure=null;
+    const session=leader;
     leader.on?.('error',error=>{
+     if(leader!==session || stopping)return;
      healthy=false;
-     logger.error('Auto misting leader connection failed',error);
+     sessionFailure=failureReason('database session error',error);
+     logger.error('Auto misting leader connection failed',error,diagnostics('database session error'));
     });
-    await control.recover();
+    leader.on?.('end',()=>{
+     if(leader!==session || stopping || sessionFailure)return;
+     healthy=false;
+     sessionFailure=failureReason('database session closed');
+     logger.error('Auto misting leader connection closed',diagnostics('database session closed'));
+    });
+    stage='recovery';
+    logger.info?.('Auto misting leadership acquired; stopping prior runs',{...diagnostics(stage),reason:recoveryReason});
+    await control.recover(recoveryReason);
    }
+   stage='leader health check';
    await leader.query('SELECT 1');
    if(!healthy)throw new Error('Worker leadership lost');
+   stage='heartbeat update';
    await leader.query(`INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())
     ON CONFLICT(id) DO UPDATE SET heartbeat_at=now()`);
    let floors;
@@ -28,7 +53,7 @@ function createWorker(repo=repository,control=service,logger=console) {
    catch(error) {
     // This query uses the pool, not the session holding the leader lock.
     // Retry next tick without triggering takeover recovery for unrelated errors.
-    logger.error('Auto misting candidate query failed; retrying next tick',error);
+    logger.error('Auto misting candidate query failed; retrying next tick',error,diagnostics('candidate query'));
     return;
    }
    // Bounded parallelism keeps one delayed device from blocking every floor.
@@ -40,8 +65,11 @@ function createWorker(repo=repository,control=service,logger=console) {
    }
   } catch(error) {
    healthy=false;
-   if(leader){leader.release(true);leader=null;}
-   logger.error('Auto misting worker unavailable; no runs resumed',error);
+   if(leader){
+    recoveryReason=sessionFailure || failureReason(stage,error);
+    const session=leader;leader=null;session.release(true);
+   }
+   logger.error('Auto misting worker unavailable; no runs resumed',error,diagnostics(stage));
   } finally {busy=false;}
  }
  return {
