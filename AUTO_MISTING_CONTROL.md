@@ -219,6 +219,13 @@ at most two floors concurrently, ordered by pulse deadline, and never overlaps
 its own sweeps. Database sessions must be stable: use a direct connection or
 session-mode pooler, **not transaction-mode pooling**, for advisory locks.
 
+A failed candidate-list query on the shared pool skips that sweep and retries on
+the next tick without discarding the dedicated leader session. Failures on the
+leader session still trigger recovery. Worker errors include the original error
+in backend logs; inspect those logs before a `Worker restart or leadership transfer`
+stop to distinguish database failures from process restarts. Use `npm start` for
+unattended AUTO operation: `npm run dev` uses nodemon and can restart on file edits.
+
 Shutdown stops runs while MQTT is still available, then closes MQTT/database
 connections. A crash leaves durable state for the next leader. If OFF cannot be
 confirmed, mapping/configuration changes and new Start remain blocked. Pending
