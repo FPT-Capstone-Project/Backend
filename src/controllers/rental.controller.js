@@ -1,4 +1,5 @@
 const rentalService = require('../services/rental.service');
+const notificationService = require('../services/notification.service');
 
 async function adminList(req, res) {
   const result = await rentalService.getAllRentalsForAdmin(req.query || {});
@@ -77,6 +78,15 @@ async function adminCancel(req, res) {
   res.json({ message: 'Rental cancelled successfully', data: result });
 }
 
+async function adminCreateNotification(req, res) {
+  const notification = await notificationService.sendRentalNotification(
+    req.params.rentalId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.status(201).json({ message: 'Notification sent', data: notification });
+}
+
 module.exports = {
   adminList,
   adminGetById,
@@ -87,4 +97,5 @@ module.exports = {
   adminCreateHarvest,
   adminComplete,
   adminCancel,
+  adminCreateNotification,
 };

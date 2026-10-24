@@ -2,6 +2,7 @@ const repository = require('../models/autoMisting.model');
 const mqtt = require('./iotMqtt.service');
 const AppError = require('../utils/app-error');
 const {randomUUID}=require('node:crypto');
+const {performance}=require('node:perf_hooks');
 const {validateConfig,aggregate,decide}=require('./autoMisting.algorithm');
 const {suggest,assertCompatible}=require('./autoMisting.profile');
 
@@ -9,8 +10,13 @@ function positive(value,name='floorId') {
  if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value)<1 || Number(value)>2147483647) throw new AppError(`Invalid ${name}`,400);
  return Number(value);
 }
-function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now()) {
+function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now(), wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
  const online=f=>publisher.isReady() && f.reported_status!=='offline';
+ function retryable(reason,state,environment) {
+  const error=new AppError(reason,409);
+  error.retryState=state;error.environment=environment;
+  return error;
+ }
  function watchdog(f) {
   let verified={};
   try { verified=JSON.parse(process.env.AUTO_MISTING_VERIFIED_WATCHDOGS || '{}'); } catch { /* Fail closed. */ }
@@ -20,11 +26,34 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
  function hardware(f,c) {
   return process.env.AUTO_MISTING_REAL_ENABLED==='true' && watchdog(f)>=c.misting_pulse_ms;
  }
- async function requireLiveOff(f,c) {
+ async function hasLiveOff(f,c) {
   const ssr=await repo.ssr(f);
   const age=ssr?.state_reported_at?now()-new Date(ssr.state_reported_at):NaN;
-  if(ssr?.reported_state!=='OFF' || ssr.reported_retained!==false || !Number.isFinite(age) || age<0
-   || age>c.sensor_max_age_ms || ssr.desired_state==='ON')throw new AppError('Fresh live SSR OFF feedback required',409);
+  return ssr?.reported_state==='OFF' && ssr.reported_retained===false && Number.isFinite(age) && age>=0
+   && age<=c.sensor_max_age_ms && ssr.desired_state!=='ON';
+ }
+ async function requireLiveOff(f,c) {
+  if(!await hasLiveOff(f,c))throw retryable('Waiting for fresh live SSR OFF feedback','OFF_PENDING');
+ }
+ async function prepareStartOff(f,c,user,starting=true) {
+  const previous=await repo.ssr(f);
+  let requestedAt=now();
+  await command(f.master_identifier,f.misting_ssr_channel,{action:'OFF'},user,{
+   automatic:true,lockHeld:true,beforePublish:()=>{requestedAt=now();}
+  });
+  // Publication acknowledgement is not device feedback. Keep the channel locked
+  // until a new live OFF arrives, so another publisher cannot turn it on here.
+  for(let elapsed=0;elapsed<=5000;elapsed+=100) {
+   const ssr=await repo.ssr(f);
+   const reportedAt=ssr?.state_reported_at?new Date(ssr.state_reported_at).getTime():NaN;
+   const age=now()-reportedAt;
+   if(ssr?.reported_state==='OFF' && ssr.reported_retained===false && ssr.desired_state!=='ON'
+    && reportedAt>=requestedAt && (!previous?.state_reported_at || reportedAt>new Date(previous.state_reported_at).getTime())
+    && age>=0 && age<=c.sensor_max_age_ms)return;
+   if(elapsed<5000)await wait(100);
+  }
+  throw new AppError(starting?'Start cancelled: device did not confirm a fresh live SSR OFF within 5 seconds; AUTO was not started':
+   'Pulse cancelled: device did not confirm a fresh live SSR OFF within 5 seconds',504);
  }
  async function editable(id) {
   const run=await repo.run(id); const rt=await repo.runtime(id);
@@ -149,7 +178,13 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Real automation disabled: verified device watchdog required',409);
       if(!online(f))throw new AppError('MQTT or master offline',503);
-      await requireLiveOff(f,c);
+      await prepareStartOff(f,c,user);
+      // Device feedback may take several seconds; recheck prerequisites before
+      // creating a running session.
+      if(!await repo.workerReady())throw new AppError('Automation worker is not ready',503);
+      if(!online(await repo.floor(id)))throw new AppError('MQTT or master offline',503);
+      const fresh=await env(id,c);if(!fresh.healthy)throw new AppError(fresh.reason,409);
+      await verifyProfile(id,c);
      }
      return repo.transaction(async()=>{
      const run=await repo.createRun(id,c,user,dry);
@@ -223,10 +258,13 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     }
     if(!active && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)return decision;
     if(!run.dry_run && !hardware(f,c)) {await stopRecord(id,null,'Device safety verification missing','FAULT');if(active)await requestOff(f,run,'Safety gate closed');return;}
-    if(decision.action==='FAULT' || (decision.action==='OFF' && ['SENSOR_FAULT','DEVICE_OFFLINE'].includes(decision.state))) {
-     await stopRecord(id,null,decision.reason,'FAULT');
-     if(!active)await repo.runtimeSet(id,{control_state:decision.state,last_error:decision.reason});
-     await log(id,run,'FAULT',decision.reason,e);
+    if(['SENSOR_FAULT','DEVICE_OFFLINE'].includes(decision.state)) {
+     // A temporary health failure pauses actuation, not the operator's AUTO run.
+     if(rt.control_state!==decision.state || rt.last_error!==decision.reason)await log(id,run,'RETRY_WAIT',decision.reason,e);
+     await repo.runtimeSet(id,{control_state:active?'OFF_PENDING':decision.state,last_error:decision.reason,
+      last_reason:decision.reason,last_evaluated_at:new Date(now())});
+     if(active)await requestOff(f,run,decision.reason);
+     return {...decision,state:active?'OFF_PENDING':decision.state};
     }
     if(decision.action==='OFF') {
      if(decision.demand!==undefined)await repo.runtimeSet(id,{demand:decision.demand,cooling_demand:decision.coolingDemand??false,last_reason:decision.reason});
@@ -239,31 +277,69 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       const current=await repo.run(id);
       if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped before ON publication',409);
       const fresh=await env(id,c);
-      if(!fresh.healthy || (!run.dry_run && !online(f)))throw new AppError('Sensor or connection health changed before publication',409);
+      if(!fresh.healthy)throw retryable(fresh.reason,'SENSOR_FAULT',fresh);
+      if(!run.dry_run && !online(await repo.floor(id)))throw retryable('MQTT or master offline before publication','DEVICE_OFFLINE',fresh);
       await verifyProfile(id,c);
       const latestDecision=decide({running:true,config:c,runtime:rt,environment:fresh,
        ...budget,duration:budget.duration+reservedOnMs-c.misting_pulse_ms,now:now()});
-      if(latestDecision.action!=='ON')throw new AppError('Climate demand cleared before publication',409);
+      if(latestDecision.action!=='ON') {
+       const error=retryable(latestDecision.reason,latestDecision.state,fresh);
+       error.decision=latestDecision;throw error;
+      }
       Object.assign(decision,latestDecision);
       if(!run.dry_run)await requireLiveOff(f,c);
+      let publicationDeadline;
       await repo.transaction(async()=>{
+      publicationDeadline=performance.now()+c.misting_pulse_ms;
       await repo.runtimeSet(id,{control_state:'ON_REQUESTED',cycle_id:randomUUID(),demand:decision.demand,
        cooling_demand:decision.coolingDemand??false,last_reason:decision.reason,
        pulse_started_at:new Date(now()),pulse_deadline_at:new Date(now()+c.misting_pulse_ms),off_requested_at:null});
       await log(id,run,'PULSE_RESERVED',decision.reason,{...fresh,reservedOnMs});
       });
+      return {publicationDeadline};
      };
      try {
       let result;
+      if(!run.dry_run) {
+       // Renew stale/retained feedback before entering the ON command service:
+       // nesting OFF inside its beforePublish hook would conflict with activeChannels.
+       await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+        const current=await repo.run(id);
+        if(!canActuate() || current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped or worker leadership lost before OFF refresh',409);
+        if(!await hasLiveOff(f,c)) {
+         try {await prepareStartOff(f,c,null,false);}
+         catch(error) {
+          if([503,504].includes(error.statusCode))error.retryState='OFF_PENDING';
+          throw error;
+         }
+        }
+       });
+       // reserve rechecks run, sensors, profile, connection, demand and OFF after
+       // the wait and after reacquiring the channel lock for ON.
+      }
       if(run.dry_run)await repo.lockChannel(f.master_id,f.misting_ssr_channel,reserve);
       else result=await command(f.master_identifier,f.misting_ssr_channel,{action:'ON'},null,{automatic:true,beforePublish:reserve,
        authorizePublish:()=>{if(!canActuate())throw new AppError('Worker leadership lost before publication',409);},
-       maxPublishMs:Math.min(1000,c.misting_pulse_ms)});
+       maxPublishMs:Math.min(5000,c.misting_pulse_ms)});
       await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
-       if((await repo.run(id))?.status==='RUNNING')await repo.runtimeSet(id,{control_state:'MISTING'});
+       if((await repo.run(id))?.status==='RUNNING')await repo.runtimeSet(id,{control_state:'MISTING',last_error:null});
       });
       await log(id,run,'ON_REQUESTED',run.dry_run?'Simulated pulse; no MQTT publication':'ON published; physical valve unverified',{commandId:result?.commandId});
      } catch(error) {
+      const current=await repo.run(id),latest=await repo.runtime(id);
+      if(current?.id===run.id && current.status==='RUNNING' && canActuate()
+       && (error.retryState || [503,504].includes(error.statusCode))) {
+       // Publication may have reached the device. Never retry ON until a new
+       // live OFF has been confirmed, followed by the normal cooldown/budget.
+       const needsOff=['ON_REQUESTED','MISTING','OFF_PENDING'].includes(latest.control_state) || error.retryState==='OFF_PENDING';
+       const state=needsOff?'OFF_PENDING':error.retryState || 'DEVICE_OFFLINE';
+       await repo.runtimeSet(id,{control_state:state,last_error:error.decision?null:error.message,last_reason:error.message,
+        demand:error.decision?.demand??latest.demand,cooling_demand:error.decision?.coolingDemand??latest.cooling_demand,
+        last_evaluated_at:new Date(now())});
+       await log(id,run,error.decision?'DECISION':'RETRY_WAIT',error.message,error.environment || e);
+       if(needsOff)await requestOff(f,run,error.message);
+       return {action:needsOff?'OFF':'NONE',state,reason:error.message};
+      }
       const needsOff=await stopRecord(id,null,error.message,'FAULT');
       await log(id,run,'FAULT',error.message);
       if(needsOff)await requestOff(f,run,'ON attempt failed or prerequisites changed');
@@ -273,7 +349,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
       if((await repo.run(id))?.status!=='RUNNING')return;
       await repo.runtimeSet(id,{control_state:decision.state,demand:decision.demand??rt.demand,
-       cooling_demand:decision.coolingDemand??rt.cooling_demand,last_reason:decision.reason});
+       cooling_demand:decision.coolingDemand??rt.cooling_demand,last_reason:decision.reason,last_error:null});
       await log(id,run,'DECISION',decision.reason,e);
      });
     }

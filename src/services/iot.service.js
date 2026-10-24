@@ -93,9 +93,11 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
       if (activeChannels.has(key)) throw new AppError('A command is already being published for this channel', 409);
       activeChannels.add(key);
       try {
-        // Include persistence time without comparing database and host wall clocks.
-        const publicationDeadline = now() + (internal.maxPublishMs || 5000);
-        if (internal.beforePublish) await internal.beforePublish();
+        // Prerequisite checks precede the publication budget. Command persistence
+        // still consumes it, and automation may cap it at the reserved pulse end.
+        const prepared = internal.beforePublish ? await internal.beforePublish() : undefined;
+        const publicationDeadline = Math.min(now() + (internal.maxPublishMs || 5000),
+          prepared?.publicationDeadline ?? Infinity);
         const record = await repository.createCommand(m, number, value, userId);
         const context = { commandId: record.commandId, masterId: id, channel: number, action: value };
         trace(logger, 'ssr.command.publish.start', context);

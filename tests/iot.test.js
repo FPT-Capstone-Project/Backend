@@ -273,6 +273,44 @@ test('persistence consuming the five-second budget times out without publishing 
     assert.equal(h.client.publications.length, 0);
   } finally { await h.service.stop(); }
 });
+test('automatic publication excludes prerequisite checks but respects persistence and pulse deadlines', async () => {
+  for (const scenario of [
+    { persistence: 200, pulseRemaining: 3000, succeeds: true },
+    { persistence: 1001, pulseRemaining: 3000, succeeds: false },
+    { persistence: 200, pulseRemaining: 100, succeeds: false },
+    { persistence: 0, pulseRemaining: -1, succeeds: false },
+  ]) {
+    let elapsed = 100, status;
+    const h = harness({ now: () => elapsed });
+    const repository = {
+      findMaster: async () => ({ id: 1 }),
+      createCommand: async () => {
+        elapsed += scenario.persistence;
+        return { commandId: 'test' };
+      },
+      finishCommand: async (id, value) => { status = value; },
+      findCommand: async () => ({ status }),
+    };
+    try {
+      const service = createIotService(repository, h.service, { now: () => elapsed });
+      const operation = service.control('master01', 1, { action: 'ON' }, null, {
+        automatic: true, maxPublishMs: 1000,
+        beforePublish: async () => {
+          elapsed += 2000;
+          return { publicationDeadline: elapsed + scenario.pulseRemaining };
+        },
+      });
+      if (scenario.succeeds) {
+        assert.equal((await operation).status, 'PUBLISHED');
+        assert.equal(h.client.publications.length, 1);
+      } else {
+        await assert.rejects(operation, { statusCode: 504 });
+        assert.equal(status, 'TIMED_OUT');
+        assert.equal(h.client.publications.length, 0);
+      }
+    } finally { await h.service.stop(); }
+  }
+});
 test('history input is bounded and timestamps require timezones', async () => {
   const h = serviceHarness();
   for (const query of [{ limit: 1001 }, { offset: -1 }, { from: '2026-10-16' }, { from: '2026-10-16T10:00:00Z', to: '2026-10-15T10:00:00Z' }]) {

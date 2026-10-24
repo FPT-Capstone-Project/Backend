@@ -106,6 +106,60 @@ router.post('/admin/from-order', adminOrFarmOperator, rentalController.adminCrea
 
 /**
  * @openapi
+ * /api/rentals/admin/{rentalId}/notifications:
+ *   post:
+ *     tags: [Notifications]
+ *     summary: Send a notification to a rental customer
+ *     description: Resolves the rental customer automatically and creates an unread notification. Role IDs 1 and 2 are allowed.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: rentalId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *         example: 12
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/CreateRentalNotificationRequest'
+ *           example:
+ *             message: Your rental is ready for the next step.
+ *             title: Rental update
+ *             type: OPERATOR_MESSAGE
+ *     responses:
+ *       201:
+ *         description: Notification sent
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   $ref: '#/components/schemas/SentRentalNotification'
+ *       400:
+ *         description: Invalid rental ID or message
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       403:
+ *         description: Only Admin and Farm Operator roles are allowed
+ *       409:
+ *         description: Rental cannot receive notifications or recipient account is inactive
+ *       404:
+ *         description: Rental not found
+ */
+router.post(
+  '/admin/:rentalId/notifications',
+  adminOrFarmOperator,
+  rentalController.adminCreateNotification,
+);
+
+/**
+ * @openapi
  * /api/rentals/admin/{rentalId}/cultivation-session:
  *   post:
  *     tags: [Rentals]

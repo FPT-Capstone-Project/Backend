@@ -12,7 +12,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
  const previousEnabled=process.env.AUTO_MISTING_REAL_ENABLED,previousWatchdogs=process.env.AUTO_MISTING_VERIFIED_WATCHDOGS;
  process.env.AUTO_MISTING_REAL_ENABLED='false';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{}';
  const db=new PGlite();
- let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn;
+ let now=Date.now(),connected=true,failOn=false,failOff=false,beforeOn,startFeedback='live';
  const calls=[];
  const repo=createRepository(db);
  const dbPath=require.resolve('../src/config/db'),originalDb=require.cache[dbPath];
@@ -36,12 +36,20 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
   const publish=async()=>{
   if(internal?.beforePublish)await internal.beforePublish();
   calls.push({master,channel,action:body.action});
-  if((body.action==='ON' && failOn) || (body.action==='OFF' && failOff))throw new Error('Mock MQTT publication failed');
+  if((body.action==='ON' && failOn) || (body.action==='OFF' && failOff)) {
+   const error=new Error('Mock MQTT publication failed');
+   if(typeof failOn==='number' && body.action==='ON')error.statusCode=failOn;
+   throw error;
+  }
+  if(body.action==='OFF' && internal.beforePublish && startFeedback!=='none') {
+   now+=1;
+   await db.query("UPDATE iot_ssr_states SET reported_state='OFF',desired_state='OFF',reported_retained=$3,state_reported_at=$1 WHERE master_id=1 AND channel=$2",[new Date(now),channel,startFeedback==='retained']);
+  }
   return {};
   };
   return internal.lockHeld?publish():repo.lockChannel(1,channel,publish);
  };
- const service=createService(repo,{isReady:()=>connected},command,()=>now);
+ const service=createService(repo,{isReady:()=>connected},command,()=>now,async ms=>{now+=ms;});
  const fresh=async()=>{await db.query('UPDATE iot_sensor_latest SET last_received_at=$1',[new Date(now)]);await db.exec('UPDATE iot_auto_control_worker SET heartbeat_at=now()');};
  try{
   await db.exec(fs.readFileSync('database.sql','utf8'));
@@ -112,10 +120,28 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
    assert.equal((await service.evaluate(id)).action,'NONE');assert.equal(calls.length,0);
   });
+  await t.test('real Start sends OFF and refuses old, retained or missing feedback without creating a run',async()=>{
+   process.env.AUTO_MISTING_REAL_ENABLED='true';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{"master01":10000}';
+   await db.query("INSERT INTO iot_ssr_states(master_id,channel,reported_state,reported_retained,state_reported_at) VALUES(1,1,'OFF',false,$1)",[new Date(now)]);
+   const previous=(await repo.run(id)).id;
+   for(const feedback of ['none','retained']) {
+    await fresh();startFeedback=feedback;
+    await assert.rejects(()=>service.start(id,{dryRun:false},null),error=>error.statusCode===504 && /AUTO was not started/.test(error.message));
+    assert.equal(calls.at(-1).action,'OFF');
+    assert.equal((await repo.run(id)).id,previous);
+    assert.equal((await service.status(id)).mode,'MANUAL');
+   }
+   startFeedback='live';failOff=true;await fresh();
+   await assert.rejects(()=>service.start(id,{dryRun:false},null),/publication failed/);
+   assert.equal((await repo.run(id)).id,previous);failOff=false;
+  });
   await t.test('real mocked pulse uses existing command service and OFF never waits for delayed ON feedback',async()=>{
    process.env.AUTO_MISTING_REAL_ENABLED='true';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{"master01":10000}';
-   await fresh();await db.query("INSERT INTO iot_ssr_states(master_id,channel,reported_state,reported_retained,state_reported_at) VALUES(1,1,'OFF',false,$1)",[new Date(now)]);
-   await service.start(id,{dryRun:false},null);await service.evaluate(id);
+   await fresh();await db.query("UPDATE iot_ssr_states SET reported_state='ON',desired_state='ON',state_reported_at=$1 WHERE master_id=1 AND channel=1",[new Date(now-30000)]);
+   await service.start(id,{dryRun:false},null);
+   assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   await service.evaluate(id);
    assert.equal(calls.at(-1).action,'ON');
    now+=5000;await fresh();await service.evaluate(id);assert.equal(calls.at(-1).action,'OFF');
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
@@ -125,7 +151,82 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    now+=3000;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
    await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   now+=60001;await fresh();
+   const nextPulse=calls.length;
+   await service.evaluate(id);
+   assert.deepEqual(calls.slice(nextPulse).map(c=>c.action),['OFF','ON']);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.runtime(id)).control_state,'MISTING');
+   now+=5000;await fresh();await service.evaluate(id);
+   now+=1;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',reported_retained=false,state_reported_at=$1",[new Date(now)]);
+   await service.evaluate(id);
    await service.stop(id,null);assert.equal((await service.status(id)).mode,'MANUAL');
+  });
+  await t.test('OFF refresh rejects missing or retained feedback without publishing ON',async()=>{
+   for(const feedback of ['none','retained']) {
+    startFeedback='live';await fresh();await service.start(id,{dryRun:false},null);
+    now+=60001;await fresh();startFeedback=feedback;
+    const before=calls.length;
+    await service.evaluate(id);
+    assert.ok(calls.slice(before).length>0);
+    assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
+    assert.equal((await repo.run(id)).status,'RUNNING');
+    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
+    now+=5001;await service.evaluate(id);
+    assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
+    await service.stop(id,null);
+    now+=1;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',reported_retained=false,state_reported_at=$1",[new Date(now)]);
+    await service.evaluate(id);
+   }
+   startFeedback='live';
+  });
+  await t.test('retained OFF is refreshed and sensor health is rechecked before ON',async()=>{
+   await fresh();await service.start(id,{dryRun:false},null);
+   await fresh();
+   await db.exec('UPDATE iot_ssr_states SET reported_retained=true WHERE channel=1');
+   // Sensor data is still valid at evaluation, but expires during OFF refresh.
+   now+=config.sensor_max_age_ms;
+   const before=calls.length;
+   await service.evaluate(id);
+   assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.match((await repo.runtime(id)).last_error,/stale/);
+   await service.stop(id,null);
+  });
+  await t.test('temporary sensor and connection failures wait and recover in the same AUTO run',async()=>{
+   await fresh();const started=await service.start(id,{dryRun:false},null);
+   now+=20001;const before=calls.length;
+   assert.equal((await service.evaluate(id)).action,'NONE');
+   assert.equal((await repo.runtime(id)).control_state,'SENSOR_FAULT');
+   assert.equal((await service.status(id)).mode,'AUTO');
+   now+=5001;await fresh();connected=false;
+   await service.evaluate(id);
+   assert.equal((await repo.runtime(id)).control_state,'DEVICE_OFFLINE');
+   assert.equal(calls.length,before);
+   connected=true;now+=5001;await fresh();await service.evaluate(id);
+   assert.equal((await repo.run(id)).id,started.run.id);
+   assert.equal((await repo.runtime(id)).control_state,'MISTING');
+   assert.equal((await repo.runtime(id)).last_error,null);
+   await service.stop(id,null);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
+  });
+  await t.test('ON timeout keeps AUTO but requires live OFF and cooldown before a new pulse',async()=>{
+   await fresh();const started=await service.start(id,{dryRun:false},null);
+   failOn=504;await service.evaluate(id);failOn=false;
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
+   const onCount=calls.filter(c=>c.action==='ON').length;
+   now+=5001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   now+=5001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
+   now+=60001;await fresh();await service.evaluate(id);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount+1);
+   assert.equal((await repo.run(id)).id,started.run.id);
+   await service.stop(id,null);
+   now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
   });
   await t.test('stale sensors and disconnected MQTT prevent real Start',async()=>{
    now+=30000;await assert.rejects(()=>service.start(id,{dryRun:false},null),/stale/);
@@ -161,13 +262,14 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
   });
-  await t.test('sensor fault during pulse stops run and requests OFF; no automatic resume',async()=>{
+  await t.test('sensor fault during pulse requests OFF and waits for recovery',async()=>{
    await fresh();await service.start(id,{dryRun:false},1);await service.evaluate(id);
    await db.exec('UPDATE iot_sensor_latest SET is_valid=false WHERE node_address=1 AND sensor_address=1');
    now+=1000;await service.evaluate(id);
-   assert.equal((await repo.run(id)).status,'FAULT');assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');assert.equal(calls.at(-1).action,'OFF');
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await service.evaluate(id)).action,'NONE');
+   await service.stop(id,null);
   });
   await t.test('unassigned trays require an explicitly named approved floor profile',async()=>{
    await db.exec("UPDATE iot_sensor_latest SET is_valid=true; INSERT INTO cultivation_trays(room_id,tray_code) VALUES(1,'T2')");await fresh();

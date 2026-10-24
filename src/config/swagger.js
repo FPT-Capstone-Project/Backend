@@ -27,6 +27,7 @@ const options = {
       { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
       { name: 'Rentals', description: 'Rental records created after successful payment and managed by Admin/Farm Operator' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
+      { name: 'Notifications', description: 'Notifications for rental customers' },
     ],
     components: {
       securitySchemes: {
@@ -75,6 +76,87 @@ const options = {
             status: { type: 'string', example: 'ACTIVE' },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        Notification: {
+          type: 'object',
+          properties: {
+            notification_id: { type: 'integer', example: 10 },
+            notification_type: { type: 'string', example: 'RENTAL_MESSAGE' },
+            title: { type: 'string', example: 'Rental update' },
+            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            is_read: { type: 'boolean', example: false },
+            created_at: { type: 'string', format: 'date-time' },
+            read_at: { type: 'string', format: 'date-time', nullable: true },
+            rental_id: { type: 'integer', nullable: true, example: 12 },
+          },
+        },
+        SentRentalNotification: {
+          type: 'object',
+          properties: {
+            notification_id: { type: 'integer', example: 10 },
+            user_id: { type: 'integer', example: 3 },
+            rental_id: { type: 'integer', example: 12 },
+            notification_type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'] },
+            title: { type: 'string', example: 'Rental update' },
+            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            created_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        CreateRentalNotificationRequest: {
+          type: 'object',
+          required: ['message'],
+          properties: {
+            message: { type: 'string', minLength: 1, maxLength: 1000, example: 'Your rental is ready for the next step.' },
+            title: { type: 'string', minLength: 1, maxLength: 100, default: 'Thông báo từ SmartMush Farm' },
+            type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'], default: 'OPERATOR_MESSAGE' },
+          },
+        },
+        UserWithRole: {
+          type: 'object',
+          properties: {
+            user_id: { type: 'integer', example: 1 },
+            role_id: { type: 'integer', example: 3 },
+            role_name: { type: 'string', example: 'Customer' },
+            role_description: { type: 'string', nullable: true },
+            email: { type: 'string', format: 'email', example: 'user@example.com' },
+            full_name: { type: 'string', example: 'Nguyen Van A' },
+            phone: { type: 'string', nullable: true, example: '0900000000' },
+            address: { type: 'string', nullable: true, example: 'Ho Chi Minh City' },
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], example: 'ACTIVE' },
+            created_at: { type: 'string', format: 'date-time' },
+            updated_at: { type: 'string', format: 'date-time' },
+          },
+        },
+        UserAccountDetail: {
+          allOf: [
+            { $ref: '#/components/schemas/UserWithRole' },
+            {
+              type: 'object',
+              properties: {
+                order_count: { type: 'integer', minimum: 0, example: 12 },
+                rental_count: { type: 'integer', minimum: 0, example: 4 },
+              },
+            },
+          ],
+        },
+        CreateManagedUserRequest: {
+          type: 'object',
+          required: ['email', 'password', 'fullName', 'roleId'],
+          properties: {
+            email: { type: 'string', format: 'email', example: 'staff@example.com' },
+            password: { type: 'string', minLength: 8, example: 'password123' },
+            fullName: { type: 'string', example: 'Nguyen Van A' },
+            roleId: { type: 'integer', minimum: 1, example: 2 },
+            phone: { type: 'string', example: '0900000000' },
+            address: { type: 'string', example: 'Ho Chi Minh City' },
+          },
+        },
+        UpdateUserStatusRequest: {
+          type: 'object',
+          required: ['status'],
+          properties: {
+            status: { type: 'string', enum: ['ACTIVE', 'INACTIVE', 'BLOCKED'], example: 'BLOCKED' },
           },
         },
         MushroomType: {
@@ -298,8 +380,6 @@ const options = {
             humidity_max: { type: 'number', nullable: true, example: 90 },
             co2_min: { type: 'number', nullable: true, example: 350 },
             co2_max: { type: 'number', nullable: true, example: 500 },
-            substrate_moisture_min: { type: 'number', nullable: true, example: 55 },
-            substrate_moisture_max: { type: 'number', nullable: true, example: 70 },
             created_at: { type: 'string', format: 'date-time' },
             updated_at: { type: 'string', format: 'date-time' },
           },
@@ -315,8 +395,6 @@ const options = {
             humidityMax: { type: 'number', nullable: true, example: 90 },
             co2Min: { type: 'number', nullable: true, example: 350 },
             co2Max: { type: 'number', nullable: true, example: 500 },
-            substrateMoistureMin: { type: 'number', nullable: true, example: 55 },
-            substrateMoistureMax: { type: 'number', nullable: true, example: 70 },
           },
         },
         UpdateMushroomConditionRequest: {
@@ -329,8 +407,6 @@ const options = {
             humidityMax: { type: 'number', nullable: true, example: 88 },
             co2Min: { type: 'number', nullable: true, example: 300 },
             co2Max: { type: 'number', nullable: true, example: 600 },
-            substrateMoistureMin: { type: 'number', nullable: true, example: 50 },
-            substrateMoistureMax: { type: 'number', nullable: true, example: 68 },
           },
         },
         AuthResponse: {

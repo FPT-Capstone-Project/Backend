@@ -167,8 +167,17 @@ does not set a cleared latch. Humidity at/above the hard maximum never starts a
 pulse and ends an active one early.
 
 `DISABLED → IDLE → ON_REQUESTED → MISTING → OFF_PENDING → COOLDOWN → IDLE` is the
-normal progression. SENSOR_FAULT, DEVICE_OFFLINE and FAULT stop the run and require
-an explicit new Start after resolution. OFF reconciliation remains eligible for
+normal progression. SENSOR_FAULT and DEVICE_OFFLINE suspend actuation while the run
+remains RUNNING/AUTO. The worker retries at the configured evaluation interval
+and logs RETRY_WAIT with the reason and available sensor readings. A temporary
+failure during a pulse requests OFF; a timed-out/failed MQTT ON also requires a
+new live OFF confirmation and normal cooldown before another pulse. Reservations
+still count toward hourly limits. Stale/retained OFF feedback is refreshed before
+ON; missing feedback keeps OFF_PENDING and blocks ON. Publication has up to five
+seconds, capped by the remaining reserved pulse time, rather than a fixed one-second
+budget. Profile changes, missing device safety verification, unexpected failures,
+worker recovery, and operator Stop still end the run and require a new Start.
+OFF reconciliation remains eligible for
 the worker even after a run is STOPPED/FAULT. MANUAL floors do not run misting
 decisions or send automatic commands, except completing an already-owned OFF.
 
