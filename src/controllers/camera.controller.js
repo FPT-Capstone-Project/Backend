@@ -34,7 +34,13 @@ async function getLiveStream(req, res) {
     return res.status(400).json({ message: 'channelId must be a number from 0 to 999' });
   }
 
-  const data = await cameraService.getLiveStream(cameraId, channelId);
+  const streamIdValue = req.query.streamId === undefined ? '0' : req.query.streamId;
+  if (typeof streamIdValue !== 'string' || !['0', '1'].includes(streamIdValue)) {
+    return res.status(400).json({ message: 'streamId must be 0 or 1' });
+  }
+  const streamId = Number(streamIdValue);
+
+  const data = await cameraService.getLiveStream(cameraId, channelId, streamId);
   return res.json({ data });
 }
 

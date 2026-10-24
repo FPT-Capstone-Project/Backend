@@ -27,7 +27,14 @@ test('gets the Imou HLS URL using signed Open Platform requests', async () => {
   const responses = [
     { accessToken: 'temporary-token', expireTime: 3600 },
     { streams: [] },
-    { streams: [{ streamId: 1, hls: 'https://video.example/live.m3u8' }] },
+    {
+      streams: [
+        { streamId: 0, hls: 'https://video.example/audio-only.m3u8' },
+        { streamId: 1, hls: 'https://video.example/video.m3u8' },
+        { streamId: 1, hls: 'http://video.example/video.m3u8' },
+        { streamId: 0, hls: 'http://video.example/audio-only.m3u8' },
+      ],
+    },
   ];
   const restore = configureImou(async (url, options) => {
     const request = JSON.parse(options.body);
@@ -41,11 +48,23 @@ test('gets the Imou HLS URL using signed Open Platform requests', async () => {
   try {
     delete require.cache[require.resolve('../src/services/imou.service')];
     const service = require('../src/services/imou.service');
-    const stream = await service.getLiveStream('device-123', '0');
+    const stream = await service.getLiveStream('device-123', '0', 0);
     assert.deepEqual(stream, {
-      url: 'https://video.example/live.m3u8',
+      url: 'https://video.example/audio-only.m3u8',
       protocol: 'hls',
-      streamId: 1,
+      streamId: 0,
+      streams: [
+        {
+          url: 'https://video.example/audio-only.m3u8',
+          protocol: 'hls',
+          streamId: 0,
+        },
+        {
+          url: 'https://video.example/video.m3u8',
+          protocol: 'hls',
+          streamId: 1,
+        },
+      ],
     });
     assert.deepEqual(requests.map(({ url }) => url.split('/').pop()), [
       'accessToken',
@@ -69,6 +88,29 @@ test('gets the Imou HLS URL using signed Open Platform requests', async () => {
       assert.equal(request.system.appId, 'test-app');
       assert.equal(sign, expectedSign);
     }
+  } finally {
+    restore();
+  }
+});
+
+test('does not fall back to another stream when the requested stream is unavailable', async () => {
+  const responses = [
+    { accessToken: 'temporary-token', expireTime: 3600 },
+    { streams: [] },
+    { streams: [{ streamId: 1, hls: 'https://video.example/video.m3u8' }] },
+  ];
+  const restore = configureImou(async () => ({
+    ok: true,
+    json: async () => ({ result: { code: '0', data: responses.shift() } }),
+  }));
+
+  try {
+    delete require.cache[require.resolve('../src/services/imou.service')];
+    const service = require('../src/services/imou.service');
+    await assert.rejects(
+      service.getLiveStream('device-123', '0', 0),
+      /Imou cloud did not return an HLS live-stream URL/,
+    );
   } finally {
     restore();
   }
@@ -112,7 +154,7 @@ test('refreshes the access token once when Imou returns TK1002', async () => {
         json: async () => ({
           result: {
             code: '0',
-            data: { streams: [{ streamId: 1, hls: 'https://video.example/live.m3u8' }] },
+            data: { streams: [{ streamId: 0, hls: 'https://video.example/live.m3u8' }] },
           },
         }),
       };
@@ -165,7 +207,7 @@ test('reuses an existing Imou live session when bindDeviceLive returns LV1001', 
       json: async () => ({
         result: {
           code: '0',
-          data: { streams: [{ streamId: 1, hls: 'https://video.example/existing.m3u8' }] },
+          data: { streams: [{ streamId: 0, hls: 'https://video.example/existing.m3u8' }] },
         },
       }),
     };

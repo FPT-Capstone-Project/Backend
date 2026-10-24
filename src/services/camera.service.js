@@ -146,18 +146,24 @@ async function deleteCamera(cameraId) {
   }
 }
 
-async function getLiveStream(cameraId, channelId = '0') {
+async function getLiveStream(cameraId, channelId = '0', streamId = 0) {
   const camera = await cameraModel.findById(cameraId);
   if (!camera) throw new AppError('Camera not found', 404);
   if (camera.status !== 'ACTIVE') throw new AppError('Camera is not active', 409);
   if (!camera.camera_code) throw new AppError('Camera has no Imou device ID configured', 409);
 
-  const stream = await imouService.getLiveStream(camera.camera_code, channelId);
+  const liveStream = await imouService.getLiveStream(
+    camera.camera_code,
+    channelId,
+    streamId,
+  );
+  const { streams, ...stream } = liveStream;
   return {
     cameraId: camera.camera_id,
     cameraName: camera.camera_name,
     channelId,
     stream,
+    streams,
   };
 }
 

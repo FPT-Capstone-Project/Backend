@@ -146,12 +146,14 @@ Nếu password database có ký tự đặc biệt như `@`, `:`, `/`, `#` hoặ
 
 API `GET /api/cameras/{cameraId}/live-stream` gọi Imou Open Platform và trả về URL HLS tạm thời. Route yêu cầu JWT của admin hoặc nhân viên vận hành (role 1 hoặc 2). Trường `cameras.camera_code` phải chứa đúng device ID đã bind trong tài khoản Imou Open Platform.
 
+API bind và trả về `streamId: 0` mặc định. Có thể chọn `streamId=1` trong query nếu cần; nếu Imou không cung cấp stream được yêu cầu, API trả lỗi thay vì tự chuyển sang stream ID khác. Response gồm `stream` (luồng đã chọn để tương thích) và `streams` (danh sách các luồng 0/1 mà Imou cung cấp).
+
 Cấu hình `IMOU_APP_ID` và `IMOU_APP_SECRET` trong environment của Render (không gửi các giá trị này trong chat hoặc commit vào Git). Nếu ứng dụng Imou được cấp region riêng, đặt thêm `IMOU_REGION` theo mã region từ Imou; để trống nếu dùng endpoint mặc định. Sau đó deploy lại backend.
 
 Ví dụ:
 
 ```http
-GET /api/cameras/1/live-stream?channelId=0
+GET /api/cameras/1/live-stream?channelId=0&streamId=0
 Authorization: Bearer <JWT>
 ```
 
@@ -166,8 +168,12 @@ Response có dạng:
     "stream": {
       "url": "https://...",
       "protocol": "hls",
-      "streamId": 1
-    }
+      "streamId": 0
+    },
+    "streams": [
+      { "url": "https://...", "protocol": "hls", "streamId": 0 },
+      { "url": "https://...", "protocol": "hls", "streamId": 1 }
+    ]
   }
 }
 ```

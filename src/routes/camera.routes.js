@@ -273,6 +273,14 @@ router.delete('/:cameraId', ...adminOnly, cameraController.remove);
  *         schema:
  *           type: string
  *           default: "0"
+ *       - in: query
+ *         name: streamId
+ *         required: false
+ *         description: Imou stream ID; defaults to 0
+ *         schema:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
  *     responses:
  *       200:
  *         description: Temporary stream information returned by Imou
@@ -312,6 +320,12 @@ router.get(
  *         schema:
  *           type: string
  *           default: "0"
+ *       - in: query
+ *         name: streamId
+ *         schema:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
  *     responses:
  *       200:
  *         description: Live stream URL
