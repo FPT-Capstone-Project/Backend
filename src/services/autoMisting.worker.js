@@ -12,26 +12,36 @@ function createWorker(repo=repository,control=service,logger=console) {
    if(!leader) {
     leader=await repo.acquireLeader();
     if(!leader)return;
-    leader.on?.('error',()=>{healthy=false;});
-    await control.recover();
     healthy=true;
+    leader.on?.('error',error=>{
+     healthy=false;
+     logger.error('Auto misting leader connection failed',error);
+    });
+    await control.recover();
    }
    await leader.query('SELECT 1');
    if(!healthy)throw new Error('Worker leadership lost');
    await leader.query(`INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())
     ON CONFLICT(id) DO UPDATE SET heartbeat_at=now()`);
-   const floors=await repo.candidates();
+   let floors;
+   try {floors=await repo.candidates();}
+   catch(error) {
+    // This query uses the pool, not the session holding the leader lock.
+    // Retry next tick without triggering takeover recovery for unrelated errors.
+    logger.error('Auto misting candidate query failed; retrying next tick',error);
+    return;
+   }
    // Bounded parallelism keeps one delayed device from blocking every floor.
    for(let i=0;i<floors.length;i+=2) {
     await Promise.all(floors.slice(i,i+2).map(async f=>{
      try {await control.evaluate(f.floor_id,false,()=>healthy && !stopping);}
-     catch {logger.error(`Auto misting evaluation failed for floor ${f.floor_id}`);}
+     catch(error) {logger.error(`Auto misting evaluation failed for floor ${f.floor_id}`,error);}
     }));
    }
-  } catch {
+  } catch(error) {
    healthy=false;
    if(leader){leader.release(true);leader=null;}
-   logger.error('Auto misting worker unavailable; no runs resumed');
+   logger.error('Auto misting worker unavailable; no runs resumed',error);
   } finally {busy=false;}
  }
  return {
