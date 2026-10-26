@@ -164,6 +164,31 @@ async function getLiveStream(deviceId, channelId = '0', streamId = 0) {
   return { ...selected, streams: availableStreams };
 }
 
+async function getKitToken(deviceId, channelId = '0') {
+  const params = (token) => ({
+    token,
+    deviceId,
+    channelId,
+    type: '1',
+  });
+
+  let token = await getAccessToken();
+  let data;
+  try {
+    data = await callApi('getKitToken', params(token), token);
+  } catch (error) {
+    if (error.imouCode !== 'TK1002') throw error;
+    cachedToken = null;
+    token = await getAccessToken();
+    data = await callApi('getKitToken', params(token), token);
+  }
+
+  if (typeof data.kitToken !== 'string' || !data.kitToken) {
+    throw new AppError('Imou cloud did not return a KitToken', 502);
+  }
+  return { kitToken: data.kitToken };
+}
+
 async function getLiveStreamInfoWithToken(deviceId, channelId, token) {
   return callApi('getLiveStreamInfo', { token, deviceId, channelId }, token);
 }
@@ -243,6 +268,7 @@ async function stopLiveSession(liveToken) {
 
 module.exports = {
   getLiveStream,
+  getKitToken,
   getLiveStreamInfo,
   listLiveStreams,
   stopLiveStream,

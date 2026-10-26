@@ -4,7 +4,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
 
 const router = express.Router();
 const adminOnly = [authenticate, authorizeRoles(1)];
-const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
+const authenticated = [authenticate];
 
 /**
  * @openapi
@@ -129,6 +129,53 @@ router.get('/live-streams', ...adminOnly, cameraController.listLiveStreams);
  *         description: Imou cloud request failed
  */
 router.post('/live-streams/stop', ...adminOnly, cameraController.stopLiveSession);
+
+/**
+ * @openapi
+ * /api/cameras/{cameraId}/imou-player-token:
+ *   get:
+ *     tags: [Cameras]
+ *     summary: Get a scoped Imou KitToken for ImouPlayer
+ *     description: Returns a short-lived KitToken for live preview. The Imou App Secret and Open Platform access token are never exposed.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: cameraId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: channelId
+ *         schema:
+ *           type: string
+ *           default: "0"
+ *       - in: query
+ *         name: streamId
+ *         description: ImouPlayer stream ID (0 or 1)
+ *         schema:
+ *           type: integer
+ *           enum: [0, 1]
+ *           default: 0
+ *     responses:
+ *       200:
+ *         description: ImouPlayer configuration and KitToken
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: Camera not found
+ *       409:
+ *         description: Camera is not active or has no Imou device ID configured
+ *       502:
+ *         description: Imou cloud request failed
+ *       503:
+ *         description: Imou cloud credentials are not configured
+ */
+router.get(
+  '/:cameraId/imou-player-token',
+  ...authenticated,
+  cameraController.getImouPlayerToken,
+);
 
 /**
  * @openapi
@@ -257,7 +304,7 @@ router.delete('/:cameraId', ...adminOnly, cameraController.remove);
  *   get:
  *     tags: [Cameras]
  *     summary: Get a temporary Imou cloud live-stream link
- *     description: The camera's camera_code must contain its Imou cloud device ID. Access is limited to administrators and farm operators.
+ *     description: The camera's camera_code must contain its Imou cloud device ID. Any authenticated user can view the stream.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -286,8 +333,6 @@ router.delete('/:cameraId', ...adminOnly, cameraController.remove);
  *         description: Temporary stream information returned by Imou
  *       401:
  *         description: Missing or invalid JWT token
- *       403:
- *         description: User is not an administrator or farm operator
  *       404:
  *         description: Camera not found
  *       502:
@@ -297,7 +342,7 @@ router.delete('/:cameraId', ...adminOnly, cameraController.remove);
  */
 router.get(
   '/:cameraId/live-stream',
-  ...adminOrFarmOperator,
+  ...authenticated,
   cameraController.getLiveStream,
 );
 
@@ -307,6 +352,7 @@ router.get(
  *   post:
  *     tags: [Cameras]
  *     summary: Start or retrieve an Imou cloud live stream
+ *     description: Any authenticated user can start or retrieve the stream for viewing.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -336,7 +382,7 @@ router.get(
  */
 router.post(
   '/:cameraId/live-stream',
-  ...adminOrFarmOperator,
+  ...authenticated,
   cameraController.getLiveStream,
 );
 

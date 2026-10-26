@@ -167,6 +167,24 @@ async function getLiveStream(cameraId, channelId = '0', streamId = 0) {
   };
 }
 
+async function getImouPlayerToken(cameraId, channelId = '0', streamId = 0) {
+  const camera = await cameraModel.findById(cameraId);
+  if (!camera) throw new AppError('Camera not found', 404);
+  if (camera.status !== 'ACTIVE') throw new AppError('Camera is not active', 409);
+  if (!camera.camera_code) throw new AppError('Camera has no Imou device ID configured', 409);
+
+  const { kitToken } = await imouService.getKitToken(camera.camera_code, channelId);
+  return {
+    cameraId: camera.camera_id,
+    cameraName: camera.camera_name,
+    deviceId: camera.camera_code,
+    channelId,
+    streamId,
+    type: 1,
+    kitToken,
+  };
+}
+
 async function getLiveStreams({ start = 1, limit = 20 } = {}) {
   const [result, cameras] = await Promise.all([
     imouService.listLiveStreams(start, limit),
@@ -219,6 +237,7 @@ module.exports = {
   updateCamera,
   deleteCamera,
   getLiveStream,
+  getImouPlayerToken,
   getLiveStreams,
   stopLiveStream,
   stopLiveSession,
