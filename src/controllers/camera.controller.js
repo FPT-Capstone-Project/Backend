@@ -34,7 +34,37 @@ async function getLiveStream(req, res) {
     return res.status(400).json({ message: 'channelId must be a number from 0 to 999' });
   }
 
-  const data = await cameraService.getLiveStream(cameraId, channelId);
+  const streamIdValue = req.query.streamId === undefined ? '0' : req.query.streamId;
+  if (typeof streamIdValue !== 'string' || !['0', '1'].includes(streamIdValue)) {
+    return res.status(400).json({ message: 'streamId must be 0 or 1' });
+  }
+  const streamId = Number(streamIdValue);
+
+  const data = await cameraService.getLiveStream(cameraId, channelId, streamId);
+  return res.json({ data });
+}
+
+async function getImouPlayerToken(req, res) {
+  const cameraId = Number(req.params.cameraId);
+  if (!Number.isSafeInteger(cameraId) || cameraId < 1) {
+    return res.status(400).json({ message: 'Invalid camera ID' });
+  }
+
+  const channelId = req.query.channelId === undefined ? '0' : String(req.query.channelId);
+  if (!/^\d{1,3}$/.test(channelId)) {
+    return res.status(400).json({ message: 'channelId must be a number from 0 to 999' });
+  }
+
+  const streamIdValue = req.query.streamId === undefined ? '0' : req.query.streamId;
+  if (typeof streamIdValue !== 'string' || !['0', '1'].includes(streamIdValue)) {
+    return res.status(400).json({ message: 'streamId must be 0 or 1' });
+  }
+
+  const data = await cameraService.getImouPlayerToken(
+    cameraId,
+    channelId,
+    Number(streamIdValue),
+  );
   return res.json({ data });
 }
 
@@ -82,6 +112,7 @@ module.exports = {
   update,
   remove,
   getLiveStream,
+  getImouPlayerToken,
   listLiveStreams,
   stopLiveStream,
   stopLiveSession,

@@ -144,14 +144,16 @@ Nếu password database có ký tự đặc biệt như `@`, `:`, `/`, `#` hoặ
 
 ### Lấy link video live từ camera Imou
 
-API `GET /api/cameras/{cameraId}/live-stream` gọi Imou Open Platform và trả về URL HLS tạm thời. Route yêu cầu JWT của admin hoặc nhân viên vận hành (role 1 hoặc 2). Trường `cameras.camera_code` phải chứa đúng device ID đã bind trong tài khoản Imou Open Platform.
+API `GET /api/cameras/{cameraId}/live-stream` gọi Imou Open Platform và trả về URL HLS tạm thời. Các API xem/bắt đầu luồng và lấy KitToken yêu cầu JWT hợp lệ nhưng cho phép mọi role đã đăng nhập. Trường `cameras.camera_code` phải chứa đúng device ID đã bind trong tài khoản Imou Open Platform.
+
+API bind và trả về `streamId: 0` mặc định. Có thể chọn `streamId=1` trong query nếu cần; nếu Imou không cung cấp stream được yêu cầu, API trả lỗi thay vì tự chuyển sang stream ID khác. Response gồm `stream` (luồng đã chọn để tương thích) và `streams` (danh sách các luồng 0/1 mà Imou cung cấp).
 
 Cấu hình `IMOU_APP_ID` và `IMOU_APP_SECRET` trong environment của Render (không gửi các giá trị này trong chat hoặc commit vào Git). Nếu ứng dụng Imou được cấp region riêng, đặt thêm `IMOU_REGION` theo mã region từ Imou; để trống nếu dùng endpoint mặc định. Sau đó deploy lại backend.
 
 Ví dụ:
 
 ```http
-GET /api/cameras/1/live-stream?channelId=0
+GET /api/cameras/1/live-stream?channelId=0&streamId=0
 Authorization: Bearer <JWT>
 ```
 
@@ -166,15 +168,46 @@ Response có dạng:
     "stream": {
       "url": "https://...",
       "protocol": "hls",
-      "streamId": 1
-    }
+      "streamId": 0
+    },
+    "streams": [
+      { "url": "https://...", "protocol": "hls", "streamId": 0 },
+      { "url": "https://...", "protocol": "hls", "streamId": 1 }
+    ]
   }
 }
 ```
 
 URL do Imou cấp có thể hết hạn; frontend nên gọi API lại khi URL không còn xem được và không lưu link lâu dài.
 
-Quản lý các phiên live đang tồn tại trên tài khoản Imou (JWT admin):
+#### Dùng ImouPlayer trên frontend
+
+ImouPlayer cần `KitToken`, không dùng URL HLS hoặc Open Platform `accessToken` trực tiếp. Frontend gọi endpoint dưới đây để backend lấy KitToken giới hạn cho quyền xem live; `IMOU_APP_SECRET` và Open Platform access token không được gửi xuống trình duyệt:
+
+```http
+GET /api/cameras/1/imou-player-token?channelId=0&streamId=0
+Authorization: Bearer <JWT>
+```
+
+Response:
+
+```json
+{
+  "data": {
+    "cameraId": 1,
+    "cameraName": "Camera 1",
+    "deviceId": "<Imou device ID>",
+    "channelId": "0",
+    "streamId": 0,
+    "type": 1,
+    "kitToken": "<temporary KitToken>"
+  }
+}
+```
+
+Khi khởi tạo ImouPlayer, frontend dùng `kitToken` làm giá trị của cấu hình player `token`, cùng `deviceId`, `channelId`, `type` và `streamId`. KitToken có thể hết hạn; frontend nên xin token mới khi ImouPlayer báo lỗi xác thực hoặc khi bắt đầu phiên xem mới.
+
+Quản lý danh sách và dừng các phiên live đang tồn tại trên tài khoản Imou vẫn chỉ dành cho admin (JWT admin):
 
 ```http
 GET /api/cameras/live-streams?start=1&limit=20

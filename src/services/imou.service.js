@@ -111,14 +111,14 @@ async function getAccessToken() {
   return cachedToken.value;
 }
 
-async function getLiveStream(deviceId, channelId = '0') {
+async function getLiveStream(deviceId, channelId = '0', streamId = 0) {
   const params = (token) => ({ token, deviceId, channelId });
   async function requestStream(token) {
     let bound = {};
     try {
       bound = await callApi(
         'bindDeviceLive',
-        { ...params(token), streamId: 0 },
+        { ...params(token), streamId },
         token,
       );
     } catch (error) {
@@ -143,16 +143,50 @@ async function getLiveStream(deviceId, channelId = '0') {
   const streams = liveInfo.streams && liveInfo.streams.length
     ? liveInfo.streams
     : bound.streams || [];
-  const httpsStreams = streams.filter((stream) => (
-    typeof stream.hls === 'string' && stream.hls.startsWith('https://')
-  ));
-  const availableStreams = httpsStreams.length ? httpsStreams : streams;
-  const selected = availableStreams.find((stream) => String(stream.streamId) === '1')
-    || availableStreams[0];
-  if (!selected || typeof selected.hls !== 'string' || !selected.hls) {
+  const availableStreams = [0, 1].map((id) => {
+    const matchingStreams = streams.filter((stream) => (
+      String(stream.streamId) === String(id)
+      && typeof stream.hls === 'string'
+      && stream.hls
+    ));
+    const selectedStream = matchingStreams.find((stream) => stream.hls.startsWith('https://'))
+      || matchingStreams[0];
+    return selectedStream
+      ? { url: selectedStream.hls, protocol: 'hls', streamId: id }
+      : null;
+  }).filter(Boolean);
+  const selected = availableStreams.find(
+    (stream) => String(stream.streamId) === String(streamId),
+  );
+  if (!selected) {
     throw new AppError('Imou cloud did not return an HLS live-stream URL', 502);
   }
-  return { url: selected.hls, protocol: 'hls', streamId: selected.streamId };
+  return { ...selected, streams: availableStreams };
+}
+
+async function getKitToken(deviceId, channelId = '0') {
+  const params = (token) => ({
+    token,
+    deviceId,
+    channelId,
+    type: '1',
+  });
+
+  let token = await getAccessToken();
+  let data;
+  try {
+    data = await callApi('getKitToken', params(token), token);
+  } catch (error) {
+    if (error.imouCode !== 'TK1002') throw error;
+    cachedToken = null;
+    token = await getAccessToken();
+    data = await callApi('getKitToken', params(token), token);
+  }
+
+  if (typeof data.kitToken !== 'string' || !data.kitToken) {
+    throw new AppError('Imou cloud did not return a KitToken', 502);
+  }
+  return { kitToken: data.kitToken };
 }
 
 async function getLiveStreamInfoWithToken(deviceId, channelId, token) {
@@ -234,6 +268,7 @@ async function stopLiveSession(liveToken) {
 
 module.exports = {
   getLiveStream,
+  getKitToken,
   getLiveStreamInfo,
   listLiveStreams,
   stopLiveStream,
