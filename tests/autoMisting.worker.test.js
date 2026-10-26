@@ -93,6 +93,18 @@ test('failed leader acquisition destroys the checked-out connection',async()=>{
  assert.deepEqual(released,[true]);
 });
 
+test('shutdown failure destroys the leader session so another worker can recover',async()=>{
+ let recoveries=0;
+ const releases=[];
+ const client=new EventEmitter();
+ client.query=async()=>({rows:[]});client.release=broken=>releases.push(broken);
+ const w=createWorker({acquireLeader:async()=>client,candidates:async()=>[]},
+  {recover:async()=>{if(++recoveries===2)throw new Error('shutdown recovery failed');}},{error(){}});
+ await w.tick();await assert.rejects(()=>w.stop(),/shutdown recovery failed/);
+ assert.deepEqual(releases,[true]);
+ await w.stop();assert.deepEqual(releases,[true]);
+});
+
 test('heartbeat failure persists its cause and identifies recovery in the same worker',async()=>{
  const reasons=[],events=[],errors=[];
  let fail=false;

@@ -3,7 +3,7 @@ const service=require('./autoMisting.service');
 const {randomUUID}=require('node:crypto');
 
 // A dedicated session elects one worker. Losing that session closes the local
-// actuation gate; a replacement always stops old runs before doing evaluations.
+// actuation gate; a replacement reconciles OFF before allowing new pulses.
 function createWorker(repo=repository,control=service,logger=console) {
  let timer,leader,busy=false,stopping=false,healthy=false;
  const workerId=randomUUID();
@@ -39,7 +39,7 @@ function createWorker(repo=repository,control=service,logger=console) {
      logger.error('Auto misting leader connection closed',diagnostics('database session closed'));
     });
     stage='recovery';
-    logger.info?.('Auto misting leadership acquired; stopping prior runs',{...diagnostics(stage),reason:recoveryReason});
+    logger.info?.('Auto misting leadership acquired; reconciling OFF and preserving AUTO',{...diagnostics(stage),reason:recoveryReason});
     await control.recover(recoveryReason);
    }
    stage='leader health check';
@@ -69,18 +69,19 @@ function createWorker(repo=repository,control=service,logger=console) {
     recoveryReason=sessionFailure || failureReason(stage,error);
     const session=leader;leader=null;session.release(true);
    }
-   logger.error('Auto misting worker unavailable; no runs resumed',error,diagnostics(stage));
+   logger.error('Auto misting worker unavailable; actuation paused',error,diagnostics(stage));
   } finally {busy=false;}
  }
  return {
   start(){if(timer)return;stopping=false;timer=setInterval(tick,250);timer.unref();void tick();},
   tick,
   async stop(){
-   stopping=true;clearInterval(timer);timer=null;
+   stopping=true;healthy=false;clearInterval(timer);timer=null;
    while(busy)await new Promise(resolve=>setTimeout(resolve,25));
    if(leader) {
     try {await leader.query('DELETE FROM iot_auto_control_worker');await control.recover('Backend shutdown');await leader.query('SELECT pg_advisory_unlock(62003,1)');}
-    finally{leader.release();leader=null;healthy=false;}
+    // Destroy the session even if recovery/unlock fails, releasing its lock.
+    finally{leader.release(true);leader=null;healthy=false;}
    }
   },
  };
