@@ -82,7 +82,9 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   // An OFF state must be live and newer than the first OFF request. Publication
   // success alone is never treated as device acknowledgement.
   const ssr=await repo.ssr(f);
+  const feedbackAge=ssr?.state_reported_at?now()-new Date(ssr.state_reported_at):NaN;
   const confirmed=run.dry_run || (rt.off_requested_at && ssr?.reported_state==='OFF' && ssr.reported_retained===false
+   && ssr.desired_state!=='ON' && Number.isFinite(feedbackAge) && feedbackAge>=0 && feedbackAge<=c.sensor_max_age_ms
    && new Date(ssr.state_reported_at)>=new Date(rt.off_requested_at));
   if (confirmed) {
    const latest=await repo.run(id);
@@ -100,6 +102,19 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    await repo.runtimeSet(id,{control_state:'OFF_PENDING',last_error:error.message});
    await log(id,run,'OFF_FAILED',error.message);
   }
+ }
+ // Caller holds the floor and channel locks. Preserve operator intent, but
+ // discard interrupted pulse state and require a new OFF acknowledgement.
+ async function reconcileInterruption(f,run,reason) {
+  const id=f.floor_id;
+  await repo.transaction(async()=>{
+   await repo.runtimeSet(id,{run_id:run.id,control_state:'OFF_PENDING',
+    cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,off_requested_at:null,
+    demand:false,cooling_demand:false,last_evaluated_at:null,last_reason:reason,
+    last_error:'Awaiting live OFF feedback after worker interruption'});
+   await log(id,run,'RECOVERY_WAIT',reason);
+  });
+  await requestOffLocked(f,run,reason);
  }
  const api={
   list:()=>repo.list(),
@@ -250,7 +265,10 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     if(rt.control_state==='OFF_PENDING' && run) {await requestOff(f,run,'Reconcile pending OFF');return decision;}
     if(run?.status!=='RUNNING')return decision;
     const active=['ON_REQUESTED','MISTING'].includes(rt.control_state);
-    try {await verifyProfile(id,c);} catch(error) {
+    try {
+     if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Invalid or inactive floor mapping',409);
+     await verifyProfile(id,c);
+    } catch(error) {
      await stopRecord(id,null,error.message,'FAULT');
      await log(id,run,'FAULT',error.message,e);
      if(active)await requestOff(f,run,error.message);
@@ -326,6 +344,16 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       });
       await log(id,run,'ON_REQUESTED',run.dry_run?'Simulated pulse; no MQTT publication':'ON published; physical valve unverified',{commandId:result?.commandId});
      } catch(error) {
+      if(!canActuate()) {
+       // Shutdown or loss of leadership can interrupt ON preparation/publication.
+       // Keep RUNNING intent for the next leader; manual Stop/FAULT still wins.
+       await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+        const current=await repo.run(id);
+        if(current?.id===run.id && current.status==='RUNNING')
+         await reconcileInterruption(f,current,'Worker interrupted during ON attempt');
+       });
+       return {action:'OFF',state:(await repo.runtime(id)).control_state,reason:'Worker interrupted during ON attempt'};
+      }
       const current=await repo.run(id),latest=await repo.runtime(id);
       if(current?.id===run.id && current.status==='RUNNING' && canActuate()
        && (error.retryState || [503,504].includes(error.statusCode))) {
@@ -358,7 +386,16 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    });
   },
   async recover(reason='Worker restart or leadership transfer') {
-   for(const {floor_id:id} of await repo.candidates())await api.stop(id,null,reason);
+   for(const {floor_id:id} of await repo.candidates())await repo.lockFloor(id,async()=>{
+    const f=await repo.floor(id);
+    await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+     // Re-read under both locks: an operator may have stopped the floor while
+     // this recovery was waiting. Never reactivate STOPPED or FAULT runs.
+     const run=await repo.run(id),rt=await repo.runtime(id);
+     if(!run || (run.status!=='RUNNING' && !['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)))return;
+     await reconcileInterruption(f,run,reason);
+    });
+   });
   },
  };
  return api;

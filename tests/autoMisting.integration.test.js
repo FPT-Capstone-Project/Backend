@@ -114,11 +114,17 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.stop(other,null);assert.equal((await repo.run(other)).status,'STOPPED');
    assert.equal((await repo.run(id)).status,'RUNNING');
   });
-  await t.test('restart stops all runs and never resumes a pulse',async()=>{
+  await t.test('restart preserves AUTO, discards the old pulse and observes cooldown',async()=>{
    now+=61000;await fresh();await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'MISTING');
-   await service.recover();assert.equal((await repo.run(id)).status,'STOPPED');
-   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+   const run=await repo.run(id),budget=await repo.budget(id);
+   await service.recover();assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.run(id)).id,run.id);
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   assert.equal((await repo.runtime(id)).pulse_deadline_at,null);
+   assert.deepEqual(await repo.budget(id),budget);
+   assert.equal((await repo.run(other)).status,'STOPPED');
    assert.equal((await service.evaluate(id)).action,'NONE');assert.equal(calls.length,0);
+   await service.stop(id,null);
   });
   await t.test('real Start sends OFF and refuses old, retained or missing feedback without creating a run',async()=>{
    process.env.AUTO_MISTING_REAL_ENABLED='true';process.env.AUTO_MISTING_VERIFIED_WATCHDOGS='{"master01":10000}';
