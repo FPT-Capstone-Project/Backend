@@ -1,6 +1,6 @@
 const test=require('node:test');
 const assert=require('node:assert/strict');
-const {suggest}=require('../src/services/autoMisting.profile');
+const {suggest,summarize,assertCompatible}=require('../src/services/autoMisting.profile');
 const {validateConfig,aggregate,decide}=require('../src/services/autoMisting.algorithm');
 const profiles=[
  {mushroom_type_id:1,temperature_min:'24',temperature_max:'28',humidity_min:'85',humidity_max:'95'},
@@ -19,6 +19,14 @@ test('shared profile uses intersections and provides an editable valid config',(
   [{...profiles[0],humidity_min:94}], [...profiles,{...profiles[0],mushroom_type_id:3,temperature_min:30,temperature_max:35}]])
   assert.equal(suggest(bad).config,null);
 });
+test('legacy CO2 snapshots do not block temperature and humidity automation',()=>{
+ const legacy=profiles.map((p,i)=>({...p,co2_min:i?1000:350,co2_max:i?1500:500}));
+ assert.deepEqual(summarize(legacy),summarize(profiles));
+ assert.deepEqual(summarize(profiles).warnings,[]);
+ assert.deepEqual(assertCompatible({...config,source_profiles:legacy},profiles,true),
+  summarize(profiles).sourceProfiles);
+});
+
 test('cooling has independent hysteresis, humidity cutoff and normal safety limits',()=>{
  assert.equal(decision(28,93).action,'ON');
  assert.equal(decision(27,93).action,'NONE');

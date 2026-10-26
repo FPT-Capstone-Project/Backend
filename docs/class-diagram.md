@@ -629,8 +629,6 @@ classDiagram
         +decimal temperature_max
         +decimal humidity_min
         +decimal humidity_max
-        +decimal co2_min
-        +decimal co2_max
     }
     class Order {
         +int order_id
