@@ -93,13 +93,10 @@ async function createMushroomCondition(payload = {}) {
     temperatureMax: parseNullableNumber(payload.temperatureMax ?? payload.temperature_max, 'temperatureMax'),
     humidityMin: parseNullableNumber(payload.humidityMin ?? payload.humidity_min, 'humidityMin'),
     humidityMax: parseNullableNumber(payload.humidityMax ?? payload.humidity_max, 'humidityMax'),
-    co2Min: parseNullableNumber(payload.co2Min ?? payload.co2_min, 'co2Min'),
-    co2Max: parseNullableNumber(payload.co2Max ?? payload.co2_max, 'co2Max'),
   };
 
   validateRange(data.temperatureMin, data.temperatureMax, 'Temperature');
   validateRange(data.humidityMin, data.humidityMax, 'Humidity');
-  validateRange(data.co2Min, data.co2Max, 'CO2');
 
   return mushroomConditionModel.create(data);
 }
@@ -142,12 +139,6 @@ async function updateMushroomCondition(conditionId, payload = {}) {
     humidity_max: humidityRanges.humidityMax,
   });
 
-  const co2Ranges = buildRangeUpdate(payload, 'co2');
-  Object.assign(updateData, {
-    co2_min: co2Ranges.co2Min,
-    co2_max: co2Ranges.co2Max,
-  });
-
   const filteredUpdateData = Object.fromEntries(
     Object.entries(updateData).filter(([, value]) => value !== undefined),
   );
@@ -168,13 +159,6 @@ async function updateMushroomCondition(conditionId, payload = {}) {
     && filteredUpdateData.humidity_min > filteredUpdateData.humidity_max
   ) {
     throw new AppError('Humidity minimum cannot be greater than maximum', 400);
-  }
-
-  if (
-    filteredUpdateData.co2_min !== undefined && filteredUpdateData.co2_max !== undefined
-    && filteredUpdateData.co2_min > filteredUpdateData.co2_max
-  ) {
-    throw new AppError('CO2 minimum cannot be greater than maximum', 400);
   }
 
   const updatedCondition = await mushroomConditionModel.updateById(id, filteredUpdateData);

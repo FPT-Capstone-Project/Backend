@@ -82,13 +82,13 @@ function createRepository(db = pool) {
    ORDER BY t.pulse_deadline_at NULLS LAST,f.floor_id`),
   async profiles(id) {
    const f=await api.floor(id);
-   const profiles=await rows(`SELECT DISTINCT s.mushroom_type_id,c.temperature_min,c.temperature_max,c.humidity_min,c.humidity_max,c.co2_min,c.co2_max
+   const profiles=await rows(`SELECT DISTINCT s.mushroom_type_id,c.temperature_min,c.temperature_max,c.humidity_min,c.humidity_max
     FROM cultivation_sessions s JOIN cultivation_trays t ON t.tray_id=s.tray_id
     JOIN rentals r ON r.rental_id=s.rental_id AND r.tray_id=s.tray_id AND r.status='ACTIVE'
     LEFT JOIN mushroom_conditions c ON c.mushroom_type_id=s.mushroom_type_id
     WHERE t.floor_id=$1 AND s.status='ACTIVE'`,[id]);
    const unassigned=await one(`SELECT count(*)::int AS count FROM cultivation_trays WHERE room_id=$1 AND floor_id IS NULL`,[f.room_id]);
-   const conflict=['temperature','humidity','co2'].some(k=>{
+   const conflict=['temperature','humidity'].some(k=>{
     const lows=profiles.map(p=>p[`${k}_min`]).filter(v=>v!=null).map(Number);
     const highs=profiles.map(p=>p[`${k}_max`]).filter(v=>v!=null).map(Number);
     return lows.length && highs.length && Math.max(...lows)>Math.min(...highs);

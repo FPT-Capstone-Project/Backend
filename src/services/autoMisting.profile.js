@@ -9,19 +9,19 @@ const preset = {
 };
 function summarize(profiles) {
  const sourceProfiles=profiles.map(p=>Object.fromEntries(
-  ['mushroom_type_id','temperature_min','temperature_max','humidity_min','humidity_max','co2_min','co2_max']
+  ['mushroom_type_id','temperature_min','temperature_max','humidity_min','humidity_max']
    .map(k=>[k,p[k]==null?null:Number(p[k])])))
   .sort((a,b)=>a.mushroom_type_id-b.mushroom_type_id);
  const issues=[], warnings=[], common={};
  if(!sourceProfiles.length)issues.push('No ACTIVE cultivation sessions linked to ACTIVE rentals on this floor');
- for(const metric of ['temperature','humidity','co2']) {
+ for(const metric of ['temperature','humidity']) {
   const complete=sourceProfiles.length>0 && sourceProfiles.every(p=>
    Number.isFinite(p[`${metric}_min`]) && Number.isFinite(p[`${metric}_max`])
    && p[`${metric}_min`]<p[`${metric}_max`]
    && p[`${metric}_min`]>=(metric==='temperature'?-40:0)
-   && p[`${metric}_max`]<=(metric==='temperature'?80:metric==='humidity'?100:Infinity));
+   && p[`${metric}_max`]<=(metric==='temperature'?80:100));
   if(!complete) {
-   (metric==='co2'?warnings:issues).push(`Missing or invalid ${metric} conditions`);
+   issues.push(`Missing or invalid ${metric} conditions`);
    continue;
   }
   const min=Math.max(...sourceProfiles.map(p=>p[`${metric}_min`]));

@@ -96,25 +96,6 @@ async function findByIdForAdmin(rentalId) {
   return result.rows[0] || null;
 }
 
-async function writeStatusLog(client, {
-  rentalId,
-  action,
-  fromStatus,
-  toStatus,
-  performedBy,
-  note,
-}) {
-  const result = await client.query(
-    `INSERT INTO rental_status_logs (
-       rental_id, action, from_status, to_status, performed_by, note
-     )
-     VALUES ($1, $2, $3, $4, $5, $6)
-     RETURNING *`,
-    [rentalId, action, fromStatus ?? null, toStatus ?? null, performedBy ?? null, note ?? null],
-  );
-  return result.rows[0] || null;
-}
-
 async function insertNotification(client, userId, type, title, message, rentalId = null) {
   const result = await client.query(
     `INSERT INTO notifications (user_id, notification_type, title, message, rental_id)
@@ -483,14 +464,6 @@ async function completeForAdmin(rentalId, note, performedBy) {
        RETURNING status`,
       [rental.order_id],
     );
-    await writeStatusLog(client, {
-      rentalId,
-      action: 'COMPLETE',
-      fromStatus: rental.status,
-      toStatus: 'COMPLETED',
-      performedBy,
-      note,
-    });
     await notifyRentalUser(client, rental.user_id, 'RENTAL_COMPLETED', rentalId);
 
     await client.query('COMMIT');
@@ -584,14 +557,6 @@ async function cancelForAdmin(rentalId, reason, performedBy) {
        RETURNING status, payment_status`,
       [rental.order_id],
     );
-    await writeStatusLog(client, {
-      rentalId,
-      action: 'CANCEL',
-      fromStatus: rental.status,
-      toStatus: 'CANCELLED',
-      performedBy,
-      note: reason,
-    });
     await notifyRentalUser(client, rental.user_id, 'RENTAL_CANCELLED', rentalId);
 
     await client.query('COMMIT');
@@ -750,13 +715,6 @@ async function startCultivationForAdmin(rentalId, trayId, performedBy) {
        WHERE order_id = $1 AND status = 'CONFIRMED'`,
       [rental.order_id],
     );
-    await writeStatusLog(client, {
-      rentalId,
-      action: 'START_CULTIVATION',
-      fromStatus: rental.status,
-      toStatus: 'ACTIVE',
-      performedBy,
-    });
     await notifyRentalUser(client, rental.user_id, 'CULTIVATION_STARTED', rentalId);
     await client.query(
       `INSERT INTO cultivation_progress (
@@ -962,13 +920,6 @@ async function updateForAdmin(rentalId, changes, performedBy) {
       [rentalId, status, trayId, durationDays, startDate, endDate],
     );
     if (rental.status === 'CONFIRMED' && status === 'PREPARING') {
-      await writeStatusLog(client, {
-        rentalId,
-        action: 'APPROVE',
-        fromStatus: rental.status,
-        toStatus: 'PREPARING',
-        performedBy,
-      });
       await notifyRentalUser(client, rental.user_id, 'RENTAL_APPROVED', rentalId);
     }
     await client.query('COMMIT');

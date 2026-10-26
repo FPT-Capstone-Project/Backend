@@ -38,8 +38,6 @@ test('should reject when mushroom type already has a condition', async () => {
       temperatureMax: 24,
       humidityMin: 80,
       humidityMax: 90,
-      co2Min: 350,
-      co2Max: 500,
     }),
     {
       message: 'Nấm này đã có condition rồi',
@@ -56,8 +54,6 @@ test('should allow creating a condition when mushroom type has no condition yet'
     temperatureMax: 24,
     humidityMin: 80,
     humidityMax: 90,
-    co2Min: 350,
-    co2Max: 500,
   });
 
   assert.equal(result.condition_id, 99);

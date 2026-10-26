@@ -91,7 +91,7 @@ Swagger UI is at `/api-docs`, under **Automatic misting**. Bearer JWT is require
    unresolved OFF are rejected with 409.
 4. Review the environment and cultivation profile report. Planned/active sessions
    are joined through assigned trays. Mixed types, mismatched selected types,
-   incompatible temperature/humidity/CO2 ranges, or unassigned trays require a
+   incompatible temperature/humidity ranges, or unassigned trays require a
    named `profile_name` and explicit `profile_approved: true`. This is an operator
    approval of a floor-level profile, not an automatically selected mushroom.
    Stop and review configuration when the cultivation plan changes.
