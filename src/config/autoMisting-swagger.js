@@ -57,7 +57,8 @@ add(auto+'/suggestions','get','Suggest a shared floor climate configuration',nul
 add(auto,'put','Save configuration without starting AUTO',config,'Example thresholds are for simulation only. Save remains MANUAL. Stop before edits.');
 add(auto+'/start','post','Explicitly start a run',{type:'object',additionalProperties:false,properties:{dryRun:{type:'boolean',default:true}}},'Fresh non-retained sensors required. Real runs require MQTT and a verified local watchdog, then send OFF and wait up to 5 seconds after publication for new non-retained SSR OFF feedback before starting AUTO. Missing feedback returns 504 without starting a run. Default dryRun=true publishes nothing.');
 add(auto+'/stop','post','Stop AUTO and request OFF',null,'Blocks new ON; unresolved physical state remains OFF_PENDING. OFF publish success is not confirmation.');
-add(auto+'/status','get','Get run, operator, desired/reported SSR, deadlines and errors');
+add(auto+'/status','get','Get run, operator, desired/reported SSR, deadlines and errors',null,
+ 'RUNNING/AUTO intent survives worker restart and backend shutdown. Recovery waits in OFF_PENDING for fresh live OFF feedback, then observes cooldown and rechecks prerequisites before a new pulse. STOPPED/FAULT runs are never automatically restarted.');
 add(auto+'/logs','get','Read paginated decision history');
 add(auto+'/evaluate','post','Preview current algorithm decision without side effects',null,'Does not start AUTO, update runtime or publish MQTT. MANUAL yields NONE. Use a dry run Start to simulate pulses.');
 module.exports={paths,schemas:{AutoMistingConfiguration:config,CultivationFloorMapping:mapping}};

@@ -105,7 +105,9 @@ function createRepository(db = pool) {
   },
   async acquireLeader() {
    const client=await db.connect();
-   const result=await client.query('SELECT pg_try_advisory_lock(62003,1) AS acquired');
+   let result;
+   try {result=await client.query('SELECT pg_try_advisory_lock(62003,1) AS acquired');}
+   catch(error) {client.release(true);throw error;}
    if (!result.rows[0].acquired) {client.release();return null;}
    return client;
   },

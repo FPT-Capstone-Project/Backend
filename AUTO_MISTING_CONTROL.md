@@ -176,7 +176,8 @@ still count toward hourly limits. Stale/retained OFF feedback is refreshed befor
 ON; missing feedback keeps OFF_PENDING and blocks ON. Publication has up to five
 seconds, capped by the remaining reserved pulse time, rather than a fixed one-second
 budget. Profile changes, missing device safety verification, unexpected failures,
-worker recovery, and operator Stop still end the run and require a new Start.
+and operator Stop still end the run and require a new Start. Worker recovery and
+backend shutdown preserve RUNNING/AUTO intent and reconcile OFF before resuming.
 OFF reconciliation remains eligible for
 the worker even after a run is STOPPED/FAULT. MANUAL floors do not run misting
 decisions or send automatic commands, except completing an already-owned OFF.
@@ -207,22 +208,55 @@ across backend instances. Nested operations reuse the lock connection. The
 existing manual command service takes the same channel lock. A manual ON against
 AUTO or pending OFF is rejected. An operator-authorized manual OFF ends the run
 under that lock before publishing, preventing a racing worker from turning it
-back on. An ON publication has at most a 1-second publication budget; OFF uses the
+back on. An ON publication has at most a 5-second budget capped by the remaining
+reserved pulse time; OFF uses the
 existing bounded command timeout. OFF remains pending and is retried on reconnect.
 
 One dedicated database session elects the worker. Other instances stay on standby.
-Every new leader first stops all prior runs and reconciles incomplete cycles;
-none are automatically resumed, including previously idle runs. Per-floor locks,
+Every new leader first reconciles all RUNNING floors, including idle floors, and
+incomplete OFF cycles. RUNNING intent and the original run/configuration snapshot
+are preserved. Interrupted pulse deadlines, cycle IDs and demand latches are
+cleared; hourly reservations are retained. Real floors enter OFF_PENDING and send
+OFF even if stored feedback already says OFF. New, non-retained OFF feedback must
+be at or after the recovery OFF request, within sensor_max_age_ms, and not paired
+with a desired ON state. Only then does the normal cooldown begin. Evaluations
+recheck mapping, crop profile, watchdog, MQTT, sensors and hourly budgets before
+issuing a new pulse. Missing feedback or offline devices keep AUTO waiting;
+STOPPED/FAULT runs are never reactivated. Dry runs simulate OFF without publishing.
+Per-floor locks,
 rechecking run state before ON, a leadership gate before publication, and durable
 reservations prevent normal duplicate-worker ON decisions. The worker processes
 at most two floors concurrently, ordered by pulse deadline, and never overlaps
 its own sweeps. Database sessions must be stable: use a direct connection or
 session-mode pooler, **not transaction-mode pooling**, for advisory locks.
 
-Shutdown stops runs while MQTT is still available, then closes MQTT/database
-connections. A crash leaves durable state for the next leader. If OFF cannot be
+A failed candidate-list query on the shared pool skips that sweep and retries on
+the next tick without discarding the dedicated leader session. Failures on the
+leader session still trigger recovery. RECOVERY_WAIT log reasons distinguish initial
+leadership acquisition (startup or takeover) from reacquisition after a database
+session error, session closure, health-check failure, heartbeat failure or failed
+recovery. Reacquisition reasons include the database error code when available.
+Backend logs include the original error, worker ID, PID, process uptime, UTC time
+and failure stage. The same worker ID with increasing uptime indicates recovery
+inside the same process, not a backend restart. Historical `Worker restart or
+leadership transfer` reasons cannot distinguish these cases on their own.
+Use `npm start` for
+unattended AUTO operation: `npm run dev` uses nodemon and can restart on file edits.
+
+Shutdown closes the ON gate and requests OFF while MQTT is still available,
+preserving RUNNING intent for the next leader, then closes MQTT/database
+connections. Leadership loss during an ON attempt also preserves the run and
+requires OFF reconciliation. A crash leaves durable state for the next leader.
+If OFF cannot be
 confirmed, mapping/configuration changes and new Start remain blocked. Pending
 OFF is a visible unresolved condition, not silently reset to MANUAL-safe.
+
+No migration is required for automatic recovery. Historical runs already marked
+STOPPED by an older deployment remain stopped; explicitly Start once after
+upgrading if the floor is currently MANUAL. During a rolling deployment, an old
+instance can still stop a run on shutdown until all instances use the new code.
+This does not keep the hosting process awake: automation cannot evaluate or
+publish while the host is asleep or offline.
 
 Errors: 400 invalid input, 401 missing/invalid JWT, 403 missing permission, 404
 unknown floor, 409 incompatible state/mapping/sensors/safety gate, 503 unavailable
@@ -255,7 +289,8 @@ AUTO_MISTING_VERIFIED_WATCHDOGS={"master01":10000}
 This is a deployment attestation, not a backend firmware capability probe. The
 attested limit must be at least the requested pulse and at most 60 seconds. Then
 restart, wait for live sensors and OFF feedback, and explicitly Start with
-`{"dryRun":false}`. Existing runs remain stopped after restart.
+`{"dryRun":false}` for a new run. Existing RUNNING runs recover through OFF and
+cooldown after restart; previously STOPPED/FAULT runs remain stopped.
 
 Backend deadlines are **not a guarantee of physical valve safety**. Event-loop,
 database, network, sweep backlog, broker and device delays can delay OFF. The
@@ -309,5 +344,6 @@ Final local verification: `npm test` passed **85 tests, 0 failures**.
 | `tests/autoMisting.integration.test.js` | Isolated migration and service integration tests |
 | `tests/autoMisting.routes.test.js` | JWT, permission and Swagger tests |
 | `tests/autoMisting.worker.test.js` | Election, recovery and session-lock lifecycle tests |
+| `tests/autoMisting.recovery.test.js` | Restart/shutdown recovery, live OFF, preserved budgets and explicit Stop precedence |
 | `tests/iot.routes.test.js` | Scope existing seven-endpoint assertion to original IoT APIs |
 | `AUTO_MISTING_CONTROL.md` | Deployment, operator workflow, safety, tests and this inventory |
