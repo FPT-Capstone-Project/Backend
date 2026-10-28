@@ -13,23 +13,24 @@ function summarize(profiles) {
    .map(k=>[k,p[k]==null?null:Number(p[k])])))
   .sort((a,b)=>a.mushroom_type_id-b.mushroom_type_id);
  const issues=[], warnings=[], common={};
- if(!sourceProfiles.length)issues.push('No ACTIVE cultivation sessions linked to ACTIVE rentals on this floor');
+ if(!sourceProfiles.length)issues.push('Tầng này không có phiên trồng đang hoạt động liên kết với đơn thuê đang hoạt động');
  for(const metric of ['temperature','humidity']) {
+  const label=metric==='temperature'?'nhiệt độ':'độ ẩm';
   const complete=sourceProfiles.length>0 && sourceProfiles.every(p=>
    Number.isFinite(p[`${metric}_min`]) && Number.isFinite(p[`${metric}_max`])
    && p[`${metric}_min`]<p[`${metric}_max`]
    && p[`${metric}_min`]>=(metric==='temperature'?-40:0)
    && p[`${metric}_max`]<=(metric==='temperature'?80:100));
   if(!complete) {
-   issues.push(`Missing or invalid ${metric} conditions`);
+   issues.push(`Điều kiện ${label} bị thiếu hoặc không hợp lệ`);
    continue;
   }
   const min=Math.max(...sourceProfiles.map(p=>p[`${metric}_min`]));
   const max=Math.min(...sourceProfiles.map(p=>p[`${metric}_max`]));
   common[`${metric}_min`]=min;common[`${metric}_max`]=max;
-  if(min>=max)issues.push(`No shared ${metric} range`);
+  if(min>=max)issues.push(`Không có khoảng ${label} chung`);
   else if((metric==='humidity' && max-min<=2) || (metric==='temperature' && max-min<1))
-   issues.push(`Shared ${metric} range is too narrow for the automatic preset`);
+   issues.push(`Khoảng ${label} chung quá hẹp để áp dụng cấu hình tự động mặc định`);
  }
  return {sourceProfiles,common,issues,warnings};
 }
@@ -37,7 +38,7 @@ function suggest(profiles) {
  const result=summarize(profiles);
  const {common:c,issues}=result;
  const config=issues.length?null:{
-  config_source:'FLOOR',profile_name:'Shared floor profile',profile_approved:false,
+  config_source:'FLOOR',profile_name:'Cấu hình chung cho tầng',profile_approved:false,
   humidity_min:c.humidity_min,humidity_max:c.humidity_max,
   humidity_start_threshold:c.humidity_min,
   humidity_stop_threshold:c.humidity_min+(c.humidity_max-c.humidity_min)/2,
@@ -47,19 +48,19 @@ function suggest(profiles) {
   cooling_humidity_limit:c.humidity_max-1,...preset,
  };
  return {...result,config,warnings:[...result.warnings,
-  'Review pulse duration, cooldown and hourly budgets for the installed equipment before saving and starting.']};
+  'Kiểm tra thời gian mỗi đợt phun, thời gian nghỉ và giới hạn phun sương mỗi giờ phù hợp với thiết bị đã lắp đặt trước khi lưu và khởi động.']};
 }
 function assertCompatible(c,profiles,checkSnapshot=false) {
  const result=summarize(profiles);
  if(result.issues.length)throw new AppError(result.issues.join('; '),409);
  if(checkSnapshot && (!Array.isArray(c.source_profiles)
   || JSON.stringify(result.sourceProfiles)!==JSON.stringify(summarize(c.source_profiles).sourceProfiles)))
-  throw new AppError('Floor cultivation conditions changed; review and save the floor profile again',409);
+  throw new AppError('Điều kiện trồng trọt của tầng đã thay đổi; hãy kiểm tra và lưu lại cấu hình tầng',409);
  const shared=result.common;
  if(c.humidity_min<shared.humidity_min || c.humidity_max>shared.humidity_max
   || c.humidity_start_threshold<shared.humidity_min
   || (c.cooling_enabled && (c.temperature_min<shared.temperature_min || c.temperature_max>shared.temperature_max)))
-  throw new AppError('Configuration must stay inside the shared cultivation conditions',409);
+  throw new AppError('Cấu hình phải nằm trong phạm vi điều kiện trồng trọt chung',409);
  return result.sourceProfiles;
 }
 module.exports={suggest,summarize,assertCompatible};

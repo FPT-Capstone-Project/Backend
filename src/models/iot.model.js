@@ -152,7 +152,7 @@ async function finishCommand(id, status, error = null) {
 }
 async function expireCommands() {
   await (require('./autoMisting.model').currentConnection() || pool).query(`UPDATE iot_device_commands SET status='TIMED_OUT', completed_at=now(),
-    error_message='Publication deadline elapsed; delivery may be unknown'
+    error_message='Đã quá hạn gửi lệnh; có thể chưa xác định được trạng thái chuyển lệnh'
     WHERE status='PENDING' AND expires_at < now()`);
 }
 async function findCommand(id) {

@@ -173,7 +173,7 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    await service.recover();now++;await feedback();await evaluate();
    now+=60001;await fresh();await evaluate();
    assert.equal((await repo.run(1)).status,'RUNNING');
-   assert.equal((await repo.runtime(1)).last_reason,'Hourly safety budget exhausted');
+   assert.equal((await repo.runtime(1)).last_reason,'Đã đạt giới hạn phun sương an toàn trong giờ');
    assert.ok(calls.slice(before).every(action=>action==='OFF'));
   });
 
@@ -189,7 +189,7 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
     now++;await feedback();await evaluate();
     now+=60001;await fresh();await evaluate();
     assert.equal((await repo.run(1)).status,'FAULT');
-    assert.match((await repo.run(1)).stop_reason,/conditions changed/);
+    assert.match((await repo.run(1)).stop_reason,/Điều kiện trồng trọt của tầng đã thay đổi/);
     assert.ok(calls.every(action=>action==='OFF'));
    }finally{repo.profiles=original;}
   });

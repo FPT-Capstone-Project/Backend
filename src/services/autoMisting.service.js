@@ -7,7 +7,7 @@ const {validateConfig,aggregate,decide}=require('./autoMisting.algorithm');
 const {suggest,assertCompatible}=require('./autoMisting.profile');
 
 function positive(value,name='floorId') {
- if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value)<1 || Number(value)>2147483647) throw new AppError(`Invalid ${name}`,400);
+ if (!/^\d+$/.test(String(value)) || !Number.isSafeInteger(Number(value)) || Number(value)<1 || Number(value)>2147483647) throw new AppError(`${name} không hợp lệ`,400);
  return Number(value);
 }
 function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now(), wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
@@ -33,7 +33,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    && age<=c.sensor_max_age_ms && ssr.desired_state!=='ON';
  }
  async function requireLiveOff(f,c) {
-  if(!await hasLiveOff(f,c))throw retryable('Waiting for fresh live SSR OFF feedback','OFF_PENDING');
+  if(!await hasLiveOff(f,c))throw retryable('Đang chờ phản hồi trực tiếp mới xác nhận SSR đã tắt (OFF)','OFF_PENDING');
  }
  async function prepareStartOff(f,c,user,starting=true) {
   const previous=await repo.ssr(f);
@@ -52,12 +52,12 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     && age>=0 && age<=c.sensor_max_age_ms)return;
    if(elapsed<5000)await wait(100);
   }
-  throw new AppError(starting?'Start cancelled: device did not confirm a fresh live SSR OFF within 5 seconds; AUTO was not started':
-   'Pulse cancelled: device did not confirm a fresh live SSR OFF within 5 seconds',504);
+  throw new AppError(starting?'Đã hủy khởi động: thiết bị không gửi phản hồi trực tiếp mới xác nhận SSR đã tắt (OFF) trong 5 giây; chưa bật chế độ tự động (AUTO)':
+   'Đã hủy đợt phun sương: thiết bị không gửi phản hồi trực tiếp mới xác nhận SSR đã tắt (OFF) trong 5 giây',504);
  }
  async function editable(id) {
   const run=await repo.run(id); const rt=await repo.runtime(id);
-  if (run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)) throw new AppError('Stop automation and resolve pending OFF before changing configuration or mapping',409);
+  if (run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)) throw new AppError('Dừng chế độ tự động và hoàn tất xác nhận tắt (OFF) trước khi thay đổi cấu hình hoặc gán thiết bị',409);
  }
  async function env(id,c) {const f=await repo.floor(id);return {masterId:f.master_identifier,nodeId:f.node_address,thresholds:c,...aggregate(await repo.sensors(f),c,now())};}
  async function verifyProfile(id,c) {
@@ -90,11 +90,11 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    const latest=await repo.run(id);
    await repo.runtimeSet(id,{control_state:latest?.status==='RUNNING'?'COOLDOWN':'DISABLED',
     cooldown_until:new Date(now()+c.cooldown_ms),pulse_deadline_at:null,off_requested_at:null,last_error:null});
-   await log(id,run,'OFF_CONFIRMED',run.dry_run?'Simulated OFF': 'Live OFF reported; physical flow unverified');
+   await log(id,run,'OFF_CONFIRMED',run.dry_run?'Đã mô phỏng tắt (OFF)': 'Đã nhận phản hồi trực tiếp báo tắt (OFF); chưa xác minh dòng nước thực tế');
    return;
   }
   if (rt.off_requested_at && now()-new Date(rt.updated_at).getTime()<2000) return;
-  await repo.runtimeSet(id,{control_state:'OFF_PENDING',off_requested_at:rt.off_requested_at || new Date(now()),last_error:'Awaiting live OFF feedback'});
+  await repo.runtimeSet(id,{control_state:'OFF_PENDING',off_requested_at:rt.off_requested_at || new Date(now()),last_error:'Đang chờ phản hồi trực tiếp xác nhận tắt (OFF)'});
   try {
    const result=await command(f.master_identifier,f.misting_ssr_channel,{action:'OFF'},null,{automatic:true,lockHeld:true});
    await log(id,run,'OFF_REQUESTED',reason,{commandId:result.commandId});
@@ -111,7 +111,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    await repo.runtimeSet(id,{run_id:run.id,control_state:'OFF_PENDING',
     cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,off_requested_at:null,
     demand:false,cooling_demand:false,last_evaluated_at:null,last_reason:reason,
-    last_error:'Awaiting live OFF feedback after worker interruption'});
+    last_error:'Đang chờ phản hồi trực tiếp xác nhận tắt (OFF) sau khi tiến trình bị gián đoạn'});
    await log(id,run,'RECOVERY_WAIT',reason);
   });
   await requestOffLocked(f,run,reason);
@@ -138,19 +138,19 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     c.cooling_enabled=c.cooling_enabled ?? false;
     c.source_profiles=null;
     if(c.config_source==='FLOOR') {
-     if(!c.profile_approved || !c.profile_name)throw new AppError('Review and approve a named floor profile before saving',409);
+     if(!c.profile_approved || !c.profile_name)throw new AppError('Kiểm tra, đặt tên và phê duyệt cấu hình tầng trước khi lưu',409);
      c.source_profiles=assertCompatible(c,(await repo.profiles(id)).profiles);
      c.mushroom_type_id=null;
     }
-    return repo.transaction(async()=>{const config=await repo.saveConfig(id,c,user);await log(id,null,'CONFIG_SAVED','Configuration saved; MANUAL remains active');return {config,mode:'MANUAL'};});
+    return repo.transaction(async()=>{const config=await repo.saveConfig(id,c,user);await log(id,null,'CONFIG_SAVED','Đã lưu cấu hình; vẫn duy trì chế độ thủ công (MANUAL)');return {config,mode:'MANUAL'};});
    });
   },
   async map(value,body) {
    const allowed=['room_id','floor_number','floor_name','master_id','node_address','misting_ssr_channel','status'];
-   if (!body || Object.keys(body).some(k=>!allowed.includes(k))) throw new AppError('Unknown mapping field',400);
+   if (!body || Object.keys(body).some(k=>!allowed.includes(k))) throw new AppError('Trường gán thiết bị không được hỗ trợ',400);
    const data={...body,status:body.status || 'ACTIVE'};
    for(const k of ['room_id','floor_number','master_id','node_address','misting_ssr_channel']) data[k]=positive(data[k],k);
-   if(data.node_address>247 || data.misting_ssr_channel>8 || typeof data.floor_name!=='string' || !data.floor_name.trim() || data.floor_name.length>200 || !['ACTIVE','INACTIVE'].includes(data.status)) throw new AppError('Invalid floor mapping',400);
+   if(data.node_address>247 || data.misting_ssr_channel>8 || typeof data.floor_name!=='string' || !data.floor_name.trim() || data.floor_name.length>200 || !['ACTIVE','INACTIVE'].includes(data.status)) throw new AppError('Thông tin gán thiết bị cho tầng không hợp lệ',400);
    const write=async id=>{
     try {
     const keys=allowed;
@@ -168,49 +168,49 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    const id=positive(value),tray=positive(trayValue,'trayId');
    return repo.lockFloor(id,async()=>{await editable(id);const f=await repo.floor(id);
     const found=await repo.one('SELECT * FROM cultivation_trays WHERE tray_id=$1',[tray]);
-    if(!found || found.room_id!==f.room_id)throw new AppError('Tray must exist in this floor room',400);
-    if(found.floor_id && found.floor_id!==id)throw new AppError('Unassign the tray through reviewed database maintenance before moving floors',409);
+    if(!found || found.room_id!==f.room_id)throw new AppError('Khay phải tồn tại trong phòng chứa tầng này',400);
+    if(found.floor_id && found.floor_id!==id)throw new AppError('Cần gỡ liên kết khay bằng quy trình bảo trì cơ sở dữ liệu đã được kiểm tra trước khi chuyển tầng',409);
     return repo.one('UPDATE cultivation_trays SET floor_id=$1 WHERE tray_id=$2 RETURNING *',[id,tray]);
    });
   },
   async start(value,body={},user) {
    const id=positive(value);
-   if(Object.keys(body).some(k=>k!=='dryRun') || (body.dryRun!==undefined && typeof body.dryRun!=='boolean'))throw new AppError('dryRun must be boolean',400);
+   if(Object.keys(body).some(k=>k!=='dryRun') || (body.dryRun!==undefined && typeof body.dryRun!=='boolean'))throw new AppError('dryRun phải là true hoặc false',400);
    const dry=body.dryRun ?? true;
    return repo.lockFloor(id,async()=>{
     const f=await repo.floor(id);
     return repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
      await editable(id);
-     if(!await repo.workerReady())throw new AppError('Automation worker is not ready',503);
-     const c=await repo.config(id);if(!c)throw new AppError('Save configuration first',409);
-     if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Invalid or inactive floor mapping',409);
+     if(!await repo.workerReady())throw new AppError('Tiến trình điều khiển tự động chưa sẵn sàng',503);
+     const c=await repo.config(id);if(!c)throw new AppError('Hãy lưu cấu hình trước',409);
+     if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Thông tin gán thiết bị cho tầng không hợp lệ hoặc tầng không hoạt động',409);
      const cultivation=await repo.profiles(id);
      if(c.config_source==='FLOOR') {
       assertCompatible(c,cultivation.profiles,true);
-      if(!c.profile_approved || !c.profile_name)throw new AppError('Approved named floor profile required',409);
-     } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Mixed profiles or unassigned trays require an explicitly approved named floor profile',409);
+      if(!c.profile_approved || !c.profile_name)throw new AppError('Cần có cấu hình tầng đã đặt tên và được phê duyệt',409);
+     } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Các khay có cấu hình khác nhau hoặc chưa được gán cần có cấu hình tầng đã đặt tên và được phê duyệt rõ ràng',409);
      const e=await env(id,c);if(!e.healthy)throw new AppError(e.reason,409);
      if(!dry) {
-      if(!hardware(f,c))throw new AppError('Real automation disabled: verified device watchdog required',409);
-      if(!online(f))throw new AppError('MQTT or master offline',503);
+      if(!hardware(f,c))throw new AppError('Chưa cho phép điều khiển tự động thiết bị thực: cần xác minh bộ giám sát an toàn (watchdog) của thiết bị',409);
+      if(!online(f))throw new AppError('MQTT hoặc bộ điều khiển trung tâm mất kết nối',503);
       await prepareStartOff(f,c,user);
       // Device feedback may take several seconds; recheck prerequisites before
       // creating a running session.
-      if(!await repo.workerReady())throw new AppError('Automation worker is not ready',503);
-      if(!online(await repo.floor(id)))throw new AppError('MQTT or master offline',503);
+      if(!await repo.workerReady())throw new AppError('Tiến trình điều khiển tự động chưa sẵn sàng',503);
+      if(!online(await repo.floor(id)))throw new AppError('MQTT hoặc bộ điều khiển trung tâm mất kết nối',503);
       const fresh=await env(id,c);if(!fresh.healthy)throw new AppError(fresh.reason,409);
       await verifyProfile(id,c);
      }
      return repo.transaction(async()=>{
      const run=await repo.createRun(id,c,user,dry);
      await repo.runtimeSet(id,{run_id:run.id,control_state:'IDLE',demand:false,cooling_demand:false,last_reason:null,cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,cooldown_until:null,off_requested_at:null,last_error:null,last_evaluated_at:null});
-     await log(id,run,'START',dry?'Operator started dry run':'Operator explicitly started real automation');
+     await log(id,run,'START',dry?'Người vận hành đã bắt đầu chạy mô phỏng':'Người vận hành đã chủ động bật chế độ tự động điều khiển thiết bị thực');
      return {mode:'AUTO',run};
      });
     });
    });
   },
-  async stop(value,user,reason='Operator stop') {
+  async stop(value,user,reason='Người vận hành yêu cầu dừng') {
    const id=positive(value);
    return repo.lockFloor(id,async()=>{
     const f=await repo.floor(id),run=await repo.run(id);
@@ -226,12 +226,12 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    const run=await repo.run(f.floor_id),rt=await repo.runtime(f.floor_id);
    const owned=run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state);
    if(!owned)return;
-   if(action==='ON')throw new AppError('AUTO owns this channel; Stop and resolve OFF before manual ON',409);
+   if(action==='ON')throw new AppError('Chế độ tự động (AUTO) đang quản lý kênh này; hãy dừng và xác nhận tắt (OFF) trước khi bật (ON) thủ công',409);
    const allowed=await repo.one(`SELECT 1 FROM users u JOIN role_permissions rp ON rp.role_id=u.role_id
     JOIN permissions p USING(permission_id) WHERE u.user_id=$1 AND p.permission_name='iot.automation.manage'`,[user]);
-   if(!allowed)throw new AppError('Automation manage permission required for override',403);
-   await stopRecord(f.floor_id,user,'Manual OFF override');
-   await log(f.floor_id,run,'MANUAL_OVERRIDE','Manual OFF stopped automation');
+   if(!allowed)throw new AppError('Cần quyền quản lý tự động hóa để can thiệp điều khiển',403);
+   await stopRecord(f.floor_id,user,'Người vận hành can thiệp bằng lệnh tắt (OFF) thủ công');
+   await log(f.floor_id,run,'MANUAL_OVERRIDE','Lệnh tắt (OFF) thủ công đã dừng chế độ tự động');
   },
   async status(value) {
    const id=positive(value),f=await repo.floor(id),run=await repo.run(id),runtime=await repo.runtime(id);
@@ -243,17 +243,17 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   async logs(value,query={}) {
    const id=positive(value);await repo.floor(id);
    const limit=positive(query.limit??100,'limit'),offset=Number(query.offset??0);
-   if(limit>1000 || !Number.isInteger(offset) || offset<0 || offset>1000000)throw new AppError('Invalid pagination',400);
+   if(limit>1000 || !Number.isInteger(offset) || offset<0 || offset>1000000)throw new AppError('Thông tin phân trang không hợp lệ',400);
    return {limit,offset,logs:await repo.rows('SELECT * FROM iot_auto_control_logs WHERE floor_id=$1 ORDER BY id DESC LIMIT $2 OFFSET $3',[id,limit,offset])};
   },
   async evaluate(value,preview=false,canActuate=()=>true) {
    const id=positive(value);
    return repo.lockFloor(id,async()=>{
     const f=await repo.floor(id),run=await repo.run(id),rt=await repo.runtime(id),c=run?.status==='RUNNING'?run.config_snapshot:await repo.config(id);
-    if(!c)throw new AppError('Save configuration first',409);
+    if(!c)throw new AppError('Hãy lưu cấu hình trước',409);
     if(!preview && run?.status==='RUNNING' && !['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)
      && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)
-     return {action:'NONE',state:rt.control_state,reason:'Evaluation interval'};
+     return {action:'NONE',state:rt.control_state,reason:'Đang chờ đến chu kỳ đánh giá tiếp theo'};
     const e=await env(id,c),budget=await repo.budget(id);
     const reservedOnMs=run?.dry_run?c.misting_pulse_ms:Math.max(c.misting_pulse_ms,watchdog(f));
     const decision=decide({running:run?.status==='RUNNING',config:c,runtime:rt,environment:e,online:run?.dry_run || online(f),
@@ -262,11 +262,11 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      if(run?.status==='RUNNING')await verifyProfile(id,c);
      return {dryRun:true,decision,environment:e};
     }
-    if(rt.control_state==='OFF_PENDING' && run) {await requestOff(f,run,'Reconcile pending OFF');return decision;}
+    if(rt.control_state==='OFF_PENDING' && run) {await requestOff(f,run,'Xác nhận lại lệnh tắt (OFF) đang chờ');return decision;}
     if(run?.status!=='RUNNING')return decision;
     const active=['ON_REQUESTED','MISTING'].includes(rt.control_state);
     try {
-     if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Invalid or inactive floor mapping',409);
+     if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Thông tin gán thiết bị cho tầng không hợp lệ hoặc tầng không hoạt động',409);
      await verifyProfile(id,c);
     } catch(error) {
      await stopRecord(id,null,error.message,'FAULT');
@@ -275,7 +275,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      return {action:active?'OFF':'FAULT',state:active?'OFF_PENDING':'DISABLED',reason:error.message};
     }
     if(!active && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)return decision;
-    if(!run.dry_run && !hardware(f,c)) {await stopRecord(id,null,'Device safety verification missing','FAULT');if(active)await requestOff(f,run,'Safety gate closed');return;}
+    if(!run.dry_run && !hardware(f,c)) {await stopRecord(id,null,'Thiết bị chưa được xác minh an toàn','FAULT');if(active)await requestOff(f,run,'Đã chặn điều khiển thiết bị để bảo đảm an toàn');return;}
     if(['SENSOR_FAULT','DEVICE_OFFLINE'].includes(decision.state)) {
      // A temporary health failure pauses actuation, not the operator's AUTO run.
      if(rt.control_state!==decision.state || rt.last_error!==decision.reason)await log(id,run,'RETRY_WAIT',decision.reason,e);
@@ -291,12 +291,12 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     if(decision.action==='FAULT')return decision;
     if(decision.action==='ON') {
      const reserve=async()=>{
-      if(!canActuate())throw new AppError('Worker no longer owns leadership',409);
+      if(!canActuate())throw new AppError('Tiến trình không còn quyền điều khiển chính',409);
       const current=await repo.run(id);
-      if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped before ON publication',409);
+      if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Phiên chạy đã dừng trước khi gửi lệnh bật (ON)',409);
       const fresh=await env(id,c);
       if(!fresh.healthy)throw retryable(fresh.reason,'SENSOR_FAULT',fresh);
-      if(!run.dry_run && !online(await repo.floor(id)))throw retryable('MQTT or master offline before publication','DEVICE_OFFLINE',fresh);
+      if(!run.dry_run && !online(await repo.floor(id)))throw retryable('MQTT hoặc bộ điều khiển trung tâm mất kết nối trước khi gửi lệnh','DEVICE_OFFLINE',fresh);
       await verifyProfile(id,c);
       const latestDecision=decide({running:true,config:c,runtime:rt,environment:fresh,
        ...budget,duration:budget.duration+reservedOnMs-c.misting_pulse_ms,now:now()});
@@ -323,7 +323,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
        // nesting OFF inside its beforePublish hook would conflict with activeChannels.
        await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
         const current=await repo.run(id);
-        if(!canActuate() || current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Run stopped or worker leadership lost before OFF refresh',409);
+        if(!canActuate() || current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Phiên chạy đã dừng hoặc tiến trình mất quyền điều khiển chính trước khi xác nhận lại trạng thái tắt (OFF)',409);
         if(!await hasLiveOff(f,c)) {
          try {await prepareStartOff(f,c,null,false);}
          catch(error) {
@@ -337,12 +337,12 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       }
       if(run.dry_run)await repo.lockChannel(f.master_id,f.misting_ssr_channel,reserve);
       else result=await command(f.master_identifier,f.misting_ssr_channel,{action:'ON'},null,{automatic:true,beforePublish:reserve,
-       authorizePublish:()=>{if(!canActuate())throw new AppError('Worker leadership lost before publication',409);},
+       authorizePublish:()=>{if(!canActuate())throw new AppError('Tiến trình mất quyền điều khiển chính trước khi gửi lệnh',409);},
        maxPublishMs:Math.min(5000,c.misting_pulse_ms)});
       await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
        if((await repo.run(id))?.status==='RUNNING')await repo.runtimeSet(id,{control_state:'MISTING',last_error:null});
       });
-      await log(id,run,'ON_REQUESTED',run.dry_run?'Simulated pulse; no MQTT publication':'ON published; physical valve unverified',{commandId:result?.commandId});
+      await log(id,run,'ON_REQUESTED',run.dry_run?'Đã mô phỏng đợt phun sương; không gửi lệnh MQTT':'Đã gửi lệnh bật (ON); chưa xác minh trạng thái van thực tế',{commandId:result?.commandId});
      } catch(error) {
       if(!canActuate()) {
        // Shutdown or loss of leadership can interrupt ON preparation/publication.
@@ -350,9 +350,9 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
        await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
         const current=await repo.run(id);
         if(current?.id===run.id && current.status==='RUNNING')
-         await reconcileInterruption(f,current,'Worker interrupted during ON attempt');
+         await reconcileInterruption(f,current,'Tiến trình bị gián đoạn khi thực hiện lệnh bật (ON)');
        });
-       return {action:'OFF',state:(await repo.runtime(id)).control_state,reason:'Worker interrupted during ON attempt'};
+       return {action:'OFF',state:(await repo.runtime(id)).control_state,reason:'Tiến trình bị gián đoạn khi thực hiện lệnh bật (ON)'};
       }
       const current=await repo.run(id),latest=await repo.runtime(id);
       if(current?.id===run.id && current.status==='RUNNING' && canActuate()
@@ -370,7 +370,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       }
       const needsOff=await stopRecord(id,null,error.message,'FAULT');
       await log(id,run,'FAULT',error.message);
-      if(needsOff)await requestOff(f,run,'ON attempt failed or prerequisites changed');
+      if(needsOff)await requestOff(f,run,'Thực hiện lệnh bật (ON) thất bại hoặc các điều kiện cần thiết đã thay đổi');
      }
     } else if(rt.control_state!==decision.state || rt.demand!==decision.demand
      || rt.cooling_demand!==decision.coolingDemand || rt.last_reason!==decision.reason) {
@@ -385,7 +385,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     return decision;
    });
   },
-  async recover(reason='Worker restart or leadership transfer') {
+  async recover(reason='Tiến trình khởi động lại hoặc chuyển giao quyền điều khiển chính') {
    for(const {floor_id:id} of await repo.candidates())await repo.lockFloor(id,async()=>{
     const f=await repo.floor(id);
     await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{

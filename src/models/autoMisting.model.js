@@ -25,7 +25,7 @@ function createRepository(db = pool) {
  const api = {
   rows, one,
   currentConnection:()=>context.getStore(),
-  assertLockHealthy:()=>{if(context.getStore() && failedClients.has(context.getStore()))throw new AppError('Database lock connection lost',503);},
+  assertLockHealthy:()=>{if(context.getStore() && failedClients.has(context.getStore()))throw new AppError('Mất kết nối cơ sở dữ liệu đang giữ khóa',503);},
   async transaction(work) {
    const existing=context.getStore();
    const client=existing || (db.connect?await db.connect():db);
@@ -43,7 +43,7 @@ function createRepository(db = pool) {
   async floor(id) {
    const f=await one(`SELECT f.*,m.master_identifier,m.reported_status,m.last_seen_at,m.cultivation_room_id
     FROM cultivation_floors f JOIN iot_masters m ON m.id=f.master_id WHERE floor_id=$1`,[id]);
-   if (!f) throw new AppError('Cultivation floor not found',404);
+   if (!f) throw new AppError('Không tìm thấy tầng trồng',404);
    return f;
   },
   list:()=>rows('SELECT * FROM cultivation_floors ORDER BY room_id,floor_number'),

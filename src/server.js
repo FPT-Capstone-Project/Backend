@@ -14,17 +14,17 @@ const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const payosPaymentExpiryInterval = setInterval(() => {
   paymentModel.expireStalePayosPayments(env.payosPaymentExpireMinutes)
-    .catch((error) => console.error('PayOS payment expiry failed:', error));
+    .catch((error) => console.error('Không thể xử lý thanh toán PayOS hết hạn:', error));
 }, 60_000);
 payosPaymentExpiryInterval.unref();
 
 const server = app.listen(env.port, () => {
   console.log(`
 =================================
-Server running on port ${env.port}
-Base URL: ${baseUrl}
+Máy chủ đang chạy trên cổng ${env.port}
+Địa chỉ gốc: ${baseUrl}
 Swagger: ${baseUrl}/api-docs
-Health: ${baseUrl}/health
+Kiểm tra hoạt động: ${baseUrl}/health
 =================================
   `);
 });
@@ -33,7 +33,7 @@ let shuttingDown = false;
 async function shutdown(signal) {
   if (shuttingDown) return;
   shuttingDown = true;
-  console.log(`${signal} received. Closing server...`);
+  console.log(`Đã nhận tín hiệu ${signal}. Đang đóng máy chủ...`);
   clearInterval(payosPaymentExpiryInterval);
   const deadline = setTimeout(() => process.exit(1), 10000);
   deadline.unref();
@@ -47,7 +47,7 @@ async function shutdown(signal) {
     clearTimeout(deadline);
     process.exitCode = 0;
   } catch {
-    console.error('Server shutdown failed');
+    console.error('Không thể tắt máy chủ');
     process.exit(1);
   }
 }

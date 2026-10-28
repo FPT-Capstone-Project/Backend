@@ -27,7 +27,7 @@ function add(path,method,summary,schema,description='') {
   [method==='post' && (path.endsWith('/start') || path.endsWith('/floors'))?'201':'200']:{description:'Result in {data: ...}. State includes mode, run, runtime, environment, ssr, cooldownRemainingMs and lastDecision.',content:{'application/json':{schema:{type:'object',properties:{data:{type:'object'}}}}}},
   400:{description:'Invalid fields, thresholds, ranges or pagination'},401:{description:'JWT missing or invalid'},403:{description:'Missing automation permission'},
   404:{description:'Floor not found'},409:{description:'Active run, unresolved OFF, invalid mapping, unhealthy sensors, unapproved profiles or hardware safety gate closed'},503:{description:'MQTT unavailable; OFF remains pending and is retried'}}};
- if(path.endsWith('/start'))operation.responses[504]={description:'OFF publication timed out or no new live OFF feedback within 5 seconds after publication; AUTO was not started'};
+ if(path.endsWith('/start'))operation.responses[504]={description:'OFF hết thời gian gửi lệnh or no new live OFF feedback within 5 seconds after publication; AUTO was not started'};
  for(const name of ['floorId','trayId'])if(path.includes(`{${name}}`))operation.parameters.push({name,in:'path',required:true,schema:{type:'integer',minimum:1}});
  if(path.endsWith('/logs'))for(const [name,max] of [['limit',1000],['offset',1000000]])operation.parameters.push({name,in:'query',schema:{type:'integer',minimum:name==='limit'?1:0,maximum:max}});
  if(schema)operation.requestBody={required:true,content:{'application/json':{schema,...(schema===config?{example}:{})}}};
@@ -42,8 +42,8 @@ function add(path,method,summary,schema,description='') {
  }else if(path.endsWith('/floors') && method==='get')content.schema.properties.data={type:'array',items:mapping};
  else if(path.endsWith('/start'))content.example={data:{mode:'AUTO',run:{id:1,status:'RUNNING',dry_run:true,started_by:1}}};
  else if(path.endsWith('/auto-control'))content.example={data:{mode:'MANUAL',config:example}};
- else if(path.endsWith('/evaluate'))content.example={data:{dryRun:true,decision:{action:'NONE',state:'DISABLED',reason:'MANUAL mode'}}};
- else if(path.endsWith('/logs'))content.example={data:{limit:100,offset:0,logs:[{event_type:'CONFIG_SAVED',reason:'Configuration saved; MANUAL remains active'}]}};
+ else if(path.endsWith('/evaluate'))content.example={data:{dryRun:true,decision:{action:'NONE',state:'DISABLED',reason:'Chế độ thủ công (MANUAL)'}}};
+ else if(path.endsWith('/logs'))content.example={data:{limit:100,offset:0,logs:[{event_type:'CONFIG_SAVED',reason:'Đã lưu cấu hình; vẫn duy trì chế độ thủ công (MANUAL)'}]}};
  paths[path]={...paths[path],[method]:operation};
 }
 const base='/api/iot/floors',floor=base+'/{floorId}',auto=floor+'/auto-control';
