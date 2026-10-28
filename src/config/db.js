@@ -14,7 +14,7 @@ const pool = new Pool(
 );
 
 pool.on('error', (error) => {
-  console.error('Unexpected PostgreSQL pool error:', error);
+  console.error('Lỗi không mong đợi trong nhóm kết nối PostgreSQL:', error);
 });
 
 module.exports = pool;

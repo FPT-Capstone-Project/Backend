@@ -30,7 +30,7 @@ app.use((error, req, res, next) => {
     });
   }
 
-  if (statusCode >= 500) console.error(error);
+  if (statusCode >= 500) console.error('Lỗi xử lý yêu cầu trên máy chủ:', error);
   res.status(statusCode).json({
     message: error.isOperational ? error.message : 'Internal server error',
   });

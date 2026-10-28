@@ -32,7 +32,17 @@ function toExpiryMinutes(value) {
 }
 
 function warnUnprocessedPayosPayment(orderCode, paidAmount, reason, details = {}) {
-  console.warn('PayOS payment was not processed', {
+  const reasons = {
+    invalid_order_code: 'mã đơn hàng không hợp lệ',
+    payment_not_found: 'không tìm thấy thanh toán',
+    order_not_found: 'không tìm thấy đơn hàng',
+    invalid_paid_amount: 'số tiền đã thanh toán không hợp lệ',
+    insufficient_paid_amount: 'số tiền đã thanh toán chưa đủ',
+    payment_not_payable: 'thanh toán không ở trạng thái có thể xử lý',
+    order_not_payable: 'đơn hàng không ở trạng thái có thể thanh toán',
+    payment_update_conflict: 'xung đột khi cập nhật thanh toán',
+  };
+  console.warn(`Thanh toán PayOS chưa được xử lý: ${reasons[reason] || 'chưa xác định nguyên nhân'}`, {
     orderCode,
     paidAmount,
     reason,
@@ -283,7 +293,7 @@ async function markPayosPaymentAsPaid(orderCode, paidAmount, reference) {
     }
 
     if (order.status === 'CANCELLED') {
-      console.warn('PayOS money received for cancelled order', { orderCode, paidAmount: receivedAmount });
+      console.warn('Đã nhận tiền PayOS cho đơn hàng đã hủy', { orderCode, paidAmount: receivedAmount });
       await client.query('COMMIT');
       return paidPayment;
     }
@@ -311,7 +321,7 @@ async function markPayosPaymentAsPaid(orderCode, paidAmount, reference) {
 
     await client.query('COMMIT');
     if (receivedAmount > expectedAmount) {
-      console.warn('PayOS payment received an overpayment', {
+      console.warn('Số tiền thanh toán PayOS nhận được vượt quá số tiền cần thanh toán', {
         orderCode,
         paidAmount: receivedAmount,
         expectedAmount,

@@ -122,13 +122,13 @@ test('heartbeat failure persists its cause and identifies recovery in the same w
   {info:(message,details)=>events.push(details),error:(...args)=>errors.push(args)});
  await w.tick();fail=true;await w.tick();await w.tick();
  assert.deepEqual(reasons,[
-  'Worker initial leadership acquisition (startup or takeover)',
-  'Worker leadership reacquired after heartbeat update (57014)',
+  'Tiến trình lần đầu nhận quyền điều khiển chính (khởi động hoặc tiếp quản)',
+  'Tiến trình đã nhận lại quyền điều khiển chính sau sự cố tại bước cập nhật tín hiệu hoạt động (57014)',
  ]);
  assert.equal(events[0].workerId,events[1].workerId);
  assert.equal(events[0].pid,process.pid);
  assert.ok(events[1].uptimeSeconds>=events[0].uptimeSeconds);
- assert.equal(errors[0][2].stage,'heartbeat update');
+ assert.equal(errors[0][2].stage,'cập nhật tín hiệu hoạt động');
  assert.equal(errors[0][2].workerId,events[0].workerId);
  await w.stop();
 });
@@ -145,7 +145,7 @@ test('session error cause survives the next health check and failed acquisition'
  await w.tick();
  clients[0].emit('error',Object.assign(new Error('connection reset'),{code:'ECONNRESET'}));
  await w.tick();failAcquisition=true;await w.tick();await w.tick();
- assert.equal(reasons[1],'Worker leadership reacquired after database session error (ECONNRESET)');
+ assert.equal(reasons[1],'Tiến trình đã nhận lại quyền điều khiển chính sau sự cố tại bước lỗi phiên kết nối cơ sở dữ liệu (ECONNRESET)');
  // Late events from the discarded session must not affect the replacement.
  clients[0].emit('error',new Error('late error'));clients[0].emit('end');
  await w.tick();await w.tick();assert.equal(reasons.length,2);
@@ -163,7 +163,7 @@ test('session end closes the actuation gate and records a session closure',async
  await w.tick();assert.equal(guard(),true);
  client.emit('end');assert.equal(guard(),false);
  await w.tick();await w.tick();
- assert.equal(reasons[1],'Worker leadership reacquired after database session closed');
+ assert.equal(reasons[1],'Tiến trình đã nhận lại quyền điều khiển chính sau sự cố tại bước phiên kết nối cơ sở dữ liệu đã đóng');
  await w.stop();
 });
 

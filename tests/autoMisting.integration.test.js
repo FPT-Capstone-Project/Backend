@@ -92,9 +92,9 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await assert.rejects(()=>service.start(id,{dryRun:false},null),/watchdog/);
    const start=await service.start(id,{},null);assert.equal(start.mode,'AUTO');assert.equal(start.run.dry_run,true);
    assert.equal(start.run.config_snapshot.humidity_min,85);
-   await assert.rejects(()=>service.start(id,{},null),/Stop/);
-   await assert.rejects(()=>service.save(id,config,null),/Stop/);
-   await assert.rejects(()=>service.map(id,{room_id:1,floor_number:1,floor_name:'Edit',master_id:1,node_address:1,misting_ssr_channel:1}),/Stop/);
+   await assert.rejects(()=>service.start(id,{},null),/Dừng chế độ tự động/);
+   await assert.rejects(()=>service.save(id,config,null),/Dừng chế độ tự động/);
+   await assert.rejects(()=>service.map(id,{room_id:1,floor_number:1,floor_name:'Edit',master_id:1,node_address:1,misting_ssr_channel:1}),/Dừng chế độ tự động/);
   });
   await t.test('Floor 1 AUTO, Floor 2 MANUAL; preview has no writes; concurrent evaluations reserve one pulse',async()=>{
    const before=(await repo.rows('SELECT * FROM iot_auto_control_logs')).length;
@@ -132,7 +132,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    const previous=(await repo.run(id)).id;
    for(const feedback of ['none','retained']) {
     await fresh();startFeedback=feedback;
-    await assert.rejects(()=>service.start(id,{dryRun:false},null),error=>error.statusCode===504 && /AUTO was not started/.test(error.message));
+    await assert.rejects(()=>service.start(id,{dryRun:false},null),error=>error.statusCode===504 && /chưa bật chế độ tự động/.test(error.message));
     assert.equal(calls.at(-1).action,'OFF');
     assert.equal((await repo.run(id)).id,previous);
     assert.equal((await service.status(id)).mode,'MANUAL');
@@ -151,8 +151,8 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    assert.equal(calls.at(-1).action,'ON');
    now+=5000;await fresh();await service.evaluate(id);assert.equal(calls.at(-1).action,'OFF');
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
-   await assert.rejects(()=>service.manual(1,1,'ON',null),/AUTO owns/);
-   await assert.rejects(()=>service.manual(1,1,'OFF',null),/permission/);
+   await assert.rejects(()=>service.manual(1,1,'ON',null),/đang quản lý kênh này/);
+   await assert.rejects(()=>service.manual(1,1,'OFF',null),/quyền quản lý tự động hóa/);
    now+=17000;await db.query("UPDATE iot_ssr_states SET reported_state='ON',state_reported_at=$1",[new Date(now)]);
    await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    now+=3000;await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
@@ -196,7 +196,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.evaluate(id);
    assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
    assert.equal((await repo.run(id)).status,'RUNNING');
-   assert.match((await repo.runtime(id)).last_error,/stale/);
+   assert.match((await repo.runtime(id)).last_error,/quá cũ/);
    await service.stop(id,null);
   });
   await t.test('temporary sensor and connection failures wait and recover in the same AUTO run',async()=>{
@@ -235,14 +235,14 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
   });
   await t.test('stale sensors and disconnected MQTT prevent real Start',async()=>{
-   now+=30000;await assert.rejects(()=>service.start(id,{dryRun:false},null),/stale/);
-   await fresh();connected=false;await assert.rejects(()=>service.start(id,{dryRun:false},null),/offline/);connected=true;
+   now+=30000;await assert.rejects(()=>service.start(id,{dryRun:false},null),/quá cũ/);
+   await fresh();connected=false;await assert.rejects(()=>service.start(id,{dryRun:false},null),/mất kết nối/);connected=true;
   });
   await t.test('retained and invalid sensor samples block dry Start too',async()=>{
    await db.exec('UPDATE iot_sensor_latest SET retained=true WHERE node_address=1 AND sensor_address=1');
-   await assert.rejects(()=>service.start(id,{},null),/retained/);
+   await assert.rejects(()=>service.start(id,{},null),/bản tin lưu giữ/);
    await db.exec('UPDATE iot_sensor_latest SET retained=false,is_valid=false WHERE node_address=1 AND sensor_address=1');
-   await assert.rejects(()=>service.start(id,{},null),/invalid/);
+   await assert.rejects(()=>service.start(id,{},null),/không hợp lệ/);
   });
   await t.test('authorized manual OFF wins a race immediately before ON reservation',async()=>{
    await db.exec('UPDATE iot_sensor_latest SET is_valid=true,retained=false');await fresh();
@@ -261,7 +261,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    failOn=true;failOff=true;await service.evaluate(id);failOn=false;
    assert.equal((await repo.run(id)).status,'FAULT');assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    assert.match((await repo.runtime(id)).last_error,/publication failed/);
-   await assert.rejects(()=>service.start(id,{dryRun:false},1),/resolve pending OFF/);
+   await assert.rejects(()=>service.start(id,{dryRun:false},1),/hoàn tất xác nhận tắt/);
    const onCount=calls.filter(c=>c.action==='ON').length;
    failOff=false;now+=3000;await service.recover();
    assert.equal(calls.filter(c=>c.action==='ON').length,onCount);assert.equal(calls.at(-1).action,'OFF');
@@ -279,7 +279,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
   });
   await t.test('unassigned trays require an explicitly named approved floor profile',async()=>{
    await db.exec("UPDATE iot_sensor_latest SET is_valid=true; INSERT INTO cultivation_trays(room_id,tray_code) VALUES(1,'T2')");await fresh();
-   await assert.rejects(()=>service.start(id,{},1),/approved named floor profile/);
+   await assert.rejects(()=>service.start(id,{},1),/cấu hình tầng đã đặt tên và được phê duyệt/);
    await service.save(id,{...config,profile_name:'Operator approved mixed floor',profile_approved:true},1);
    await service.start(id,{},1);await service.stop(id,1);
    const saved=await repo.config(id);assert.equal(saved.configured_by,1);
@@ -316,7 +316,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     const suggestion=await service.suggestions(id);
     assert.equal(suggestion.common.humidity_min,88);
     assert.equal(suggestion.common.temperature_max,28);
-    await assert.rejects(()=>service.save(id,suggestion.config,1),/approve/);
+    await assert.rejects(()=>service.save(id,suggestion.config,1),/phê duyệt/);
     await service.save(id,{...suggestion.config,profile_approved:true},1);
     const saved=await repo.config(id);
     assert.equal(saved.mushroom_type_id,null);assert.equal(saved.source_profiles.length,2);
@@ -335,7 +335,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);
     await service.evaluate(id);await service.stop(id,1);
     await db.exec('UPDATE mushroom_conditions SET temperature_max=27 WHERE mushroom_type_id=2');
-    await assert.rejects(()=>service.start(id,{},1),/changed/);
+    await assert.rejects(()=>service.start(id,{},1),/đã thay đổi/);
     const revised=await service.suggestions(id);
     await service.save(id,{...revised.config,profile_approved:true},1);
     await db.exec('UPDATE iot_sensor_latest SET humidity=93');
@@ -343,7 +343,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     await service.evaluate(id);
     assert.equal((await repo.runtime(id)).control_state,'MISTING');
     await db.exec('UPDATE mushroom_conditions SET humidity_min=89 WHERE mushroom_type_id=2');
-    await assert.rejects(()=>service.evaluate(id,true),/changed/);
+    await assert.rejects(()=>service.evaluate(id,true),/đã thay đổi/);
     assert.equal((await repo.run(id)).status,'RUNNING');
     await service.evaluate(id);
     assert.equal((await repo.run(id)).status,'FAULT');
@@ -364,7 +364,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
     await db.exec("UPDATE rentals SET status='CANCELLED' WHERE rental_id=1");
     assert.equal((await service.suggestions(id)).config,null);
-    await assert.rejects(()=>service.start(id,{},1),/No ACTIVE cultivation/);
+    await assert.rejects(()=>service.start(id,{},1),/không có phiên trồng đang hoạt động/);
   });
  }finally{
   for(const [key,value] of [['AUTO_MISTING_REAL_ENABLED',previousEnabled],['AUTO_MISTING_VERIFIED_WATCHDOGS',previousWatchdogs]])

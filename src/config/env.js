@@ -49,7 +49,7 @@ const env = {
 };
 
 if (env.nodeEnv === 'production' && env.jwtSecret === 'change-this-development-secret') {
-  throw new Error('JWT_SECRET must be set in production');
+  throw new Error('Phải cấu hình JWT_SECRET khi chạy trong môi trường triển khai thực tế');
 }
 
 module.exports = env;

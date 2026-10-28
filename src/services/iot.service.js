@@ -110,8 +110,8 @@ function createIotService(repository = model, publisher = mqtt, { now = () => pe
         }
         catch (error) {
           await repository.finishCommand(record.commandId, error.statusCode === 504 ? 'TIMED_OUT' : 'FAILED',
-            error.statusCode === 504 ? 'Publication timed out; delivery unknown' : 'Publication failed; delivery may be unknown');
-          throw new AppError(`Command ${record.commandId}: ${error.statusCode === 504 ? 'publication timed out' : 'MQTT publication failed'}`, error.statusCode === 504 ? 504 : 503);
+            error.statusCode === 504 ? 'Hết thời gian gửi lệnh; chưa xác định lệnh đã được chuyển đến thiết bị hay chưa' : 'Gửi lệnh thất bại; có thể chưa xác định được trạng thái chuyển lệnh');
+          throw new AppError(`Lệnh ${record.commandId}: ${error.statusCode === 504 ? 'hết thời gian gửi lệnh' : 'gửi lệnh MQTT thất bại'}`, error.statusCode === 504 ? 504 : 503);
         }
         await repository.finishCommand(record.commandId, 'PUBLISHED');
         return repository.findCommand(record.commandId);

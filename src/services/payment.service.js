@@ -109,7 +109,11 @@ async function getPayosPaymentStatus(userId, orderId) {
 
 function warnIgnoredPayosWebhook(payload, reason) {
   const data = payload && payload.data && typeof payload.data === 'object' ? payload.data : {};
-  console.warn('PayOS webhook ignored', {
+  const reasons = {
+    invalid_signature: 'chữ ký không hợp lệ',
+    invalid_order_code: 'mã đơn hàng không hợp lệ',
+  };
+  console.warn(`Đã bỏ qua webhook PayOS: ${reasons[reason] || 'chưa xác định nguyên nhân'}`, {
     orderCode: data.orderCode ?? null,
     amount: data.amount ?? null,
     code: payload && payload.code ? payload.code : null,
