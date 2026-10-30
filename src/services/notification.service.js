@@ -3,7 +3,7 @@ const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 
 const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'];
-const NOTIFIABLE_RENTAL_STATUSES = ['CONFIRMED', 'PREPARING', 'ACTIVE'];
+const NOTIFIABLE_SESSION_STATUSES = ['PLANNED', 'ACTIVE'];
 const DEFAULT_NOTIFICATION_TITLE = 'Thông báo từ SmartMush Farm';
 
 function parseId(value, fieldName) {
@@ -46,24 +46,24 @@ function parseIsRead(value) {
   throw new AppError('isRead must be true or false', 400);
 }
 
-async function sendRentalNotification(rentalId, payload = {}, createdBy) {
+async function sendCultivationSessionNotification(sessionId, payload = {}, createdBy) {
   const body = payload && typeof payload === 'object' ? payload : {};
-  const id = parseId(rentalId, 'rentalId');
+  const id = parseId(sessionId, 'sessionId');
   const message = normalizeMessage(body.message);
   const title = normalizeTitle(body.title);
   const type = normalizeType(body.type);
   const operatorId = parseId(createdBy, 'createdBy');
-  const recipient = await notificationModel.findRentalRecipient(id);
-  if (!recipient) throw new AppError('Rental not found', 404);
-  if (!NOTIFIABLE_RENTAL_STATUSES.includes(recipient.status)) {
-    throw new AppError('Cannot send notifications for a COMPLETED or CANCELLED rental', 409);
+  const recipient = await notificationModel.findSessionRecipient(id);
+  if (!recipient) throw new AppError('Cultivation session not found', 404);
+  if (!NOTIFIABLE_SESSION_STATUSES.includes(recipient.status)) {
+    throw new AppError('Cannot send notifications for a completed or cancelled session', 409);
   }
   if (recipient.user_status !== 'ACTIVE') {
     throw new AppError('Recipient account is not active', 409);
   }
 
-  const notification = await notificationModel.createForRental({
-    rentalId: id,
+  const notification = await notificationModel.createForSession({
+    sessionId: id,
     userId: recipient.user_id,
     message,
     title,
@@ -108,7 +108,7 @@ async function markAllNotificationsAsRead(userId) {
 }
 
 module.exports = {
-  sendRentalNotification,
+  sendCultivationSessionNotification,
   getNotifications,
   markNotificationAsRead,
   markAllNotificationsAsRead,

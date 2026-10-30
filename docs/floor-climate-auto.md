@@ -17,13 +17,10 @@ Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
    `PUT /api/iot/floors/:floorId`. Gán đúng `master_id` (ID database),
    `node_address`, `misting_ssr_channel`. Không suy ra kênh van từ số tầng.
 2. Gán các khay cùng phòng bằng `PUT /api/iot/floors/:floorId/trays/:trayId`.
-3. Dùng API rentals hiện có:
-   `POST /api/rentals/admin/:rentalId/cultivation-session` với `{"trayId":123}`.
-   API tự lấy loại nấm từ đơn đã thanh toán, tạo phiên ACTIVE, gán khay cho rental,
-   bắt đầu thời hạn thuê và chuyển khay sang OCCUPIED.
-   AUTO không tạo phiên trồng và không yêu cầu chọn lại loại nấm.
-   Endpoint cũ `PUT /api/iot/floors/:floorId/trays/:trayId/cultivation` đã bỏ;
-   mobile dùng API rentals ở trên.
+3. Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm, gói và số khay.
+   Sau khi PayOS xác nhận thanh toán, backend tạo session ACTIVE theo order item,
+   gắn từng khay qua `cultivation_session_trays`, và chuyển khay sang OCCUPIED.
+   Farm Operator không cần tạo session hoặc chọn lại loại nấm thủ công.
 4. Gọi `GET /api/iot/floors/:floorId/auto-control/suggestions`.
 5. Hiển thị `common`, `sourceProfiles`, `warnings`. Nếu `config=null`,
    hiển thị `issues` và chưa cho lưu gợi ý. Nếu có config, dùng nó để điền form.
@@ -34,6 +31,11 @@ Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
    hoặc `{"dryRun":false}` khi muốn chạy thiết bị thật.
 8. Theo dõi `GET .../auto-control/status` và `GET .../auto-control/logs`.
 
+Farm Operator ghi nhận kiểm tra mỗi khay tại
+`POST /api/cultivation-sessions/admin/session-trays/:sessionTrayId/inspections`;
+mỗi lần kiểm tra lưu `cultivation_inspections` và cập nhật lịch sử
+`cultivation_progress` của session.
+
 `GET .../auto-control` cũng có `floorSuggestion` cùng định dạng để hỗ trợ màn hình
 cấu hình hiện tại. `suggestions` cũ vẫn được giữ cho client dùng cấu hình LEGACY.
 `cultivation.trays` liệt kê khay đã gán và phiên/loại nấm hiện tại.
@@ -42,11 +44,11 @@ Không tự đổi ngưỡng hoặc tự Start khi người dùng chọn loại 
 ## Dữ liệu chung và preset
 
 Nguồn là các loại nấm DISTINCT của phiên `ACTIVE` trên các khay có `floor_id`
-tương ứng. Phiên phải thuộc rental `ACTIVE` với cùng `tray_id`.
-Phiên PLANNED/COMPLETED/CANCELLED, rental đã kết thúc/hủy, hoặc liên kết khay
-không khớp không tham gia. Khay OCCUPIED nhưng không có phiên hợp lệ không tự
+tương ứng thông qua liên kết ACTIVE trong `cultivation_session_trays`.
+Phiên PLANNED/COMPLETED/CANCELLED hoặc liên kết khay không khớp không tham gia.
+Khay OCCUPIED nhưng không có phiên hợp lệ không tự
 đóng góp loại nấm. Không có phiên hợp lệ thì không sinh cấu hình gợi ý.
-Thời hạn thuê chỉ là kế hoạch; AUTO dùng trạng thái phiên/rental để xác định
+Thời hạn gói chỉ là kế hoạch; AUTO dùng trạng thái phiên và khay được gán để xác định
 đang trồng, không tự ngừng chăm sóc chỉ vì qua ngày dự kiến.
 Khay chưa gán ở nơi khác trong phòng không ảnh hưởng profile FLOOR.
 

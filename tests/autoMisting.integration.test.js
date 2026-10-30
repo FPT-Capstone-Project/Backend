@@ -17,8 +17,6 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
  const repo=createRepository(db);
  const dbPath=require.resolve('../src/config/db'),originalDb=require.cache[dbPath];
  require.cache[dbPath]={exports:{query:(...args)=>db.query(...args),connect:async()=>({query:(...args)=>db.query(...args),release(){}})}};
- delete require.cache[require.resolve('../src/models/rental.model')];
- const rentals=require('../src/models/rental.model');
  require.cache[dbPath]=originalDb;
  // PGlite runs one session. Emulate separate-process mutex ordering here;
  // production uses PostgreSQL session advisory locks tested separately below.
@@ -292,27 +290,24 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
      INSERT INTO mushroom_conditions(mushroom_type_id,temperature_min,temperature_max,humidity_min,humidity_max)
       VALUES(1,24,28,85,95),(2,25,29,88,96);
      INSERT INTO rental_packages(package_name,duration_days,price) VALUES('Test package',30,1);
-     INSERT INTO orders(user_id,status,payment_status) VALUES(1,'CONFIRMED','PAID'),(1,'CONFIRMED','PAID');
+     INSERT INTO orders(user_id,status,payment_status) VALUES(1,'PROCESSING','PAID'),(1,'PROCESSING','PAID');
      INSERT INTO order_items(order_id,item_type,rental_package_id,mushroom_type_id,unit_price,total_price)
-      VALUES(1,'RENTAL',1,1,1,1),(2,'RENTAL',1,2,1,1);
-     INSERT INTO rentals(user_id,order_id,duration_days) VALUES(1,1,30),(1,2,30);
+      VALUES(1,'CULTIVATION',1,1,1,1),(2,'CULTIVATION',1,2,1,1);
+     INSERT INTO cultivation_sessions(mushroom_type_id,start_at,duration_days,status,order_item_id)
+      VALUES(1,CURRENT_TIMESTAMP,30,'ACTIVE',1),(2,CURRENT_TIMESTAMP,30,'ACTIVE',2);
+     INSERT INTO cultivation_session_trays(session_id,tray_id,status)
+      VALUES(1,1,'ACTIVE'),(2,2,'ACTIVE');
+     UPDATE cultivation_trays SET status='OCCUPIED' WHERE tray_id IN (1,2);
     `);
-    await assert.rejects(()=>rentals.startCultivationForAdmin(2,2),/floor/);
     await service.assignTray(id,2);
-    await rentals.startCultivationForAdmin(1,1);
-    await rentals.startCultivationForAdmin(2,2);
     assert.equal((await repo.rows('SELECT * FROM cultivation_sessions')).length,2);
     const cultivation=(await service.configuration(id)).cultivation;
     assert.equal(cultivation.trays.length,2);
-    assert.equal(cultivation.trays[0].rental_id,1);
+    assert.equal(cultivation.trays[0].session_tray_id,1);
     assert.equal(cultivation.trays[1].mushroom_name,'Second mushroom');
-    await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE tray_id=2");
+    await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE session_id=2");
     assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
-    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE tray_id=2; UPDATE rentals SET status='COMPLETED' WHERE rental_id=2");
-    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
-    await db.exec("UPDATE rentals SET status='ACTIVE',tray_id=1 WHERE rental_id=2");
-    assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
-    await db.exec('UPDATE rentals SET tray_id=2 WHERE rental_id=2');
+    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE session_id=2");
     const suggestion=await service.suggestions(id);
     assert.equal(suggestion.common.humidity_min,88);
     assert.equal(suggestion.common.temperature_max,28);
@@ -355,14 +350,12 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     await service.save(id,{...currentSuggestion.config,profile_approved:true},1);
     await fresh();await service.start(id,{},1);await service.evaluate(id);
     assert.equal((await repo.runtime(id)).control_state,'MISTING');
-    // The rental lifecycle may finish before the session row is updated.
-    // AUTO must notice the changed effective floor profile and stop the pulse.
-    await db.exec("UPDATE rentals SET status='COMPLETED' WHERE rental_id=2");
+    await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE session_id=2");
     await service.evaluate(id);
     assert.equal((await repo.run(id)).status,'FAULT');
     assert.equal((await repo.runtime(id)).control_state,'DISABLED');
     assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
-    await db.exec("UPDATE rentals SET status='CANCELLED' WHERE rental_id=1");
+    await db.exec("UPDATE cultivation_sessions SET status='CANCELLED' WHERE session_id=1");
     assert.equal((await service.suggestions(id)).config,null);
     await assert.rejects(()=>service.start(id,{},1),/không có phiên trồng đang hoạt động/);
   });

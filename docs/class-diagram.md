@@ -84,19 +84,19 @@ classDiagram
         <<module>>
         +list()
         +getById()
-        +createRentalOrder()
+        +createCultivationOrder()
         +cancel()
     }
-    class RentalRoutes {
+    class CultivationSessionRoutes {
         <<module>>
         +adminList()
-        +adminCreateFromOrder()
-        +startCultivation()
-        +createProgress()
-        +createHarvest()
-        +completeRental()
-        +cancelRental()
-        +adminUpdate()
+        +adminGetById()
+        +adminCreateInspection()
+        +adminCreateProgress()
+        +adminCreateHarvest()
+        +adminComplete()
+        +adminCancel()
+        +adminCreateNotification()
     }
     class PaymentRoutes {
         <<module>>
@@ -193,16 +193,16 @@ classDiagram
         +create(req, res)
         +cancel(req, res)
     }
-    class RentalController {
+    class CultivationSessionController {
         <<module>>
         +adminList(req, res)
         +adminGetById(req, res)
-        +adminCreateFromOrder(req, res)
+        +adminCreateInspection(req, res)
         +adminCreateProgress(req, res)
         +adminCreateHarvest(req, res)
         +adminComplete(req, res)
         +adminCancel(req, res)
-        +adminUpdate(req, res)
+        +adminCreateNotification(req, res)
     }
     class PaymentController {
         <<module>>
@@ -303,20 +303,21 @@ classDiagram
     }
     class OrderService {
         <<module>>
-        +createRentalOrder()
+        +createCultivationOrder()
         +getCustomerOrders()
         +getCustomerOrderDetails()
         +cancelCustomerOrder()
     }
-    class RentalService {
+    class CultivationSessionService {
         <<module>>
-        +getAllRentalsForAdmin()
-        +getRentalByIdForAdmin()
-        +createRentalFromOrderForAdmin()
+        +getAllForAdmin()
+        +getByIdForAdmin()
+        +createInspectionForAdmin()
         +createProgressForAdmin()
         +createHarvestForAdmin()
-        +completeRentalForAdmin()
-        +cancelRentalForAdmin()
+        +completeForAdmin()
+        +cancelForAdmin()
+        +sendSessionNotification()
     }
     class PaymentService {
         <<module>>
@@ -326,7 +327,7 @@ classDiagram
     }
     class NotificationService {
         <<module>>
-        +sendRentalNotification()
+        +sendCultivationSessionNotification()
         +getNotifications()
         +markNotificationAsRead()
         +markAllNotificationsAsRead()
@@ -423,15 +424,17 @@ classDiagram
         +createRentalOrder()
         +cancelOrderForUser()
     }
-    class RentalModel {
+    class CultivationSessionModel {
         <<module>>
         +findAllForAdmin()
         +findByIdForAdmin()
-        +createFromOrderForAdmin()
+        +createInspectionForAdmin()
         +createProgressForAdmin()
         +createHarvestForAdmin()
         +completeForAdmin()
         +cancelForAdmin()
+        +findSessionRecipient()
+        +createSessionNotification()
     }
     class PaymentModel {
         <<module>>
@@ -443,8 +446,8 @@ classDiagram
     }
     class NotificationModel {
         <<module>>
-        +findRentalRecipient()
-        +createForRental()
+        +findSessionRecipient()
+        +createForSession()
         +findAllByUserId()
         +markAsReadById()
         +markAllAsReadByUserId()
@@ -497,7 +500,7 @@ classDiagram
     RootRouter --> CultivationRoomRoutes : /cultivation-rooms
     RootRouter --> CultivationTrayRoutes : /cultivation-trays
     RootRouter --> OrderRoutes : /orders
-    RootRouter --> RentalRoutes : /rentals
+    RootRouter --> CultivationSessionRoutes : /cultivation-sessions
     RootRouter --> PaymentRoutes : /payments
     RootRouter --> NotificationRoutes : /notifications
     RootRouter --> IoTRoutes : /iot
@@ -513,7 +516,7 @@ classDiagram
     CultivationRoomRoutes --> CultivationTrayController : room trays
     CultivationTrayRoutes --> CultivationTrayController
     OrderRoutes --> OrderController
-    RentalRoutes --> RentalController
+    CultivationSessionRoutes --> CultivationSessionController
     PaymentRoutes --> PaymentController
     NotificationRoutes --> NotificationController
     IoTRoutes --> IoTController : sensors and devices
@@ -528,8 +531,8 @@ classDiagram
     CultivationRoomController --> CultivationRoomService
     CultivationTrayController --> CultivationTrayService
     OrderController --> OrderService
-    RentalController --> RentalService
-    RentalController --> NotificationService : harvest notifications
+    CultivationSessionController --> CultivationSessionService
+    CultivationSessionController --> NotificationService : session notifications
     PaymentController --> PaymentService
     NotificationController --> NotificationService
     IoTController --> IoTService
@@ -546,7 +549,7 @@ classDiagram
     CultivationTrayService --> CultivationTrayModel
     CultivationTrayService --> CultivationRoomModel
     OrderService --> OrderModel
-    RentalService --> RentalModel
+    CultivationSessionService --> CultivationSessionModel
     PaymentService --> PaymentModel
     NotificationService --> NotificationModel
     IoTService --> IoTModel
@@ -561,7 +564,7 @@ classDiagram
     CultivationRoomModel --> PostgreSQL
     CultivationTrayModel --> PostgreSQL
     OrderModel --> PostgreSQL
-    RentalModel --> PostgreSQL
+    CultivationSessionModel --> PostgreSQL
     PaymentModel --> PostgreSQL
     NotificationModel --> PostgreSQL
     IoTModel --> PostgreSQL
@@ -666,16 +669,6 @@ classDiagram
         +string tracking_code
         +string status
     }
-    class Rental {
-        +int rental_id
-        +int order_id
-        +int user_id
-        +int tray_id
-        +int duration_days
-        +datetime start_date
-        +datetime end_date
-        +string status
-    }
     class CultivationRoom {
         +int room_id
         +string room_code
@@ -702,13 +695,21 @@ classDiagram
     }
     class CultivationSession {
         +int session_id
-        +int rental_id
-        +int tray_id
+        +int order_item_id
         +int mushroom_type_id
+        +int protocol_id
+        +int duration_days
         +datetime start_at
         +datetime end_at
         +string status
         +date harvest_date
+    }
+    class CultivationSessionTray {
+        +int session_tray_id
+        +int session_id
+        +int tray_id
+        +string status
+        +datetime assigned_at
     }
     class CultivationProgress {
         +int progress_id
@@ -720,17 +721,29 @@ classDiagram
     }
     class Harvest {
         +int harvest_id
-        +int session_id
+        +int harvest_request_id
+        +int session_tray_id
         +date harvest_date
-        +decimal quantity
-        +string unit
+        +decimal total_weight_kg
+        +decimal usable_weight_kg
         +string quality_grade
+    }
+    class CultivationInspection {
+        +int inspection_id
+        +int session_tray_id
+        +int inspected_by
+        +string growth_stage
+        +decimal growth_progress
+        +string tray_condition
+        +string mushroom_condition
+        +datetime inspection_date
     }
     class Notification {
         +int notification_id
         +int user_id
-        +int rental_id
         +int created_by
+        +string reference_type
+        +int reference_id
         +string notification_type
         +string title
         +bool is_read
@@ -747,20 +760,19 @@ classDiagram
     Order "1" *-- "1..*" OrderItem : contains
     Order "1" --> "0..*" Payment : paid by
     Order "1" --> "0..*" Shipment : fulfilled by
-    Order "1" --> "0..1" Rental : creates
-    User "1" --> "0..*" Rental : leases
+    OrderItem "1" --> "0..1" CultivationSession : paid item starts
     CultivationRoom "1" --> "0..*" CultivationFloor : contains
     CultivationRoom "1" --> "0..*" CultivationTray : contains
     CultivationFloor "0..1" --> "0..*" CultivationTray : locates
-    CultivationTray "1" --> "0..*" Rental : assigned over time
-    Rental "1" --> "0..*" CultivationSession : tracks
-    CultivationTray "1" --> "0..*" CultivationSession : grows on
+    CultivationSession "1" *-- "1..*" CultivationSessionTray : assigns trays
+    CultivationTray "1" --> "0..*" CultivationSessionTray : used over time
     MushroomType "1" --> "0..*" CultivationSession : selected species
     CultivationSession "1" *-- "0..*" CultivationProgress : progress history
-    CultivationSession "1" *-- "0..*" Harvest : harvest records
+    CultivationSessionTray "1" *-- "0..*" CultivationInspection : daily inspections
+    CultivationSessionTray "1" *-- "0..*" Harvest : harvest records
     User "1" --> "0..*" Notification : receives
     User "0..1" --> "0..*" Notification : creates
-    Rental "0..1" --> "0..*" Notification : relates to
+    CultivationSession "0..1" --> "0..*" Notification : relates to
 ```
 
 ## 2. IoT, cảm biến và tự động hóa
@@ -986,11 +998,11 @@ classDiagram
 
 ## Mapping với cấu trúc backend
 
-Các lớp miền hiện có được truy cập theo luồng `routes -> controllers -> services -> models -> PostgreSQL`. Ví dụ, nhóm `rentalPackage`, `order`, `rental`, `cultivationTray`, `mushroomType`, `iot` và `autoMisting` có model/service tương ứng trong `src/`. Diagram tập trung vào entity và quan hệ dữ liệu, không biểu diễn từng lớp HTTP/controller.
+Các lớp miền hiện có được truy cập theo luồng `routes -> controllers -> services -> models -> PostgreSQL`. Ví dụ, nhóm `rentalPackage`, `order`, `cultivationSession`, `cultivationTray`, `mushroomType`, `iot` và `autoMisting` có model/service tương ứng trong `src/`. `rental_packages` vẫn lưu gói thời hạn; đơn thanh toán thành công tạo `cultivation_sessions` từ `order_items` và gán khay qua `cultivation_session_trays`. Diagram tập trung vào entity và quan hệ dữ liệu, không biểu diễn từng lớp HTTP/controller.
 
 Một số chênh lệch đáng chú ý giữa yêu cầu và backend hiện tại:
 
 - OTP được xử lý trong `auth.service.js` và lưu trạng thái trên `users`; không có entity/bảng OTP độc lập.
-- Schema có các bảng `rental_packages`, `cultivation_progress`, `harvests`, `notifications`, nhưng chưa có bảng giữ chỗ 5 phút, dispute ticket, refund authorization, ảnh xác minh tiến độ, fulfillment theo từng harvest hay activity log.
+- Schema có các bảng `rental_packages`, `cultivation_sessions`, `cultivation_session_trays`, `cultivation_inspections`, `cultivation_progress`, `harvests` và `notifications`. Không có bảng `rentals`; một số lớp đề xuất như dispute ticket, ảnh xác minh tiến độ hoặc activity log chưa được triển khai.
 - Backend đã tích hợp PayOS. Để yêu cầu chức năng nhất quán với hệ thống, thay cụm “SePay” bằng “PayOS” trong yêu cầu thanh toán: “complete payments via integrated payment gateways (PayOS)”.
 - Các lớp đề xuất trong mục 3 không được thể hiện như tính năng đã tồn tại.

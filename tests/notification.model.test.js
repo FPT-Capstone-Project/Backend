@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
 
-test('stores rental links and scopes notification reads to the owner', async () => {
+test('stores cultivation-session references and scopes notification reads to the owner', async () => {
   const db = new PGlite();
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/notification.model');
@@ -20,12 +20,18 @@ test('stores rental links and scopes notification reads to the owner', async () 
         (1, 'operator@example.test', 'hash', 'Operator'),
         (1, 'other@example.test', 'hash', 'Other Customer');
       INSERT INTO orders(user_id) VALUES (1);
-      INSERT INTO rentals(order_id, user_id, duration_days, status) VALUES (1, 1, 30, 'ACTIVE');
-      INSERT INTO notifications (user_id, notification_type, title, message, rental_id)
+      INSERT INTO mushroom_types(name, growing_days) VALUES ('Oyster', 25);
+      INSERT INTO order_items(order_id, item_type, mushroom_type_id, unit_price, total_price)
+      VALUES (1, 'CULTIVATION', 1, 100, 100);
+      INSERT INTO cultivation_sessions(mushroom_type_id, start_at, order_item_id, status)
+      VALUES (1, CURRENT_TIMESTAMP, 1, 'ACTIVE');
+      INSERT INTO notifications (
+        user_id, notification_type, title, message, reference_type, reference_id
+      )
       VALUES
-        (1, 'TEST', 'Unread', 'Unread notification', 1),
-        (1, 'TEST', 'Read', 'Read notification', 1),
-        (3, 'TEST', 'Other', 'Other user notification', NULL);
+        (1, 'TEST', 'Unread', 'Unread notification', 'CULTIVATION_SESSION', 1),
+        (1, 'TEST', 'Read', 'Read notification', 'CULTIVATION_SESSION', 1),
+        (3, 'TEST', 'Other', 'Other user notification', NULL, NULL);
       UPDATE notifications SET is_read = TRUE, read_at = CURRENT_TIMESTAMP WHERE notification_id = 2;
     `);
 
@@ -33,9 +39,9 @@ test('stores rental links and scopes notification reads to the owner', async () 
     require.cache[dbPath] = { exports: { query: (...args) => db.query(...args) } };
     const notificationModel = require('../src/models/notification.model');
 
-    const recipient = await notificationModel.findRentalRecipient(1);
-    const created = await notificationModel.createForRental({
-      rentalId: 1,
+    const recipient = await notificationModel.findSessionRecipient(1);
+    const created = await notificationModel.createForSession({
+      sessionId: 1,
       userId: 1,
       type: 'OPERATOR_MESSAGE',
       title: 'Farm update',
@@ -63,15 +69,18 @@ test('stores rental links and scopes notification reads to the owner', async () 
       userId: 3, isRead: false, limit: 20, offset: 0,
     });
 
-    assert.deepEqual(recipient, { rental_id: 1, user_id: 1, status: 'ACTIVE', user_status: 'ACTIVE' });
+    assert.deepEqual(recipient, { session_id: 1, status: 'ACTIVE', user_id: 1, user_status: 'ACTIVE' });
     assert.equal(created.user_id, 1);
-    assert.equal(created.rental_id, 1);
+    assert.equal(created.reference_type, 'CULTIVATION_SESSION');
+    assert.equal(created.reference_id, 1);
     assert.equal(created.notification_type, 'OPERATOR_MESSAGE');
     assert.equal(created.message, 'Operator update');
     assert.equal(storedNotification.rows[0].created_by, 2);
     assert.equal(initialList.total, 2);
     assert.equal(initialList.unreadCount, 2);
-    assert.equal(initialList.notifications.every((notification) => notification.rental_id === 1), true);
+    assert.equal(initialList.notifications.every((notification) => (
+      notification.reference_type === 'CULTIVATION_SESSION'
+    )), true);
     assert.equal(readList.total, 1);
     assert.equal(readList.unreadCount, 2);
     assert.equal(firstRead.is_read, true);

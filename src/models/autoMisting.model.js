@@ -83,8 +83,9 @@ function createRepository(db = pool) {
   async profiles(id) {
    const f=await api.floor(id);
    const profiles=await rows(`SELECT DISTINCT s.mushroom_type_id,c.temperature_min,c.temperature_max,c.humidity_min,c.humidity_max
-    FROM cultivation_sessions s JOIN cultivation_trays t ON t.tray_id=s.tray_id
-    JOIN rentals r ON r.rental_id=s.rental_id AND r.tray_id=s.tray_id AND r.status='ACTIVE'
+    FROM cultivation_sessions s
+    JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'
+    JOIN cultivation_trays t ON t.tray_id=st.tray_id
     LEFT JOIN mushroom_conditions c ON c.mushroom_type_id=s.mushroom_type_id
     WHERE t.floor_id=$1 AND s.status='ACTIVE'`,[id]);
    const unassigned=await one(`SELECT count(*)::int AS count FROM cultivation_trays WHERE room_id=$1 AND floor_id IS NULL`,[f.room_id]);
@@ -94,11 +95,12 @@ function createRepository(db = pool) {
     return lows.length && highs.length && Math.max(...lows)>Math.min(...highs);
    });
    const trays=await rows(`SELECT t.tray_id,t.tray_code,t.status AS tray_status,
-    s.session_id,s.rental_id,s.mushroom_type_id,s.status AS cultivation_status,m.name AS mushroom_name
+    s.session_id,st.session_tray_id,s.mushroom_type_id,
+    s.status AS cultivation_status,m.name AS mushroom_name
     FROM cultivation_trays t LEFT JOIN (
-     cultivation_sessions s JOIN rentals r ON r.rental_id=s.rental_id
-      AND r.tray_id=s.tray_id AND r.status='ACTIVE'
-    ) ON s.tray_id=t.tray_id AND s.status='ACTIVE'
+     cultivation_sessions s
+     JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'
+    ) ON st.tray_id=t.tray_id AND s.status='ACTIVE'
     LEFT JOIN mushroom_types m ON m.mushroom_type_id=s.mushroom_type_id
     WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);
    return {profiles,trays,conflict,unassignedTrays:unassigned.count,requiresApproval:profiles.length>1 || conflict || unassigned.count>0};

@@ -1,5 +1,5 @@
 -- =====================================================
--- PostgreSQL schema: Mushroom rental & IoT control
+-- PostgreSQL schema: Mushroom cultivation & IoT control
 -- Thứ tự tạo bảng đã được sắp xếp theo phụ thuộc FK
 -- =====================================================
 
@@ -222,29 +222,37 @@ CREATE TABLE public.shipments (
   CONSTRAINT fk_shipments_order FOREIGN KEY (order_id) REFERENCES public.orders(order_id)
 );
 
--- ---------- RENTALS ----------
-CREATE TABLE public.rentals (
-  rental_id     SERIAL PRIMARY KEY,
-  order_id      INTEGER NOT NULL UNIQUE,
-  user_id       INTEGER NOT NULL,
-  tray_id       INTEGER,
-  duration_days INTEGER NOT NULL CHECK (duration_days > 0),
-  start_date    TIMESTAMP,
-  end_date      TIMESTAMP,
-  status        VARCHAR NOT NULL DEFAULT 'CONFIRMED'
-    CHECK (status IN ('CONFIRMED', 'PREPARING', 'ACTIVE', 'COMPLETED', 'CANCELLED')),
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT rentals_order_id_fkey FOREIGN KEY (order_id) REFERENCES public.orders(order_id),
-  CONSTRAINT rentals_user_id_fkey  FOREIGN KEY (user_id)  REFERENCES public.users(user_id),
-  CONSTRAINT rentals_tray_id_fkey  FOREIGN KEY (tray_id)  REFERENCES public.cultivation_trays(tray_id)
+-- ---------- CULTIVATION ----------
+CREATE TABLE public.cultivation_protocols (
+  protocol_id      SERIAL PRIMARY KEY,
+  mushroom_type_id INTEGER NOT NULL REFERENCES public.mushroom_types(mushroom_type_id),
+  protocol_name    VARCHAR NOT NULL,
+  version          VARCHAR NOT NULL DEFAULT '1.0',
+  status           VARCHAR NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')),
+  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
--- ---------- CULTIVATION ----------
+CREATE TABLE public.spawn_inventory (
+  inventory_id     SERIAL PRIMARY KEY,
+  mushroom_type_id INTEGER NOT NULL UNIQUE
+    REFERENCES public.mushroom_types(mushroom_type_id),
+  quantity         NUMERIC NOT NULL DEFAULT 0 CHECK (quantity >= 0),
+  updated_at       TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE public.cultivation_protocol_steps (
+  step_id             SERIAL PRIMARY KEY,
+  protocol_id         INTEGER NOT NULL REFERENCES public.cultivation_protocols(protocol_id),
+  step_order          INTEGER NOT NULL,
+  stage_name          VARCHAR NOT NULL,
+  duration_days       INTEGER NOT NULL CHECK (duration_days > 0),
+  instructions        TEXT,
+  target_temperature  NUMERIC,
+  target_humidity     NUMERIC
+);
+
 CREATE TABLE public.cultivation_sessions (
   session_id       SERIAL PRIMARY KEY,
-  rental_id        INTEGER NOT NULL,
-  tray_id          INTEGER NOT NULL,
   mushroom_type_id INTEGER NOT NULL,
   start_at         TIMESTAMP NOT NULL,
   end_at           TIMESTAMP,
@@ -253,13 +261,23 @@ CREATE TABLE public.cultivation_sessions (
     CHECK (status IN ('PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED')),
   harvest_date     DATE,
   created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  -- Bản gốc không có FK cho rental_id; thêm vào cho đúng quan hệ
-  CONSTRAINT fk_sessions_rental
-    FOREIGN KEY (rental_id) REFERENCES public.rentals(rental_id),
-  CONSTRAINT fk_sessions_tray
-    FOREIGN KEY (tray_id) REFERENCES public.cultivation_trays(tray_id),
+  order_item_id    INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
+  protocol_id      INTEGER REFERENCES public.cultivation_protocols(protocol_id),
   CONSTRAINT fk_sessions_mushroom
     FOREIGN KEY (mushroom_type_id) REFERENCES public.mushroom_types(mushroom_type_id)
+);
+
+CREATE TABLE public.inventory_transactions (
+  transaction_id   SERIAL PRIMARY KEY,
+  inventory_id     INTEGER NOT NULL REFERENCES public.spawn_inventory(inventory_id),
+  session_id       INTEGER REFERENCES public.cultivation_sessions(session_id),
+  transaction_type VARCHAR NOT NULL
+    CHECK (transaction_type IN ('IN', 'OUT', 'ADJUST')),
+  quantity         NUMERIC NOT NULL,
+  quantity_before  NUMERIC NOT NULL,
+  quantity_after   NUMERIC NOT NULL,
+  notes            TEXT,
+  created_at       TIMESTAMP NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.cultivation_progress (
@@ -276,17 +294,69 @@ CREATE TABLE public.cultivation_progress (
     FOREIGN KEY (session_id) REFERENCES public.cultivation_sessions(session_id)
 );
 
+CREATE TABLE public.cultivation_session_trays (
+  session_tray_id SERIAL PRIMARY KEY,
+  session_id      INTEGER NOT NULL REFERENCES public.cultivation_sessions(session_id),
+  tray_id         INTEGER NOT NULL REFERENCES public.cultivation_trays(tray_id),
+  assigned_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status          VARCHAR NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RELEASED')),
+  notes           TEXT
+);
+
+CREATE TABLE public.tray_reservations (
+  reservation_id SERIAL PRIMARY KEY,
+  order_item_id  INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
+  quantity       INTEGER NOT NULL CHECK (quantity > 0),
+  status         VARCHAR NOT NULL DEFAULT 'HELD'
+    CHECK (status IN ('HELD', 'CONSUMED', 'RELEASED', 'EXPIRED')),
+  expires_at     TIMESTAMP NOT NULL,
+  created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_at    TIMESTAMP
+);
+
+CREATE TABLE public.harvest_requests (
+  harvest_request_id SERIAL PRIMARY KEY,
+  session_id         INTEGER NOT NULL UNIQUE REFERENCES public.cultivation_sessions(session_id),
+  harvest_method     VARCHAR NOT NULL CHECK (harvest_method IN ('PICKUP', 'DELIVERY')),
+  scheduled_at       TIMESTAMP,
+  status             VARCHAR NOT NULL DEFAULT 'PENDING',
+  customer_note      TEXT,
+  confirmed_at       TIMESTAMP,
+  completed_at       TIMESTAMP
+);
+
+CREATE TABLE public.cultivation_inspections (
+  inspection_id      SERIAL PRIMARY KEY,
+  session_tray_id    INTEGER NOT NULL REFERENCES public.cultivation_session_trays(session_tray_id),
+  inspected_by       INTEGER NOT NULL REFERENCES public.users(user_id),
+  inspection_date    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  growth_stage       VARCHAR,
+  tray_condition     VARCHAR,
+  mushroom_condition VARCHAR,
+  growth_progress    NUMERIC CHECK (growth_progress >= 0 AND growth_progress <= 100),
+  notes              TEXT
+);
+
+CREATE TABLE public.cultivation_inspection_images (
+  image_id      SERIAL PRIMARY KEY,
+  inspection_id INTEGER NOT NULL REFERENCES public.cultivation_inspections(inspection_id),
+  image_url     TEXT NOT NULL,
+  caption       VARCHAR,
+  uploaded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE public.harvests (
-  harvest_id    SERIAL PRIMARY KEY,
-  session_id    INTEGER NOT NULL,
-  harvest_date  DATE NOT NULL,
-  quantity      NUMERIC NOT NULL CHECK (quantity > 0),
-  unit          VARCHAR NOT NULL,
-  quality_grade VARCHAR,
-  notes         TEXT,
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  CONSTRAINT fk_harvests_session
-    FOREIGN KEY (session_id) REFERENCES public.cultivation_sessions(session_id)
+  harvest_id         SERIAL PRIMARY KEY,
+  harvest_date       DATE NOT NULL,
+  quality_grade      VARCHAR,
+  notes              TEXT,
+  created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  harvest_request_id INTEGER REFERENCES public.harvest_requests(harvest_request_id),
+  session_tray_id    INTEGER REFERENCES public.cultivation_session_trays(session_tray_id),
+  harvested_by       INTEGER REFERENCES public.users(user_id),
+  total_weight_kg    NUMERIC,
+  usable_weight_kg   NUMERIC,
+  rejected_weight_kg NUMERIC DEFAULT 0
 );
 
 CREATE TABLE public.cameras (
@@ -309,14 +379,42 @@ CREATE TABLE public.notifications (
   is_read           BOOLEAN NOT NULL DEFAULT FALSE,
   created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   read_at           TIMESTAMP,
-  rental_id         INTEGER,
   created_by        INTEGER,
+  reference_type    VARCHAR,
+  reference_id      INTEGER,
   CONSTRAINT fk_notifications_user
     FOREIGN KEY (user_id) REFERENCES public.users(user_id),
-  CONSTRAINT notifications_rental_id_fkey
-    FOREIGN KEY (rental_id) REFERENCES public.rentals(rental_id),
   CONSTRAINT notifications_created_by_fkey
     FOREIGN KEY (created_by) REFERENCES public.users(user_id)
+);
+
+CREATE TABLE public.cultivation_issues (
+  issue_id       SERIAL PRIMARY KEY,
+  session_tray_id INTEGER NOT NULL
+    REFERENCES public.cultivation_session_trays(session_tray_id),
+  inspection_id  INTEGER REFERENCES public.cultivation_inspections(inspection_id),
+  reported_by    INTEGER NOT NULL REFERENCES public.users(user_id),
+  issue_type     VARCHAR NOT NULL,
+  title          VARCHAR NOT NULL,
+  description    TEXT,
+  severity       VARCHAR CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH')),
+  status         VARCHAR NOT NULL DEFAULT 'OPEN',
+  action_taken   TEXT,
+  next_action    TEXT,
+  reported_at    TIMESTAMP NOT NULL DEFAULT now(),
+  resolved_at    TIMESTAMP
+);
+
+CREATE TABLE public.expert_consultations (
+  consultation_id SERIAL PRIMARY KEY,
+  issue_id        INTEGER NOT NULL REFERENCES public.cultivation_issues(issue_id),
+  expert_id       INTEGER REFERENCES public.users(user_id),
+  question        TEXT NOT NULL,
+  diagnosis       TEXT,
+  solution        TEXT,
+  status          VARCHAR NOT NULL DEFAULT 'PENDING',
+  created_at      TIMESTAMP NOT NULL DEFAULT now(),
+  responded_at    TIMESTAMP
 );
 
 -- ---------- IOT ----------
@@ -503,9 +601,22 @@ CREATE INDEX idx_orders_user_id              ON public.orders(user_id);
 CREATE INDEX idx_order_items_order_id        ON public.order_items(order_id);
 CREATE INDEX idx_payments_order_id           ON public.payments(order_id);
 CREATE INDEX idx_shipments_order_id          ON public.shipments(order_id);
-CREATE INDEX idx_rentals_user_id             ON public.rentals(user_id);
-CREATE INDEX idx_sessions_rental_id          ON public.cultivation_sessions(rental_id);
-CREATE INDEX idx_sessions_tray_id            ON public.cultivation_sessions(tray_id);
+CREATE INDEX idx_sessions_order_item_id      ON public.cultivation_sessions(order_item_id);
+CREATE INDEX idx_sessions_status             ON public.cultivation_sessions(status);
+CREATE INDEX idx_inventory_transactions_inventory_id
+  ON public.inventory_transactions(inventory_id);
+CREATE INDEX idx_inventory_transactions_session_id
+  ON public.inventory_transactions(session_id);
+CREATE INDEX idx_session_trays_session_id    ON public.cultivation_session_trays(session_id);
+CREATE INDEX idx_session_trays_tray_id       ON public.cultivation_session_trays(tray_id);
+CREATE INDEX idx_tray_reservations_item_status
+  ON public.tray_reservations(order_item_id, status);
+CREATE INDEX idx_inspections_session_tray_date
+  ON public.cultivation_inspections(session_tray_id, inspection_date DESC);
+CREATE INDEX idx_cultivation_issues_session_tray_id
+  ON public.cultivation_issues(session_tray_id);
+CREATE INDEX idx_expert_consultations_issue_id
+  ON public.expert_consultations(issue_id);
 CREATE INDEX idx_trays_room_id               ON public.cultivation_trays(room_id);
 CREATE INDEX idx_notifications_user_unread   ON public.notifications(user_id, is_read);
 CREATE INDEX idx_sensor_readings_master_time ON public.iot_sensor_readings(master_id, received_at DESC);

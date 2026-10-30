@@ -24,10 +24,10 @@ const options = {
       { name: 'Rental Packages', description: 'CRUD for rental packages' },
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
-      { name: 'Orders', description: 'Customer orders for rental packages and mushroom types' },
-      { name: 'Rentals', description: 'Rental records created after successful payment and managed by Admin/Farm Operator' },
+      { name: 'Orders', description: 'Customer cultivation orders for packages, mushroom types, and tray quantities' },
+      { name: 'Cultivation Sessions', description: 'Paid cultivation sessions, daily tray inspections, progress, and harvests' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
-      { name: 'Notifications', description: 'Notifications for rental customers' },
+      { name: 'Notifications', description: 'Customer notifications linked to cultivation sessions' },
     ],
     components: {
       securitySchemes: {
@@ -82,32 +82,34 @@ const options = {
           type: 'object',
           properties: {
             notification_id: { type: 'integer', example: 10 },
-            notification_type: { type: 'string', example: 'RENTAL_MESSAGE' },
-            title: { type: 'string', example: 'Rental update' },
-            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            notification_type: { type: 'string', example: 'CULTIVATION_STARTED' },
+            title: { type: 'string', example: 'Cultivation update' },
+            message: { type: 'string', example: 'Your cultivation session has started.' },
             is_read: { type: 'boolean', example: false },
             created_at: { type: 'string', format: 'date-time' },
             read_at: { type: 'string', format: 'date-time', nullable: true },
-            rental_id: { type: 'integer', nullable: true, example: 12 },
+            reference_type: { type: 'string', nullable: true, example: 'CULTIVATION_SESSION' },
+            reference_id: { type: 'integer', nullable: true, example: 12 },
           },
         },
-        SentRentalNotification: {
+        SentCultivationNotification: {
           type: 'object',
           properties: {
             notification_id: { type: 'integer', example: 10 },
             user_id: { type: 'integer', example: 3 },
-            rental_id: { type: 'integer', example: 12 },
+            reference_type: { type: 'string', example: 'CULTIVATION_SESSION' },
+            reference_id: { type: 'integer', example: 12 },
             notification_type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'] },
-            title: { type: 'string', example: 'Rental update' },
-            message: { type: 'string', example: 'Your rental is ready for the next step.' },
+            title: { type: 'string', example: 'Cultivation update' },
+            message: { type: 'string', example: 'Your cultivation session has started.' },
             created_at: { type: 'string', format: 'date-time' },
           },
         },
-        CreateRentalNotificationRequest: {
+        CreateCultivationNotificationRequest: {
           type: 'object',
           required: ['message'],
           properties: {
-            message: { type: 'string', minLength: 1, maxLength: 1000, example: 'Your rental is ready for the next step.' },
+            message: { type: 'string', minLength: 1, maxLength: 1000, example: 'Your cultivation session is ready for the next stage.' },
             title: { type: 'string', minLength: 1, maxLength: 100, default: 'Thông báo từ SmartMush Farm' },
             type: { type: 'string', enum: ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'], default: 'OPERATOR_MESSAGE' },
           },
@@ -135,7 +137,7 @@ const options = {
               type: 'object',
               properties: {
                 order_count: { type: 'integer', minimum: 0, example: 12 },
-                rental_count: { type: 'integer', minimum: 0, example: 4 },
+                cultivation_session_count: { type: 'integer', minimum: 0, example: 4 },
               },
             },
           ],
@@ -227,20 +229,25 @@ const options = {
             status: { type: 'string', enum: ['ACTIVE', 'INACTIVE'], example: 'INACTIVE' },
           },
         },
-        CreateRentalOrderRequest: {
+        CreateCultivationOrderRequest: {
           type: 'object',
-          required: ['mushroomTypeId'],
+          required: ['packageId', 'mushroomTypeId', 'quantity'],
           properties: {
             packageId: {
               type: 'integer',
-              nullable: true,
               example: 1,
-              description: 'Optional rental package ID. When provided, the order has one RENTAL item containing both this package and mushroomTypeId.',
+              description: 'Selected cultivation package duration, such as 15 or 20 days.',
             },
             mushroomTypeId: {
               type: 'integer',
               example: 2,
-              description: 'Required mushroom type ID. Without packageId, creates one MUSHROOM order item.',
+              description: 'Selected mushroom type.',
+            },
+            quantity: {
+              type: 'integer',
+              minimum: 1,
+              example: 3,
+              description: 'Number of cultivation trays requested.',
             },
           },
         },

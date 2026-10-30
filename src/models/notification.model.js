@@ -8,39 +8,44 @@ const notificationItemColumns = `
   is_read,
   created_at,
   read_at,
-  rental_id
+  reference_type,
+  reference_id
 `;
 
 const sentNotificationColumns = `
   notification_id,
   user_id,
-  rental_id,
   notification_type,
   title,
   message,
-  created_at
+  created_at,
+  reference_type,
+  reference_id
 `;
 
-async function findRentalRecipient(rentalId) {
+async function findSessionRecipient(sessionId) {
   const result = await pool.query(
-    `SELECT r.rental_id, r.user_id, r.status, u.status AS user_status
-     FROM rentals r
-     JOIN users u ON u.user_id = r.user_id
-     WHERE r.rental_id = $1
+    `SELECT s.session_id, s.status, o.user_id, u.status AS user_status
+     FROM cultivation_sessions s
+     JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     JOIN orders o ON o.order_id = oi.order_id
+     JOIN users u ON u.user_id = o.user_id
+     WHERE s.session_id = $1
      LIMIT 1`,
-    [rentalId],
+    [sessionId],
   );
   return result.rows[0] || null;
 }
 
-async function createForRental({ rentalId, userId, type, title, message, createdBy }) {
+async function createForSession({ sessionId, userId, type, title, message, createdBy }) {
   const result = await pool.query(
     `INSERT INTO notifications (
-       user_id, notification_type, title, message, rental_id, created_by
+       user_id, notification_type, title, message, created_by,
+       reference_type, reference_id
      )
-     VALUES ($1, $2, $3, $4, $5, $6)
+     VALUES ($1, $2, $3, $4, $5, 'CULTIVATION_SESSION', $6)
      RETURNING ${sentNotificationColumns}`,
-    [userId, type, title, message, rentalId, createdBy],
+    [userId, type, title, message, createdBy, sessionId],
   );
   return result.rows[0] || null;
 }
@@ -118,8 +123,8 @@ async function markAllAsReadByUserId(userId) {
 }
 
 module.exports = {
-  findRentalRecipient,
-  createForRental,
+  findSessionRecipient,
+  createForSession,
   findAllByUserId,
   markAsReadById,
   markAllAsReadByUserId,

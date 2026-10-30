@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 function loadOrderModel({
   durationDays = 30,
   growingDays = 25,
+  availableTrays = 5,
+  heldTrays = 0,
   readResults = {},
   cancelOrder = { order_id: 11, status: 'PENDING', payment_status: 'UNPAID' },
 } = {}) {
@@ -21,6 +23,12 @@ function loadOrderModel({
       if (statement.startsWith('SELECT mushroom_type_id')) {
         return { rows: [{ mushroom_type_id: 9, name: 'Oyster', growing_days: growingDays, price: '30000', status: 'ACTIVE' }] };
       }
+      if (statement.startsWith('SELECT t.tray_id')) {
+        return { rows: Array.from({ length: availableTrays }, (_, index) => ({ tray_id: index + 1 })) };
+      }
+      if (statement.startsWith('SELECT COALESCE(SUM(quantity), 0)::int AS quantity')) {
+        return { rows: [{ quantity: heldTrays }] };
+      }
       if (statement.startsWith('SELECT order_id, status, payment_status')) {
         return { rows: cancelOrder ? [cancelOrder] : [] };
       }
@@ -35,24 +43,25 @@ function loadOrderModel({
         };
       }
       if (statement.startsWith('INSERT INTO orders')) {
-        const amount = Number(values[1]) + Number(values[2]);
+        const amount = (Number(values[1]) + Number(values[2])) * Number(values[3]);
         return { rows: [{ order_id: 11, user_id: values[0], subtotal: String(amount), total_amount: String(amount) }] };
       }
       if (statement.startsWith('INSERT INTO order_items')) {
-        const isRental = values[1] === 'RENTAL';
+        const unitPrice = Number(values[4]) + Number(values[5]);
         return {
           rows: [{
             order_item_id: 15,
             order_id: values[0],
-            item_type: isRental ? 'RENTAL' : 'MUSHROOM',
-            rental_package_id: values[2],
-            mushroom_type_id: values[3],
-            quantity: 1,
-            unit_price: String(Number(values[4]) + Number(values[5])),
-            total_price: String(Number(values[4]) + Number(values[5])),
+            item_type: 'CULTIVATION',
+            rental_package_id: values[1],
+            mushroom_type_id: values[2],
+            quantity: values[3],
+            unit_price: String(unitPrice),
+            total_price: String(unitPrice * Number(values[3])),
           }],
         };
       }
+      if (statement.startsWith('INSERT INTO tray_reservations')) return { rows: [] };
       return { rows: [] };
     },
     release: () => {},
@@ -73,46 +82,58 @@ function loadOrderModel({
   return { model: require('../src/models/order.model'), statements };
 }
 
-test('creates one rental item containing the package and mushroom with combined pricing', async () => {
+test('creates a cultivation item for the selected package, mushroom, and tray quantity', async () => {
   const { model, statements } = loadOrderModel();
-  const order = await model.createRentalOrder({ userId: 3, packageId: 7, mushroomTypeId: 9 });
+  const order = await model.createCultivationOrder({
+    userId: 3,
+    packageId: 7,
+    mushroomTypeId: 9,
+    quantity: 3,
+  });
 
   assert.equal(order.user_id, 3);
-  assert.equal(order.subtotal, '530000');
+  assert.equal(order.subtotal, '1590000');
   assert.equal(order.items.length, 1);
-  assert.equal(order.items[0].item_type, 'RENTAL');
+  assert.equal(order.items[0].item_type, 'CULTIVATION');
   assert.equal(order.items[0].rental_package_id, 7);
   assert.equal(order.items[0].mushroom_type_id, 9);
   assert.equal(order.items[0].package_name, '30 days');
   assert.equal(order.items[0].mushroom_name, 'Oyster');
   assert.equal(order.items[0].unit_price, '530000');
-  assert.equal(order.items[0].total_price, '530000');
+  assert.equal(order.items[0].quantity, 3);
+  assert.equal(order.items[0].total_price, '1590000');
   assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
+  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO tray_reservations')));
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
   assert.ok(!statements.some(({ statement }) => statement === 'ROLLBACK'));
 });
 
-test('creates one mushroom item without a rental package', async () => {
-  const { model, statements } = loadOrderModel();
-  const order = await model.createRentalOrder({ userId: 3, packageId: null, mushroomTypeId: 9 });
-
-  assert.equal(order.subtotal, '30000');
-  assert.equal(order.items.length, 1);
-  assert.equal(order.items[0].item_type, 'MUSHROOM');
-  assert.equal(order.items[0].rental_package_id, null);
-  assert.equal(order.items[0].mushroom_type_id, 9);
-  assert.equal(order.items[0].mushroom_name, 'Oyster');
-  assert.equal(statements.filter(({ statement }) => statement.startsWith('SELECT package_id')).length, 0);
-  assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
-  assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
+test('rejects orders when selected tray quantity exceeds available trays', async () => {
+  const { model, statements } = loadOrderModel({ availableTrays: 4, heldTrays: 2 });
+  await assert.rejects(
+    () => model.createCultivationOrder({
+      userId: 3,
+      packageId: 7,
+      mushroomTypeId: 9,
+      quantity: 3,
+    }),
+    { statusCode: 409, message: 'Only 2 cultivation trays are currently available' },
+  );
+  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
 });
 
-test('rejects a mushroom that takes longer than the rental and rolls back', async () => {
+test('rejects a mushroom that takes longer than the selected package and rolls back', async () => {
   const { model, statements } = loadOrderModel({ durationDays: 20, growingDays: 25 });
 
   await assert.rejects(
-    () => model.createRentalOrder({ userId: 3, packageId: 7, mushroomTypeId: 9 }),
-    { statusCode: 400, message: /longer than the 20-day rental/ },
+    () => model.createCultivationOrder({
+      userId: 3,
+      packageId: 7,
+      mushroomTypeId: 9,
+      quantity: 1,
+    }),
+    { statusCode: 400, message: /longer than the 20-day package/ },
   );
 
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
@@ -129,7 +150,7 @@ test('lists and returns order details only with the authenticated customer ID', 
     total_amount: '530000',
     status: 'PENDING',
     order_item_id: 15,
-    item_type: 'RENTAL',
+    item_type: 'CULTIVATION',
     rental_package_id: 7,
     mushroom_type_id: null,
     package_name: '30 days',

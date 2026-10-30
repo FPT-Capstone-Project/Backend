@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 function loadService({
-  recipient = { rental_id: 4, user_id: 8, status: 'ACTIVE', user_status: 'ACTIVE' },
+  recipient = { session_id: 4, user_id: 8, status: 'ACTIVE', user_status: 'ACTIVE' },
   notification = { notification_id: 10 },
 } = {}) {
   const modelPath = require.resolve('../src/models/notification.model');
@@ -13,12 +13,12 @@ function loadService({
   delete require.cache[servicePath];
   require.cache[modelPath] = {
     exports: {
-      findRentalRecipient: async (...args) => {
-        calls.push({ method: 'findRentalRecipient', args });
+      findSessionRecipient: async (...args) => {
+        calls.push({ method: 'findSessionRecipient', args });
         return recipient;
       },
-      createForRental: async (...args) => {
-        calls.push({ method: 'createForRental', args });
+      createForSession: async (...args) => {
+        calls.push({ method: 'createForSession', args });
         return notification;
       },
       findAllByUserId: async (...args) => {
@@ -39,24 +39,24 @@ function loadService({
   return { service: require('../src/services/notification.service'), calls };
 }
 
-test('validates and sends a rental notification with the operator ID', async () => {
+test('validates and sends a cultivation session notification with the operator ID', async () => {
   const { service, calls } = loadService();
 
-  const result = await service.sendRentalNotification('4', {
-    message: ' Rental update ',
+  const result = await service.sendCultivationSessionNotification('4', {
+    message: ' Cultivation update ',
     title: ' Farm alert ',
     type: 'mushroom_disease',
   }, '2');
 
   assert.deepEqual(result, { notification_id: 10 });
   assert.deepEqual(calls, [
-    { method: 'findRentalRecipient', args: [4] },
+    { method: 'findSessionRecipient', args: [4] },
     {
-      method: 'createForRental',
+      method: 'createForSession',
       args: [{
-        rentalId: 4,
+        sessionId: 4,
         userId: 8,
-        message: 'Rental update',
+        message: 'Cultivation update',
         title: 'Farm alert',
         type: 'MUSHROOM_DISEASE',
         createdBy: 2,
@@ -65,36 +65,36 @@ test('validates and sends a rental notification with the operator ID', async () 
   ]);
 
   await assert.rejects(
-    () => service.sendRentalNotification(4, { message: '   ' }, 2),
+    () => service.sendCultivationSessionNotification(4, { message: '   ' }, 2),
     { statusCode: 400, message: 'message is required' },
   );
   await assert.rejects(
-    () => service.sendRentalNotification(4, { message: 'x'.repeat(1001) }, 2),
+    () => service.sendCultivationSessionNotification(4, { message: 'x'.repeat(1001) }, 2),
     { statusCode: 400 },
   );
   await assert.rejects(
-    () => service.sendRentalNotification(4, { message: 'Update', type: 'UNKNOWN' }, 2),
+    () => service.sendCultivationSessionNotification(4, { message: 'Update', type: 'UNKNOWN' }, 2),
     { statusCode: 400 },
   );
   await assert.rejects(
-    () => service.sendRentalNotification(0, { message: 'Update' }, 2),
+    () => service.sendCultivationSessionNotification(0, { message: 'Update' }, 2),
     { statusCode: 400 },
   );
 });
 
-test('rejects missing, closed, and inactive rental recipients', async () => {
+test('rejects missing, closed, and inactive session recipients', async () => {
   await assert.rejects(
-    () => loadService({ recipient: null }).service.sendRentalNotification(4, { message: 'Update' }, 2),
-    { statusCode: 404, message: 'Rental not found' },
+    () => loadService({ recipient: null }).service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
+    { statusCode: 404, message: 'Cultivation session not found' },
   );
   await assert.rejects(
     () => loadService({ recipient: { user_id: 8, status: 'COMPLETED', user_status: 'ACTIVE' } })
-      .service.sendRentalNotification(4, { message: 'Update' }, 2),
-    { statusCode: 409, message: 'Cannot send notifications for a COMPLETED or CANCELLED rental' },
+      .service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
+    { statusCode: 409, message: 'Cannot send notifications for a completed or cancelled session' },
   );
   await assert.rejects(
     () => loadService({ recipient: { user_id: 8, status: 'ACTIVE', user_status: 'BLOCKED' } })
-      .service.sendRentalNotification(4, { message: 'Update' }, 2),
+      .service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
     { statusCode: 409, message: 'Recipient account is not active' },
   );
 });
