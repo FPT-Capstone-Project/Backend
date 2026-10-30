@@ -1,8 +1,6 @@
 const express = require('express');
-const crypto = require('crypto');
 const rateLimit = require('express-rate-limit');
 const authController = require('../controllers/auth.controller');
-const emailService = require('../services/email.service');
 const { authenticate } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
@@ -12,85 +10,6 @@ const otpRateLimiter = rateLimit({
   limit: 10,
   legacyHeaders: false,
   message: { message: 'Too many OTP requests, please try again later.' },
-});
-
-const googleOAuthRateLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  limit: 10,
-  legacyHeaders: false,
-  message: { message: 'Too many Google OAuth requests, please try again later.' },
-});
-
-function readCookie(req, name) {
-  const cookies = (req.headers.cookie || '').split(';');
-  const cookie = cookies.find((item) => item.trim().startsWith(`${name}=`));
-  return cookie ? cookie.trim().slice(name.length + 1) : '';
-}
-
-function clearGoogleOAuthState(res) {
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.append(
-    'Set-Cookie',
-    `google_oauth_state=; HttpOnly; SameSite=Lax; Path=/api/auth/google/callback; Max-Age=0${secure}`,
-  );
-}
-
-/**
- * @openapi
- * /api/auth/google:
- *   get:
- *     tags: [Auth OTP]
- *     summary: Start Gmail API authorization for the OTP sender account
- *     responses:
- *       302: { description: Redirect to Google consent screen }
- *       429: { description: Rate limit exceeded }
- */
-router.get('/google', googleOAuthRateLimiter, (req, res) => {
-  const state = crypto.randomBytes(32).toString('hex');
-  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
-  res.append(
-    'Set-Cookie',
-    `google_oauth_state=${state}; HttpOnly; SameSite=Lax; Path=/api/auth/google/callback; Max-Age=600${secure}`,
-  );
-  res.redirect(emailService.createGmailAuthorizationUrl(state));
-});
-
-/**
- * @openapi
- * /api/auth/google/callback:
- *   get:
- *     tags: [Auth OTP]
- *     summary: Complete Gmail API authorization and return a refresh token
- *     responses:
- *       200: { description: OAuth complete; copy the refresh token to secret environment variables }
- *       400: { description: Authorization denied, expired state, or no refresh token }
- *       429: { description: Rate limit exceeded }
- */
-router.get('/google/callback', googleOAuthRateLimiter, async (req, res) => {
-  const { code, state, error } = req.query;
-  const expectedState = readCookie(req, 'google_oauth_state');
-  clearGoogleOAuthState(res);
-  res.set('Cache-Control', 'no-store, max-age=0');
-  res.set('Pragma', 'no-cache');
-
-  if (error) return res.status(400).send('Google OAuth authorization was denied.');
-  if (!code || typeof code !== 'string'
-    || !state || typeof state !== 'string'
-    || !expectedState || state !== expectedState) {
-    return res.status(400).send('Invalid or expired Google OAuth state.');
-  }
-
-  const tokens = await emailService.exchangeAuthorizationCode(code);
-  if (!tokens.refresh_token) {
-    return res.status(400).send(
-      'Google did not return a refresh token. Revoke this app access and authorize again.',
-    );
-  }
-
-  return res.json({
-    message: 'OAuth successful. Save this value as GMAIL_REFRESH_TOKEN in your deployment environment.',
-    refresh_token: tokens.refresh_token,
-  });
 });
 
 /**

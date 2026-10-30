@@ -251,19 +251,19 @@ Ví dụ tạo camera; `cameraCode` là device ID Imou, không phải mã tự �
 
 `status` nhận `ACTIVE`, `INACTIVE` hoặc `OFFLINE`. `streamUrl` là trường tùy chọn tương thích với schema camera hiện tại; API lấy live Imou dùng `cameraCode` và Imou Cloud.
 
-### Gửi OTP bằng Gmail API
+### Gửi OTP bằng SMTP
 
-OTP được gửi qua Gmail API (HTTPS), không dùng SMTP. Trong Google Cloud, bật Gmail API, tạo OAuth client loại Web application và đăng ký redirect URI khớp chính xác với `GOOGLE_REDIRECT_URI`. Cấu hình trên máy local và Render:
+Các API OTP gửi email qua SMTP. Cấu hình các biến sau trong `.env` local và Environment của dịch vụ deploy:
 
 ```env
-GOOGLE_CLIENT_ID=
-GOOGLE_CLIENT_SECRET=
-GOOGLE_REDIRECT_URI=https://<backend-domain>/api/auth/google/callback
-GMAIL_REFRESH_TOKEN=
-GMAIL_SENDER=sender@gmail.com
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_USER=sender@gmail.com
+SMTP_PASSWORD=your-smtp-app-password
+SMTP_FROM=sender@gmail.com
 ```
 
-Để cấp quyền cho hộp thư gửi OTP, mở `/api/auth/google` trên backend đã deploy, đăng nhập đúng tài khoản gửi thư và chấp thuận quyền gửi email. Callback trả refresh token một lần trong response không-cache; lưu giá trị đó vào `GMAIL_REFRESH_TOKEN` trong Environment của Render. `GMAIL_SENDER` phải là chính hộp thư đã cấp quyền. Không ghi refresh token vào log hoặc chia sẻ công khai. Sau khi cấu hình, các API OTP hiện tại sẽ gửi qua Gmail API.
+Port `587` dùng STARTTLS; port `465` dùng TLS trực tiếp. Với Gmail, bật xác minh 2 bước và dùng App Password làm `SMTP_PASSWORD` (không dùng mật khẩu đăng nhập thông thường). `SMTP_FROM` nên là địa chỉ được phép gửi bởi tài khoản SMTP. Giữ thông tin SMTP trong `.env`/secret environment, không commit hoặc chia sẻ công khai.
 
 ## 6. Chuẩn bị database
 
@@ -395,7 +395,7 @@ Request body:
 }
 ```
 
-API tạo tài khoản chưa xác minh và gửi OTP tới email qua Gmail API. Sau đó xác minh mã bằng:
+API tạo tài khoản chưa xác minh và gửi OTP tới email qua SMTP. Sau đó xác minh mã bằng:
 
 ```http
 POST /api/auth/verify-registration-otp
