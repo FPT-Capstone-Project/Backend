@@ -129,31 +129,54 @@ CREATE TABLE public.cultivation_floors (
     CHECK (status IN ('ACTIVE', 'INACTIVE')),
   created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+  total_rows          SMALLINT,
+  total_columns       SMALLINT,
   CONSTRAINT cultivation_floors_room_id_fkey
     FOREIGN KEY (room_id) REFERENCES public.cultivation_rooms(room_id),
   CONSTRAINT cultivation_floors_master_id_fkey
     FOREIGN KEY (master_id) REFERENCES public.iot_masters(id),
-  -- Cần UNIQUE này để cultivation_trays tham chiếu FK kép (floor_id, room_id)
+  -- Allows tray positions and trays to verify that a floor belongs to its room.
   CONSTRAINT cultivation_floors_floor_room_uk UNIQUE (floor_id, room_id)
 );
 
+CREATE TABLE public.tray_positions (
+  position_id   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  floor_id      INTEGER NOT NULL,
+  room_id       INTEGER NOT NULL,
+  row_number    INTEGER NOT NULL CHECK (row_number > 0),
+  column_number INTEGER NOT NULL CHECK (column_number > 0),
+  status        VARCHAR NOT NULL DEFAULT 'ACTIVE'
+    CHECK (status IN ('ACTIVE', 'MAINTENANCE', 'INACTIVE')),
+  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT tray_positions_floor_room_fk
+    FOREIGN KEY (floor_id, room_id)
+    REFERENCES public.cultivation_floors (floor_id, room_id),
+  CONSTRAINT tray_positions_position_floor_room_uk
+    UNIQUE (position_id, floor_id, room_id)
+);
+
 CREATE TABLE public.cultivation_trays (
-  tray_id    SERIAL PRIMARY KEY,
-  room_id    INTEGER NOT NULL,
-  tray_code  VARCHAR NOT NULL UNIQUE,
-  tray_name  VARCHAR,
-  status     VARCHAR NOT NULL DEFAULT 'AVAILABLE'
+  tray_id     SERIAL PRIMARY KEY,
+  room_id     INTEGER NOT NULL,
+  tray_code   VARCHAR NOT NULL UNIQUE,
+  tray_name   VARCHAR,
+  status      VARCHAR NOT NULL DEFAULT 'AVAILABLE'
     CHECK (status IN ('AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE')),
-  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  floor_id   INTEGER,
+  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  floor_id    INTEGER,
+  position_id INTEGER UNIQUE,
   CONSTRAINT fk_trays_room
     FOREIGN KEY (room_id) REFERENCES public.cultivation_rooms(room_id),
-  -- Gộp 2 FK trùng tên trong bản gốc thành 1 FK kép:
-  -- đảm bảo tầng (floor) thuộc đúng phòng (room) của khay
   CONSTRAINT trays_floor_room_fk
     FOREIGN KEY (floor_id, room_id)
-    REFERENCES public.cultivation_floors (floor_id, room_id)
+    REFERENCES public.cultivation_floors (floor_id, room_id),
+  CONSTRAINT trays_position_floor_room_fk
+    FOREIGN KEY (position_id, floor_id, room_id)
+    REFERENCES public.tray_positions (position_id, floor_id, room_id),
+  CONSTRAINT trays_position_requires_floor_check
+    CHECK (position_id IS NULL OR floor_id IS NOT NULL)
 );
 
 -- ---------- ORDERS ----------
