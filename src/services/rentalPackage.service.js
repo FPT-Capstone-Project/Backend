@@ -103,7 +103,7 @@ async function deleteRentalPackage(packageId) {
     return deleted;
   } catch (error) {
     if (error.code === '23503') {
-      throw new AppError('Rental package is referenced by an order or rental and cannot be deleted', 409);
+      throw new AppError('Rental package is referenced by an order and cannot be deleted', 409);
     }
     throw error;
   }

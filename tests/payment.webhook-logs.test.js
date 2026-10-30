@@ -1,7 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-function loadPaymentModel({ payment, order = {} } = {}) {
+function loadPaymentModel({
+  payment,
+  order = {},
+  reservation = { reservation_id: 31, quantity: 1, status: 'HELD' },
+} = {}) {
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/payment.model');
   const state = {
@@ -27,7 +31,16 @@ function loadPaymentModel({ payment, order = {} } = {}) {
     },
     paymentUpdates: 0,
     orderUpdates: 0,
-    rentalsCreated: 0,
+    sessionsCreated: 0,
+    assignedTrayCount: 0,
+    orderItems: [{
+      order_item_id: 15,
+      quantity: 1,
+      mushroom_type_id: 9,
+      duration_days: 30,
+    }],
+    trays: [{ tray_id: 1 }, { tray_id: 2 }],
+    reservation,
   };
 
   const client = {
@@ -61,8 +74,68 @@ function loadPaymentModel({ payment, order = {} } = {}) {
         return { rows: [] };
       }
 
-      if (statement.startsWith('INSERT INTO rentals')) {
-        state.rentalsCreated += 1;
+      if (statement.startsWith('SELECT oi.order_item_id, oi.quantity, oi.mushroom_type_id')) {
+        return { rows: state.orderItems };
+      }
+
+      if (statement.startsWith('SELECT session_id FROM cultivation_sessions')) {
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('SELECT reservation_id, quantity, status FROM tray_reservations')) {
+        return { rows: [state.reservation] };
+      }
+
+      if (statement.startsWith('SELECT t.tray_id')) {
+        return { rows: state.trays };
+      }
+
+      if (statement.startsWith('SELECT COALESCE(SUM(quantity), 0)::int AS quantity')) {
+        return { rows: [{ quantity: 0 }] };
+      }
+
+      if (statement.startsWith('SELECT protocol_id FROM cultivation_protocols')) {
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('INSERT INTO cultivation_sessions')) {
+        state.sessionsCreated += 1;
+        return {
+          rows: [{
+            session_id: 77,
+            start_at: '2026-01-02T00:00:00.000Z',
+            duration_days: values[1],
+            status: 'ACTIVE',
+            harvest_date: '2026-02-01',
+          }],
+        };
+      }
+
+      if (statement.startsWith('UPDATE cultivation_trays')) {
+        return { rows: [{ tray_id: values[0] }] };
+      }
+
+      if (statement.startsWith('INSERT INTO cultivation_session_trays')) {
+        state.assignedTrayCount += 1;
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('UPDATE tray_reservations SET status = \'CONSUMED\'')
+        || statement.startsWith('INSERT INTO cultivation_progress')
+        || statement.startsWith('INSERT INTO notifications')) {
+        if (statement.startsWith('UPDATE tray_reservations SET status = \'CONSUMED\'')) {
+          state.reservation.status = 'CONSUMED';
+        }
+        return { rows: [] };
+      }
+
+      if (statement.startsWith("UPDATE tray_reservations SET status = 'HELD'")) {
+        state.reservation.status = 'HELD';
+        return { rows: [state.reservation] };
+      }
+
+      if (statement.startsWith("UPDATE orders SET status = 'PROCESSING'")) {
+        state.order.status = 'PROCESSING';
         return { rows: [] };
       }
 
@@ -108,10 +181,11 @@ test('logs and leaves state unchanged when the PayOS amount is too small', async
   });
 });
 
-test('accepts a late PayOS payment after its pending order payment was cancelled or failed', async () => {
+test('fulfills a late PayOS payment after its pending payment was cancelled or failed', async () => {
   const { model, state } = loadPaymentModel({
     payment: { status: 'CANCELLED' },
     order: { payment_status: 'FAILED' },
+    reservation: { reservation_id: 31, quantity: 1, status: 'EXPIRED' },
   });
 
   const result = await model.markPayosPaymentAsPaid(21, 530000, 'late-reference-21');
@@ -119,9 +193,11 @@ test('accepts a late PayOS payment after its pending order payment was cancelled
   assert.equal(result.status, 'PAID');
   assert.equal(state.paymentUpdates, 1);
   assert.equal(state.orderUpdates, 1);
-  assert.equal(state.order.status, 'CONFIRMED');
+  assert.equal(state.order.status, 'PROCESSING');
   assert.equal(state.order.payment_status, 'PAID');
-  assert.equal(state.rentalsCreated, 1);
+  assert.equal(state.sessionsCreated, 1);
+  assert.equal(state.assignedTrayCount, 1);
+  assert.equal(state.reservation.status, 'CONSUMED');
 });
 
 test('records an overpayment as paid and logs the excess for reconciliation', async (t) => {
@@ -131,8 +207,9 @@ test('records an overpayment as paid and logs the excess for reconciliation', as
   const result = await model.markPayosPaymentAsPaid(21, 530001, 'overpayment-reference-21');
 
   assert.equal(result.status, 'PAID');
-  assert.equal(state.order.status, 'CONFIRMED');
-  assert.equal(state.rentalsCreated, 1);
+  assert.equal(state.order.status, 'PROCESSING');
+  assert.equal(state.sessionsCreated, 1);
+  assert.equal(state.assignedTrayCount, 1);
   assert.deepEqual(warning.mock.calls[0].arguments[1], {
     orderCode: 21,
     paidAmount: 530001,

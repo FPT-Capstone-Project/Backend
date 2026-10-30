@@ -105,7 +105,7 @@ router.post('/', adminOnly, userController.create);
  * /api/users/{userId}:
  *   get:
  *     tags: [Users]
- *     summary: Get an account with role, order count, and rental count
+ *     summary: Get an account with role, order count, and cultivation session count
  *     security:
  *       - bearerAuth: []
  *     parameters:

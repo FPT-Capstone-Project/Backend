@@ -22,7 +22,7 @@ function createPayment(overrides = {}) {
   };
 }
 
-function loadPaymentModel({ order = {}, payments = [] } = {}) {
+function loadPaymentModel({ order = {}, payments = [], quantity = 2, trayCount = 5 } = {}) {
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/payment.model');
   const statements = [];
@@ -39,9 +39,18 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
     nextPaymentId: 21,
     paymentPaidUpdates: 0,
     orderPaidUpdates: 0,
-    rentalsCreated: 0,
+    sessionsCreated: 0,
+    assignedTrayCount: 0,
     paymentFailedUpdates: 0,
     orderFailedUpdates: 0,
+    orderItems: [{
+      order_item_id: 15,
+      quantity,
+      mushroom_type_id: 9,
+      duration_days: 30,
+    }],
+    trays: Array.from({ length: trayCount }, (_, index) => ({ tray_id: index + 1 })),
+    reservation: { reservation_id: 31, quantity, status: 'HELD' },
   };
 
   const client = {
@@ -55,6 +64,32 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
         return {
           rows: values[0] === state.order.order_id && values[1] === state.order.user_id ? [state.order] : [],
         };
+      }
+
+      if (statement.startsWith('SELECT order_item_id, quantity FROM order_items')) {
+        return { rows: state.orderItems };
+      }
+
+      if (statement.startsWith('SELECT oi.order_item_id, oi.quantity, oi.mushroom_type_id')) {
+        return { rows: state.orderItems };
+      }
+
+      if (statement.startsWith('SELECT t.tray_id')) {
+        return { rows: state.trays };
+      }
+
+      if (statement.startsWith('SELECT COALESCE(SUM(quantity), 0)::int AS quantity')) {
+        return { rows: [{ quantity: 0 }] };
+      }
+
+      if (statement.startsWith('UPDATE tray_reservations SET quantity')) {
+        state.reservation.quantity = values[1];
+        state.reservation.status = 'HELD';
+        return { rows: [state.reservation] };
+      }
+
+      if (statement.startsWith('INSERT INTO tray_reservations')) {
+        return { rows: [state.reservation] };
       }
 
       if (statement.includes('payos_checkout_url IS NOT NULL')) {
@@ -119,8 +154,58 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
         return { rows: [] };
       }
 
-      if (statement.startsWith('INSERT INTO rentals')) {
-        state.rentalsCreated += 1;
+      if (statement.startsWith('SELECT session_id FROM cultivation_sessions')) {
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('SELECT reservation_id, quantity, status FROM tray_reservations')) {
+        return { rows: [state.reservation] };
+      }
+
+      if (statement.startsWith('SELECT protocol_id FROM cultivation_protocols')) {
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('INSERT INTO cultivation_sessions')) {
+        state.sessionsCreated += 1;
+        return {
+          rows: [{
+            session_id: 77,
+            mushroom_type_id: values[0],
+            start_at: '2026-01-02T00:00:00.000Z',
+            duration_days: values[1],
+            status: 'ACTIVE',
+            harvest_date: '2026-02-01',
+          }],
+        };
+      }
+
+      if (statement.startsWith('UPDATE cultivation_trays')) {
+        return { rows: [{ tray_id: values[0] }] };
+      }
+
+      if (statement.startsWith('INSERT INTO cultivation_session_trays')) {
+        state.assignedTrayCount += 1;
+        return { rows: [] };
+      }
+
+      if (statement.startsWith('UPDATE tray_reservations SET status = \'CONSUMED\'')) {
+        state.reservation.status = 'CONSUMED';
+        return { rows: [] };
+      }
+
+      if (statement.startsWith("UPDATE tray_reservations SET status = 'HELD'")) {
+        state.reservation.status = 'HELD';
+        return { rows: [state.reservation] };
+      }
+
+      if (statement.startsWith('INSERT INTO cultivation_progress')
+        || statement.startsWith('INSERT INTO notifications')) {
+        return { rows: [] };
+      }
+
+      if (statement.startsWith("UPDATE orders SET status = 'PROCESSING'")) {
+        state.order.status = 'PROCESSING';
         return { rows: [] };
       }
 
@@ -135,6 +220,11 @@ function loadPaymentModel({ order = {}, payments = [] } = {}) {
       if (statement.startsWith("UPDATE orders SET payment_status = 'FAILED'")) {
         state.order.payment_status = 'FAILED';
         state.orderFailedUpdates += 1;
+        return { rows: [] };
+      }
+
+      if (statement.startsWith("UPDATE tray_reservations SET status = 'EXPIRED'")) {
+        state.reservation.status = 'EXPIRED';
         return { rows: [] };
       }
 
@@ -182,6 +272,7 @@ test('creates a rounded pending PayOS payment and marks its order pending in one
   assert.equal(payment.payment_method, 'PAYOS');
   assert.equal(state.order.payment_status, 'PENDING');
   assert.ok(statements.some(({ statement }) => statement.includes('FOR UPDATE')));
+  assert.ok(statements.some(({ statement }) => statement.startsWith('UPDATE tray_reservations SET quantity')));
   assert.ok(statements.some(({ statement, values }) => (
     statement.includes('payos_checkout_url IS NOT NULL') && values[2] === 15
   )));
@@ -223,7 +314,7 @@ test('saves the PayOS checkout fields only on its pending PayOS payment', async 
   assert.equal(state.payments[0].status, 'PENDING');
 });
 
-test('marks a completed PayOS payment and order paid exactly once in one transaction', async () => {
+test('marks payment paid and creates one session with the requested tray assignments exactly once', async () => {
   const { model, state, statements } = loadPaymentModel({
     order: { payment_status: 'PENDING' },
     payments: [createPayment()],
@@ -237,13 +328,15 @@ test('marks a completed PayOS payment and order paid exactly once in one transac
   assert.equal(first.transaction_code, 'PAYOS-REFERENCE-21');
   assert.equal(state.paymentPaidUpdates, 1);
   assert.equal(state.orderPaidUpdates, 1);
-  assert.equal(state.rentalsCreated, 1);
+  assert.equal(state.sessionsCreated, 1);
+  assert.equal(state.assignedTrayCount, 2);
+  assert.equal(state.reservation.status, 'CONSUMED');
   assert.equal(state.order.payment_status, 'PAID');
-  assert.equal(state.order.status, 'CONFIRMED');
-  const rentalInsert = statements.find(({ statement }) => statement.startsWith('INSERT INTO rentals'));
-  assert.match(rentalInsert.statement, /order_id, user_id, duration_days, status/);
-  assert.match(rentalInsert.statement, /SELECT o\.order_id, o\.user_id, rp\.duration_days, 'CONFIRMED'/);
-  assert.match(rentalInsert.statement, /ON CONFLICT \(order_id\) DO NOTHING/);
+  assert.equal(state.order.status, 'PROCESSING');
+  const sessionInsert = statements.find(({ statement }) => statement.startsWith('INSERT INTO cultivation_sessions'));
+  assert.match(sessionInsert.statement, /order_item_id, protocol_id/);
+  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
+  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_progress')));
   assert.ok(statements.some(({ statement }) => statement.includes("status IN ('PENDING', 'CANCELLED', 'FAILED')")));
 });
 

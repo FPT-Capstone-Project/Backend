@@ -120,7 +120,7 @@ router.put('/:id', authenticate, rentalPackageController.update);
  *       404:
  *         description: Rental package not found
  *       409:
- *         description: Package is referenced by an order or rental
+ *         description: Package is referenced by an order and cannot be deleted
  */
 router.delete('/:id', authenticate, rentalPackageController.remove);
 

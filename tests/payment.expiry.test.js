@@ -9,6 +9,7 @@ function loadPaymentModel({ stalePayments = [] } = {}) {
     stalePayments: stalePayments.map((payment) => ({ ...payment })),
     cancelledPaymentIds: [],
     failedOrderIds: [],
+    expiredReservations: [],
   };
 
   const client = {
@@ -36,6 +37,11 @@ function loadPaymentModel({ stalePayments = [] } = {}) {
         return { rows: [] };
       }
 
+      if (statement.startsWith("UPDATE tray_reservations SET status = 'EXPIRED'")) {
+        state.expiredReservations.push(values[0]);
+        return { rows: [] };
+      }
+
       throw new Error(`Unexpected SQL: ${statement}`);
     },
     release: () => {},
@@ -58,6 +64,7 @@ test('expires stale PayOS payments and fails only their still-pending orders', a
   assert.equal(processed, 1);
   assert.deepEqual(state.cancelledPaymentIds, [21]);
   assert.deepEqual(state.failedOrderIds, [11]);
+  assert.deepEqual(state.expiredReservations, [11]);
   assert.ok(statements.some(({ statement, values }) => (
     statement.includes('p.payment_method = $1')
     && statement.includes("p.created_at < NOW() - ($2 * INTERVAL '1 minute')")

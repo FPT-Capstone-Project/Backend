@@ -73,11 +73,11 @@ router.get('/:orderId', authenticate, orderController.getById);
 
 /**
  * @openapi
- * /api/orders/rentals:
+ * /api/orders/cultivation:
  *   post:
  *     tags: [Orders]
- *     summary: Create an order for a mushroom, optionally with a rental package
- *     description: The authenticated customer is assigned as the order owner. When packageId is provided, one RENTAL order item stores both the rental package and mushroom type, and mushroom growing time must not exceed package duration. Without packageId, one MUSHROOM order item is created.
+ *     summary: Create a cultivation order for a mushroom type, package, and tray quantity
+ *     description: The authenticated customer is assigned as the order owner. The package duration and mushroom type are saved on one CULTIVATION order item; quantity is the number of trays. Trays are held while checkout is pending and assigned to a cultivation session after successful payment.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -85,17 +85,19 @@ router.get('/:orderId', authenticate, orderController.getById);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/CreateRentalOrderRequest'
+ *             $ref: '#/components/schemas/CreateCultivationOrderRequest'
  *     responses:
  *       201:
- *         description: Order and a single MUSHROOM or RENTAL order item created
+ *         description: Order and cultivation order item created
  *       400:
- *         description: Invalid selection or mushroom growing time exceeds the rental duration
+ *         description: Invalid selection or mushroom growing time exceeds the selected package duration
  *       401:
  *         description: Missing or invalid JWT token
  *       404:
- *         description: Rental package or mushroom type not found
+ *         description: Package or mushroom type not found
+ *       409:
+ *         description: Not enough cultivation trays are available
  */
-router.post('/rentals', authenticate, orderController.create);
+router.post('/cultivation', authenticate, orderController.create);
 
 module.exports = router;

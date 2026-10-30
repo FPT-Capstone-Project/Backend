@@ -1,7 +1,7 @@
 const orderService = require('../services/order.service');
 
 async function create(req, res) {
-  const order = await orderService.createRentalOrder(req.user.user_id, req.body || {});
+  const order = await orderService.createCultivationOrder(req.user.user_id, req.body || {});
   res.status(201).json({ message: 'Order created successfully', data: order });
 }
 

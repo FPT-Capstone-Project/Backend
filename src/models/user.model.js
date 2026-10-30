@@ -74,7 +74,11 @@ async function findDetailById(userId) {
   const result = await pool.query(
     `SELECT ${userWithRoleColumns},
             (SELECT COUNT(*)::INTEGER FROM orders o WHERE o.user_id = u.user_id) AS order_count,
-            (SELECT COUNT(*)::INTEGER FROM rentals rt WHERE rt.user_id = u.user_id) AS rental_count
+            (SELECT COUNT(*)::INTEGER
+             FROM cultivation_sessions cs
+             JOIN order_items oi ON oi.order_item_id = cs.order_item_id
+             JOIN orders o ON o.order_id = oi.order_id
+             WHERE o.user_id = u.user_id) AS cultivation_session_count
      FROM users u
      JOIN roles r ON r.role_id = u.role_id
      WHERE u.user_id = $1

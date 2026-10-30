@@ -50,6 +50,72 @@ function warnUnprocessedPayosPayment(orderCode, paidAmount, reason, details = {}
   });
 }
 
+async function renewTrayReservations(client, orderId, expiryMinutes) {
+  const itemsResult = await client.query(
+    `SELECT order_item_id, quantity
+     FROM order_items
+     WHERE order_id = $1 AND rental_package_id IS NOT NULL AND mushroom_type_id IS NOT NULL
+     ORDER BY order_item_id
+     FOR UPDATE`,
+    [orderId],
+  );
+  if (itemsResult.rows.length === 0) {
+    throw new AppError('Order has no cultivation items to fulfill', 409);
+  }
+
+  for (const item of itemsResult.rows) {
+    const availableTraysResult = await client.query(
+      `SELECT t.tray_id
+       FROM cultivation_trays t
+       INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
+       WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE'
+       ORDER BY t.tray_id
+       FOR UPDATE OF t`,
+    );
+    const heldTraysResult = await client.query(
+      `SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+       FROM tray_reservations
+       WHERE status = 'HELD'
+         AND expires_at > CURRENT_TIMESTAMP
+         AND order_item_id <> $1`,
+      [item.order_item_id],
+    );
+    const availableQuantity = availableTraysResult.rows.length
+      - Number(heldTraysResult.rows[0]?.quantity || 0);
+    if (availableQuantity < Number(item.quantity)) {
+      throw new AppError(
+        `Only ${Math.max(availableQuantity, 0)} cultivation trays remain available for this order`,
+        409,
+      );
+    }
+
+    const reservationResult = await client.query(
+      `UPDATE tray_reservations
+       SET quantity = $2,
+           status = 'HELD',
+           expires_at = CURRENT_TIMESTAMP + ($3 * INTERVAL '1 minute'),
+           released_at = NULL
+       WHERE reservation_id = (
+         SELECT reservation_id
+         FROM tray_reservations
+         WHERE order_item_id = $1
+         ORDER BY reservation_id DESC
+         LIMIT 1
+         FOR UPDATE
+       )
+       RETURNING reservation_id`,
+      [item.order_item_id, item.quantity, expiryMinutes],
+    );
+    if (reservationResult.rows.length === 0) {
+      await client.query(
+        `INSERT INTO tray_reservations (order_item_id, quantity, expires_at)
+         VALUES ($1, $2, CURRENT_TIMESTAMP + ($3 * INTERVAL '1 minute'))`,
+        [item.order_item_id, item.quantity, expiryMinutes],
+      );
+    }
+  }
+}
+
 async function createOrGetPayosPayment(orderId, userId, maxAgeMinutes) {
   const client = await pool.connect();
 
@@ -91,6 +157,8 @@ async function createOrGetPayosPayment(orderId, userId, maxAgeMinutes) {
       await client.query('COMMIT');
       return { payment: reusablePayment, reused: true };
     }
+
+    await renewTrayReservations(client, orderId, toExpiryMinutes(maxAgeMinutes));
 
     const amount = toPaymentAmount(order.total_amount);
     if (!amount) {
@@ -305,17 +373,160 @@ async function markPayosPaymentAsPaid(orderCode, paidAmount, reference) {
       [payment.order_id],
     );
 
-    await client.query(
-      `INSERT INTO rentals (
-         order_id, user_id, duration_days, status
-       )
-       SELECT o.order_id, o.user_id, rp.duration_days, 'CONFIRMED'
-       FROM orders o
-       INNER JOIN order_items oi ON oi.order_id = o.order_id AND oi.item_type = 'RENTAL'
+    const orderItemsResult = await client.query(
+      `SELECT oi.order_item_id, oi.quantity, oi.mushroom_type_id,
+              rp.duration_days
+       FROM order_items oi
        INNER JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
-       WHERE o.order_id = $1
-         AND o.payment_status = 'PAID'
-       ON CONFLICT (order_id) DO NOTHING`,
+       WHERE oi.order_id = $1
+         AND oi.rental_package_id IS NOT NULL
+         AND oi.mushroom_type_id IS NOT NULL
+       ORDER BY oi.order_item_id
+       FOR UPDATE OF oi`,
+      [payment.order_id],
+    );
+    if (orderItemsResult.rows.length === 0) {
+      throw new AppError('Paid order has no cultivation items to fulfill', 409);
+    }
+
+    for (const item of orderItemsResult.rows) {
+      const existingSessionResult = await client.query(
+        `SELECT session_id
+         FROM cultivation_sessions
+         WHERE order_item_id = $1
+         LIMIT 1
+         FOR UPDATE`,
+        [item.order_item_id],
+      );
+      if (existingSessionResult.rows.length > 0) continue;
+
+      const reservationResult = await client.query(
+        `SELECT reservation_id, quantity, status
+         FROM tray_reservations
+         WHERE order_item_id = $1 AND status IN ('HELD', 'EXPIRED')
+         ORDER BY reservation_id DESC
+         LIMIT 1
+         FOR UPDATE`,
+        [item.order_item_id],
+      );
+      const reservation = reservationResult.rows[0];
+      if (!reservation
+        || !['HELD', 'EXPIRED'].includes(reservation.status)
+        || Number(reservation.quantity) !== Number(item.quantity)) {
+        throw new AppError('Cultivation tray reservation is missing or does not match the order', 409);
+      }
+
+      const traysResult = await client.query(
+        `SELECT t.tray_id
+         FROM cultivation_trays t
+         INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
+         WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE'
+         ORDER BY t.tray_id
+         FOR UPDATE OF t`,
+      );
+      const otherReservationsResult = await client.query(
+        `SELECT COALESCE(SUM(quantity), 0)::int AS quantity
+         FROM tray_reservations
+         WHERE status = 'HELD'
+           AND expires_at > CURRENT_TIMESTAMP
+           AND order_item_id <> $1`,
+        [item.order_item_id],
+      );
+      const availableForOrder = traysResult.rows.length
+        - Number(otherReservationsResult.rows[0]?.quantity || 0);
+      if (availableForOrder < Number(item.quantity)) {
+        throw new AppError('Reserved cultivation trays are no longer available', 409);
+      }
+      const reclaimedReservationResult = await client.query(
+        `UPDATE tray_reservations
+         SET status = 'HELD',
+             expires_at = CURRENT_TIMESTAMP + INTERVAL '15 minutes',
+             released_at = NULL
+         WHERE reservation_id = $1 AND status IN ('HELD', 'EXPIRED')
+         RETURNING reservation_id`,
+        [reservation.reservation_id],
+      );
+      if (reclaimedReservationResult.rows.length === 0) {
+        throw new AppError('Cultivation tray reservation could not be reclaimed', 409);
+      }
+      const assignedTrays = traysResult.rows.slice(0, Number(item.quantity));
+
+      const protocolResult = await client.query(
+        `SELECT protocol_id
+         FROM cultivation_protocols
+         WHERE mushroom_type_id = $1 AND status = 'ACTIVE'
+         ORDER BY created_at DESC, protocol_id DESC
+         LIMIT 1`,
+        [item.mushroom_type_id],
+      );
+      const sessionResult = await client.query(
+        `INSERT INTO cultivation_sessions (
+           mushroom_type_id, start_at, duration_days, status, harvest_date,
+           order_item_id, protocol_id
+         )
+         VALUES (
+           $1, CURRENT_TIMESTAMP, $2, 'ACTIVE',
+           CURRENT_DATE + $2::integer, $3, $4
+         )
+         RETURNING session_id, mushroom_type_id, start_at, duration_days, status, harvest_date`,
+        [
+          item.mushroom_type_id,
+          item.duration_days,
+          item.order_item_id,
+          protocolResult.rows[0]?.protocol_id ?? null,
+        ],
+      );
+      const session = sessionResult.rows[0];
+
+      for (const tray of assignedTrays) {
+        const updatedTrayResult = await client.query(
+          `UPDATE cultivation_trays
+           SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
+           WHERE tray_id = $1 AND status = 'AVAILABLE'
+           RETURNING tray_id`,
+          [tray.tray_id],
+        );
+        if (updatedTrayResult.rows.length === 0) {
+          throw new AppError('A reserved cultivation tray is no longer available', 409);
+        }
+        await client.query(
+          `INSERT INTO cultivation_session_trays (session_id, tray_id, status)
+           VALUES ($1, $2, 'ACTIVE')`,
+          [session.session_id, tray.tray_id],
+        );
+      }
+
+      await client.query(
+        `UPDATE tray_reservations
+         SET status = 'CONSUMED'
+         WHERE reservation_id = $1`,
+        [reservation.reservation_id],
+      );
+      await client.query(
+        `INSERT INTO cultivation_progress (
+           session_id, current_stage, progress_percent, start_date,
+           expected_harvest_date, description
+         )
+         VALUES ($1, 'PREPARATION', 0, CURRENT_DATE, $2::date, 'Cultivation started after payment')`,
+        [session.session_id, session.harvest_date],
+      );
+      await client.query(
+        `INSERT INTO notifications (
+           user_id, notification_type, title, message, reference_type, reference_id
+         )
+         SELECT user_id, 'CULTIVATION_STARTED', 'Phiên trồng trọt đã bắt đầu',
+                'Nấm của bạn đã được đưa vào khay trồng.',
+                'CULTIVATION_SESSION', $2
+         FROM orders
+         WHERE order_id = $1`,
+        [payment.order_id, session.session_id],
+      );
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'PROCESSING'
+       WHERE order_id = $1 AND status = 'CONFIRMED'`,
       [payment.order_id],
     );
 
@@ -375,6 +586,15 @@ async function expireStalePayosPayments(maxAgeMinutes) {
          WHERE order_id = $1
            AND status = 'PENDING'
            AND payment_status = 'PENDING'`,
+        [stalePayment.order_id],
+      );
+      await client.query(
+        `UPDATE tray_reservations
+         SET status = 'EXPIRED', released_at = CURRENT_TIMESTAMP
+         WHERE status = 'HELD'
+           AND order_item_id IN (
+             SELECT order_item_id FROM order_items WHERE order_id = $1
+           )`,
         [stalePayment.order_id],
       );
       processedCount += paymentResult.rows.length;

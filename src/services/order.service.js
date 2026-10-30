@@ -9,18 +9,25 @@ function parseId(value, fieldName) {
   return parsed;
 }
 
-async function createRentalOrder(userId, payload = {}) {
+async function createCultivationOrder(userId, payload = {}) {
   const customerId = parseId(userId, 'userId');
   const rawPackageId = payload.packageId ?? payload.package_id;
-  const packageId = rawPackageId === undefined || rawPackageId === null || rawPackageId === ''
-    ? null
-    : parseId(rawPackageId, 'packageId');
+  const packageId = parseId(rawPackageId, 'packageId');
   const mushroomTypeId = parseId(
     payload.mushroomTypeId ?? payload.mushroom_type_id,
     'mushroomTypeId',
   );
+  const quantity = parseId(
+    payload.quantity ?? payload.trayCount ?? payload.tray_count,
+    'quantity',
+  );
 
-  return orderModel.createRentalOrder({ userId: customerId, packageId, mushroomTypeId });
+  return orderModel.createCultivationOrder({
+    userId: customerId,
+    packageId,
+    mushroomTypeId,
+    quantity,
+  });
 }
 
 async function getCustomerOrders(userId) {
@@ -43,7 +50,7 @@ async function cancelCustomerOrder(userId, orderId) {
 }
 
 module.exports = {
-  createRentalOrder,
+  createCultivationOrder,
   getCustomerOrders,
   getCustomerOrderDetails,
   cancelCustomerOrder,
