@@ -6,7 +6,9 @@ async function createPayosPayment(req, res) {
     res.status(201).json({ success: true, message: 'PayOS payment created successfully', data: payment });
   } catch (error) {
     if (error && (error.isOperational || Number.isInteger(error.statusCode))) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      const body = { success: false, message: error.message };
+      if (error.code) body.code = error.code;
+      return res.status(error.statusCode || 500).json(body);
     }
     throw error;
   }
@@ -18,7 +20,23 @@ async function getPayosPaymentStatus(req, res) {
     res.status(200).json({ success: true, data: status });
   } catch (error) {
     if (error && (error.isOperational || Number.isInteger(error.statusCode))) {
-      return res.status(error.statusCode || 500).json({ success: false, message: error.message });
+      const body = { success: false, message: error.message };
+      if (error.code) body.code = error.code;
+      return res.status(error.statusCode || 500).json(body);
+    }
+    throw error;
+  }
+}
+
+async function syncPayosPayment(req, res) {
+  try {
+    const result = await paymentService.syncPayosPayment(req.user.user_id, req.params.orderId);
+    res.json({ success: true, data: result });
+  } catch (error) {
+    if (error && (error.isOperational || Number.isInteger(error.statusCode))) {
+      const body = { success: false, message: error.message };
+      if (error.code) body.code = error.code;
+      return res.status(error.statusCode || 500).json(body);
     }
     throw error;
   }
@@ -37,6 +55,7 @@ function payosWebhookHealth(req, res) {
 module.exports = {
   createPayosPayment,
   getPayosPaymentStatus,
+  syncPayosPayment,
   payosWebhook,
   payosWebhookHealth,
 };

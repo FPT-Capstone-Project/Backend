@@ -26,6 +26,7 @@ function loadPaymentStatusService(result) {
       signPaymentRequest: () => '',
       verifyWebhookSignature: () => false,
       createPayosPaymentLink: async () => ({}),
+      getPayosPaymentRequest: async () => ({}),
     },
   };
 

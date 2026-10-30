@@ -35,10 +35,42 @@ router.get('/orders/:orderId/status', authenticate, paymentController.getPayosPa
 
 /**
  * @openapi
+ * /api/payments/orders/{orderId}/payos/sync:
+ *   post:
+ *     tags: [Payments]
+ *     summary: Synchronize a PayOS payment after returning from checkout
+ *     description: Queries PayOS directly and updates local payment and fulfillment state only when PayOS confirms PAID. No payment status is accepted from the client.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Current local payment state after synchronization
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: Order or payment not found
+ *       409:
+ *         description: Payment could not be synchronized
+ *       502:
+ *         description: PayOS could not confirm the payment
+ *       503:
+ *         description: PayOS is not configured
+ */
+router.post('/orders/:orderId/payos/sync', authenticate, paymentController.syncPayosPayment);
+
+/**
+ * @openapi
  * /api/payments/orders/{orderId}/payos:
  *   post:
  *     tags: [Payments]
  *     summary: Create or reuse a PayOS payment link for an order
+ *     description: Rechecks cultivation tray and spawn capacity. A link is returned only while its linked resource hold remains active.
  *     security:
  *       - bearerAuth: []
  *     parameters:

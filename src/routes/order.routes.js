@@ -77,7 +77,7 @@ router.get('/:orderId', authenticate, orderController.getById);
  *   post:
  *     tags: [Orders]
  *     summary: Create a cultivation order for a mushroom type, package, and tray quantity
- *     description: The authenticated customer is assigned as the order owner. The package duration and mushroom type are saved on one CULTIVATION order item; quantity is the number of trays. Trays are held while checkout is pending and assigned to a cultivation session after successful payment.
+ *     description: The selected active package must cover the selected mushroom's growing days. Each tray requires three spawn units. Both trays and spawn are held for the configured checkout period and allocated only after successful payment.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -96,7 +96,7 @@ router.get('/:orderId', authenticate, orderController.getById);
  *       404:
  *         description: Package or mushroom type not found
  *       409:
- *         description: Not enough cultivation trays are available
+ *         description: Insufficient cultivation capacity (`INSUFFICIENT_TRAYS` or `INSUFFICIENT_SPAWN`)
  */
 router.post('/cultivation', authenticate, orderController.create);
 

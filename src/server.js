@@ -13,7 +13,7 @@ autoMisting.start();
 const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const payosPaymentExpiryInterval = setInterval(() => {
-  paymentModel.expireStalePayosPayments(env.payosPaymentExpireMinutes)
+  paymentModel.expireStalePayosPayments()
     .catch((error) => console.error('Không thể xử lý thanh toán PayOS hết hạn:', error));
 }, 60_000);
 payosPaymentExpiryInterval.unref();

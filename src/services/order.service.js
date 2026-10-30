@@ -1,5 +1,6 @@
 const orderModel = require('../models/order.model');
 const AppError = require('../utils/app-error');
+const env = require('../config/env');
 
 function parseId(value, fieldName) {
   const parsed = Number(value);
@@ -7,6 +8,12 @@ function parseId(value, fieldName) {
     throw new AppError(`${fieldName} must be a positive integer`, 400);
   }
   return parsed;
+}
+
+function getReservationHoldMinutes() {
+  const minutes = Number(env.cultivationReservationHoldMinutes ?? env.payosPaymentExpireMinutes);
+  const wholeMinutes = Math.floor(minutes);
+  return Number.isFinite(wholeMinutes) && wholeMinutes > 0 ? wholeMinutes : 15;
 }
 
 async function createCultivationOrder(userId, payload = {}) {
@@ -27,6 +34,7 @@ async function createCultivationOrder(userId, payload = {}) {
     packageId,
     mushroomTypeId,
     quantity,
+    holdMinutes: getReservationHoldMinutes(),
   });
 }
 

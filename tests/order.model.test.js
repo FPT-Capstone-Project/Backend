@@ -6,6 +6,8 @@ function loadOrderModel({
   growingDays = 25,
   availableTrays = 5,
   heldTrays = 0,
+  spawnInventory = 30,
+  heldSpawn = 0,
   readResults = {},
   cancelOrder = { order_id: 11, status: 'PENDING', payment_status: 'UNPAID' },
 } = {}) {
@@ -26,8 +28,14 @@ function loadOrderModel({
       if (statement.startsWith('SELECT t.tray_id')) {
         return { rows: Array.from({ length: availableTrays }, (_, index) => ({ tray_id: index + 1 })) };
       }
-      if (statement.startsWith('SELECT COALESCE(SUM(quantity), 0)::int AS quantity')) {
+      if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity), 0)::int AS quantity')) {
         return { rows: [{ quantity: heldTrays }] };
+      }
+      if (statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity), 0)::numeric AS quantity')) {
+        return { rows: [{ quantity: heldSpawn }] };
+      }
+      if (statement.startsWith('SELECT inventory_id, mushroom_type_id, quantity FROM spawn_inventory')) {
+        return { rows: spawnInventory == null ? [] : [{ inventory_id: 4, mushroom_type_id: 9, quantity: spawnInventory }] };
       }
       if (statement.startsWith('SELECT order_id, status, payment_status')) {
         return { rows: cancelOrder ? [cancelOrder] : [] };
@@ -52,7 +60,6 @@ function loadOrderModel({
           rows: [{
             order_item_id: 15,
             order_id: values[0],
-            item_type: 'CULTIVATION',
             rental_package_id: values[1],
             mushroom_type_id: values[2],
             quantity: values[3],
@@ -61,6 +68,7 @@ function loadOrderModel({
           }],
         };
       }
+      if (statement.startsWith('UPDATE tray_reservations SET quantity')) return { rows: [] };
       if (statement.startsWith('INSERT INTO tray_reservations')) return { rows: [] };
       return { rows: [] };
     },
@@ -94,7 +102,6 @@ test('creates a cultivation item for the selected package, mushroom, and tray qu
   assert.equal(order.user_id, 3);
   assert.equal(order.subtotal, '1590000');
   assert.equal(order.items.length, 1);
-  assert.equal(order.items[0].item_type, 'CULTIVATION');
   assert.equal(order.items[0].rental_package_id, 7);
   assert.equal(order.items[0].mushroom_type_id, 9);
   assert.equal(order.items[0].package_name, '30 days');
@@ -103,7 +110,9 @@ test('creates a cultivation item for the selected package, mushroom, and tray qu
   assert.equal(order.items[0].quantity, 3);
   assert.equal(order.items[0].total_price, '1590000');
   assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
-  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO tray_reservations')));
+  const reservationInsert = statements.find(({ statement }) => statement.startsWith('INSERT INTO tray_reservations'));
+  assert.ok(reservationInsert);
+  assert.deepEqual(reservationInsert.values.slice(0, 3), [15, 3, 9]);
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
   assert.ok(!statements.some(({ statement }) => statement === 'ROLLBACK'));
 });
@@ -117,8 +126,25 @@ test('rejects orders when selected tray quantity exceeds available trays', async
       mushroomTypeId: 9,
       quantity: 3,
     }),
-    { statusCode: 409, message: 'Only 2 cultivation trays are currently available' },
+    { statusCode: 409, code: 'INSUFFICIENT_TRAYS', message: 'Only 2 cultivation trays are currently available' },
   );
+  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
+});
+
+test('rejects orders when selected mushroom spawn is held or unavailable', async () => {
+  const { model, statements } = loadOrderModel({ spawnInventory: 10, heldSpawn: 2 });
+
+  await assert.rejects(
+    () => model.createCultivationOrder({
+      userId: 3,
+      packageId: 7,
+      mushroomTypeId: 9,
+      quantity: 3,
+    }),
+    { statusCode: 409, code: 'INSUFFICIENT_SPAWN', message: 'Only 8 spawn units are currently available' },
+  );
+
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
 });
@@ -150,7 +176,6 @@ test('lists and returns order details only with the authenticated customer ID', 
     total_amount: '530000',
     status: 'PENDING',
     order_item_id: 15,
-    item_type: 'CULTIVATION',
     rental_package_id: 7,
     mushroom_type_id: null,
     package_name: '30 days',

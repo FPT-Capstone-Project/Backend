@@ -291,8 +291,8 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
       VALUES(1,24,28,85,95),(2,25,29,88,96);
      INSERT INTO rental_packages(package_name,duration_days,price) VALUES('Test package',30,1);
      INSERT INTO orders(user_id,status,payment_status) VALUES(1,'PROCESSING','PAID'),(1,'PROCESSING','PAID');
-     INSERT INTO order_items(order_id,item_type,rental_package_id,mushroom_type_id,unit_price,total_price)
-      VALUES(1,'CULTIVATION',1,1,1,1),(2,'CULTIVATION',1,2,1,1);
+     INSERT INTO order_items(order_id,rental_package_id,mushroom_type_id,unit_price,total_price)
+      VALUES(1,1,1,1,1),(2,1,2,1,1);
      INSERT INTO cultivation_sessions(mushroom_type_id,start_at,duration_days,status,order_item_id)
       VALUES(1,CURRENT_TIMESTAMP,30,'ACTIVE',1),(2,CURRENT_TIMESTAMP,30,'ACTIVE',2);
      INSERT INTO cultivation_session_trays(session_id,tray_id,status)

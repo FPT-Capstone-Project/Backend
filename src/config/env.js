@@ -44,6 +44,9 @@ const env = {
   payosReturnUrl: process.env.PAYOS_RETURN_URL || '',
   payosCancelUrl: process.env.PAYOS_CANCEL_URL || '',
   payosPaymentExpireMinutes: Number(process.env.PAYOS_PAYMENT_EXPIRE_MINUTES || 15),
+  cultivationReservationHoldMinutes: Number(
+    process.env.CULTIVATION_RESERVATION_HOLD_MINUTES || process.env.PAYOS_PAYMENT_EXPIRE_MINUTES || 15,
+  ),
   payosWebhookUrl: process.env.PAYOS_WEBHOOK_URL || '',
 
 };

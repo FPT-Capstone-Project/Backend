@@ -57,22 +57,24 @@ function verifyWebhookSignature(data, signature) {
   return hasSameValue(sign(signedData), signature || '');
 }
 
-async function requestPayos(path, payload) {
+async function requestPayos(path, { method = 'POST', payload } = {}) {
   ensurePayosConfigured();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 10_000);
 
   try {
-    const response = await fetch(`${PAYOS_API_URL}${path}`, {
-      method: 'POST',
+    const options = {
+      method,
       headers: {
         'Content-Type': 'application/json',
         'x-client-id': env.payosClientId,
         'x-api-key': env.payosApiKey,
       },
-      body: JSON.stringify(payload),
       signal: controller.signal,
-    });
+    };
+    if (payload !== undefined) options.body = JSON.stringify(payload);
+
+    const response = await fetch(`${PAYOS_API_URL}${path}`, options);
     let result;
     try {
       result = await response.json();
@@ -92,16 +94,25 @@ async function requestPayos(path, payload) {
 }
 
 async function createPayosPaymentLink(payload) {
-  return requestPayos('/v2/payment-requests', payload);
+  return requestPayos('/v2/payment-requests', { payload });
+}
+
+async function getPayosPaymentRequest(paymentId) {
+  const id = Number(paymentId);
+  if (!Number.isSafeInteger(id) || id <= 0) {
+    throw new AppError('PayOS payment id is invalid', 400);
+  }
+  return requestPayos(`/v2/payment-requests/${encodeURIComponent(String(id))}`, { method: 'GET' });
 }
 
 async function confirmPayosWebhook(webhookUrl) {
-  return requestPayos('/confirm-webhook', { webhookUrl });
+  return requestPayos('/confirm-webhook', { payload: { webhookUrl } });
 }
 
 module.exports = {
   signPaymentRequest,
   verifyWebhookSignature,
   createPayosPaymentLink,
+  getPayosPaymentRequest,
   confirmPayosWebhook,
 };
