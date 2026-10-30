@@ -236,7 +236,7 @@ const options = {
             packageId: {
               type: 'integer',
               example: 1,
-              description: 'Selected cultivation package duration, such as 15 or 20 days.',
+              description: 'Selected active cultivation package. Its database duration must cover the mushroom growing days.',
             },
             mushroomTypeId: {
               type: 'integer',
@@ -290,7 +290,7 @@ const options = {
                 orderStatus: {
                   type: 'string',
                   enum: ['PENDING', 'CONFIRMED', 'PROCESSING', 'COMPLETED', 'CANCELLED'],
-                  description: 'Becomes CONFIRMED after a successful PayOS payment.',
+                  description: 'Becomes PROCESSING after a successful PayOS payment and cultivation allocation.',
                   example: 'PENDING',
                 },
                 paymentStatus: {

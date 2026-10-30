@@ -1,5 +1,11 @@
 const pool = require('../config/db');
 const AppError = require('../utils/app-error');
+const {
+  assertCultivationCapacity,
+  renewReservation,
+  requiredSpawnForTrays,
+  toHoldMinutes,
+} = require('./cultivationReservation.model');
 
 async function findAllByUserId(userId) {
   const result = await pool.query(
@@ -17,7 +23,7 @@ async function findByIdForUser(orderId, userId) {
   const result = await pool.query(
     `SELECT o.order_id, o.user_id, o.subtotal, o.discount, o.shipping_fee,
           o.total_amount, o.status, o.payment_status, o.created_at, o.updated_at,
-            oi.order_item_id, oi.item_type, oi.rental_package_id,
+            oi.order_item_id, oi.rental_package_id,
             oi.mushroom_type_id, oi.quantity, oi.unit_price, oi.total_price,
             rp.package_name, mt.name AS mushroom_name,
             cs.session_id, cs.status AS cultivation_status,
@@ -56,7 +62,6 @@ async function findByIdForUser(orderId, userId) {
       .filter((row) => row.order_item_id !== null)
       .map((row) => ({
         order_item_id: row.order_item_id,
-        item_type: row.item_type,
         rental_package_id: row.rental_package_id,
         mushroom_type_id: row.mushroom_type_id,
         package_name: row.package_name,
@@ -131,7 +136,13 @@ async function cancelOrderForUser(orderId, userId) {
   }
 }
 
-async function createCultivationOrder({ userId, packageId, mushroomTypeId, quantity }) {
+async function createCultivationOrder({
+  userId,
+  packageId,
+  mushroomTypeId,
+  quantity,
+  holdMinutes,
+}) {
   const client = await pool.connect();
 
   try {
@@ -167,27 +178,13 @@ async function createCultivationOrder({ userId, packageId, mushroomTypeId, quant
       );
     }
 
-    const availableTraysResult = await client.query(
-      `SELECT t.tray_id
-       FROM cultivation_trays t
-       INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
-       WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE'
-       ORDER BY t.tray_id
-       FOR UPDATE OF t`,
-    );
-    const heldTraysResult = await client.query(
-      `SELECT COALESCE(SUM(quantity), 0)::int AS quantity
-       FROM tray_reservations
-       WHERE status = 'HELD' AND expires_at > CURRENT_TIMESTAMP`,
-    );
-    const availableQuantity = availableTraysResult.rows.length
-      - Number(heldTraysResult.rows[0]?.quantity || 0);
-    if (availableQuantity < quantity) {
-      throw new AppError(
-        `Only ${Math.max(availableQuantity, 0)} cultivation trays are currently available`,
-        409,
-      );
-    }
+    const spawnQuantity = requiredSpawnForTrays(quantity);
+    await assertCultivationCapacity(client, {
+      orderItemId: 0,
+      mushroomTypeId,
+      trayQuantity: quantity,
+      spawnQuantity,
+    });
 
     const packagePrice = rentalPackage.price;
     const orderResult = await client.query(
@@ -205,15 +202,15 @@ async function createCultivationOrder({ userId, packageId, mushroomTypeId, quant
 
     const itemResult = await client.query(
       `INSERT INTO order_items (
-         order_id, item_type, rental_package_id, mushroom_type_id,
+         order_id, rental_package_id, mushroom_type_id,
          quantity, unit_price, total_price
        )
        VALUES (
-         $1, 'CULTIVATION', $2, $3, $4,
+         $1, $2, $3, $4,
          $5::numeric + $6::numeric,
          ($5::numeric + $6::numeric) * $4::integer
        )
-       RETURNING order_item_id, order_id, item_type, rental_package_id,
+       RETURNING order_item_id, order_id, rental_package_id,
                  mushroom_type_id, quantity, unit_price, total_price`,
       [
         order.order_id,
@@ -225,11 +222,12 @@ async function createCultivationOrder({ userId, packageId, mushroomTypeId, quant
       ],
     );
 
-    await client.query(
-      `INSERT INTO tray_reservations (order_item_id, quantity, expires_at)
-       VALUES ($1, $2, CURRENT_TIMESTAMP + INTERVAL '30 minutes')`,
-      [itemResult.rows[0].order_item_id, quantity],
-    );
+    await renewReservation(client, {
+      orderItemId: itemResult.rows[0].order_item_id,
+      trayQuantity: quantity,
+      spawnQuantity,
+      holdMinutes: toHoldMinutes(holdMinutes),
+    });
 
     await client.query('COMMIT');
     return {

@@ -1,13 +1,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-function loadPaymentModel({ stalePayments = [] } = {}) {
+function loadPaymentModel({ staleReservations = [], hasPendingPayment = true } = {}) {
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/payment.model');
   const statements = [];
   const state = {
-    stalePayments: stalePayments.map((payment) => ({ ...payment })),
-    cancelledPaymentIds: [],
+    staleReservations: staleReservations.map((reservation) => ({ ...reservation })),
+    cancelledOrderIds: [],
     failedOrderIds: [],
     expiredReservations: [],
   };
@@ -21,15 +21,23 @@ function loadPaymentModel({ stalePayments = [] } = {}) {
         return { rows: [] };
       }
 
-      if (statement.startsWith('SELECT p.payment_id, p.order_id')) {
-        return { rows: state.stalePayments };
+      if (statement.startsWith('SELECT tr.reservation_id, oi.order_id')) {
+        return { rows: state.staleReservations };
+      }
+      if (statement.startsWith('SELECT order_id FROM orders')) {
+        return { rows: [{ order_id: values[0] }] };
+      }
+      if (statement.startsWith('SELECT payment_id FROM payments')) {
+        return { rows: hasPendingPayment ? [{ payment_id: values[0] + 10 }] : [] };
+      }
+      if (statement.startsWith('SELECT reservation_id FROM tray_reservations')) {
+        return { rows: [{ reservation_id: values[0] }] };
       }
 
       if (statement.startsWith("UPDATE payments SET status = 'CANCELLED'")) {
-        const payment = state.stalePayments.find(({ payment_id }) => payment_id === values[0]);
-        if (!payment || state.cancelledPaymentIds.includes(payment.payment_id)) return { rows: [] };
-        state.cancelledPaymentIds.push(payment.payment_id);
-        return { rows: [{ payment_id: payment.payment_id }] };
+        if (!hasPendingPayment || state.cancelledOrderIds.includes(values[0])) return { rows: [] };
+        state.cancelledOrderIds.push(values[0]);
+        return { rows: [{ payment_id: values[0] + 10 }] };
       }
 
       if (statement.startsWith("UPDATE orders SET payment_status = 'FAILED'")) {
@@ -39,7 +47,7 @@ function loadPaymentModel({ stalePayments = [] } = {}) {
 
       if (statement.startsWith("UPDATE tray_reservations SET status = 'EXPIRED'")) {
         state.expiredReservations.push(values[0]);
-        return { rows: [] };
+        return { rows: [{ reservation_id: values[0] }] };
       }
 
       throw new Error(`Unexpected SQL: ${statement}`);
@@ -54,30 +62,30 @@ function loadPaymentModel({ stalePayments = [] } = {}) {
   return { model: require('../src/models/payment.model'), state, statements };
 }
 
-test('expires stale PayOS payments and fails only their still-pending orders', async () => {
+test('expires held reservations, cancels their pending payment, and leaves the order pending for retry', async () => {
   const { model, state, statements } = loadPaymentModel({
-    stalePayments: [{ payment_id: 21, order_id: 11 }],
+    staleReservations: [{ reservation_id: 31, order_id: 11 }],
   });
 
-  const processed = await model.expireStalePayosPayments(15);
+  const processed = await model.expireStalePayosPayments();
 
   assert.equal(processed, 1);
-  assert.deepEqual(state.cancelledPaymentIds, [21]);
+  assert.deepEqual(state.cancelledOrderIds, [11]);
   assert.deepEqual(state.failedOrderIds, [11]);
-  assert.deepEqual(state.expiredReservations, [11]);
-  assert.ok(statements.some(({ statement, values }) => (
-    statement.includes('p.payment_method = $1')
-    && statement.includes("p.created_at < NOW() - ($2 * INTERVAL '1 minute')")
-    && statement.includes('FOR UPDATE OF p, o')
-    && values[0] === 'PAYOS'
-    && values[1] === 16
+  assert.deepEqual(state.expiredReservations, [31]);
+  assert.ok(statements.some(({ statement }) => (
+    statement.includes("tr.status = 'HELD' AND tr.expires_at <= CURRENT_TIMESTAMP")
   )));
+  const orderLock = statements.findIndex(({ statement }) => statement.startsWith('SELECT order_id FROM orders'));
+  const paymentLock = statements.findIndex(({ statement }) => statement.startsWith('SELECT payment_id FROM payments'));
+  const reservationLock = statements.findIndex(({ statement }) => statement.startsWith('SELECT reservation_id FROM tray_reservations'));
+  assert.ok(orderLock < paymentLock && paymentLock < reservationLock);
 });
 
 test('returns zero when no stale pending PayOS payment is found', async () => {
   const { model, state } = loadPaymentModel();
 
-  assert.equal(await model.expireStalePayosPayments(15), 0);
-  assert.deepEqual(state.cancelledPaymentIds, []);
+  assert.equal(await model.expireStalePayosPayments(), 0);
+  assert.deepEqual(state.cancelledOrderIds, []);
   assert.deepEqual(state.failedOrderIds, []);
 });

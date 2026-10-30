@@ -87,6 +87,33 @@ test('creates a PayOS payment link with the required merchant headers and return
   assert.ok(request.options.signal);
 });
 
+test('gets a PayOS payment request with merchant credentials', async (t) => {
+  const { getPayosPaymentRequest } = loadPayos();
+  let request;
+  t.mock.method(global, 'fetch', async (url, options) => {
+    request = { url, options };
+    return {
+      ok: true,
+      json: async () => ({
+        code: '00',
+        data: { orderCode: 21, status: 'PAID', amountPaid: 530000 },
+      }),
+    };
+  });
+
+  const result = await getPayosPaymentRequest(21);
+
+  assert.deepEqual(result, { orderCode: 21, status: 'PAID', amountPaid: 530000 });
+  assert.equal(request.url, 'https://api-merchant.payos.vn/v2/payment-requests/21');
+  assert.equal(request.options.method, 'GET');
+  assert.deepEqual(request.options.headers, {
+    'Content-Type': 'application/json',
+    'x-client-id': 'test-client-id',
+    'x-api-key': 'test-api-key',
+  });
+  assert.equal(request.options.body, undefined);
+});
+
 test('surfaces PayOS API errors and confirms a configured webhook URL', async (t) => {
   const { createPayosPaymentLink, confirmPayosWebhook } = loadPayos();
   const requests = [];

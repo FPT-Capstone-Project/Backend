@@ -17,8 +17,8 @@ test('returns user role and independent order and cultivation session counts', a
     VALUES (2, 'customer@example.test', 'hash', 'Test Customer');
     INSERT INTO orders(user_id) VALUES (1), (1);
     INSERT INTO mushroom_types(name, growing_days) VALUES ('Oyster', 25);
-    INSERT INTO order_items(order_id, item_type, mushroom_type_id, unit_price, total_price)
-    VALUES (1, 'CULTIVATION', 1, 100, 100);
+    INSERT INTO order_items(order_id, mushroom_type_id, unit_price, total_price)
+    VALUES (1, 1, 100, 100);
     INSERT INTO cultivation_sessions(mushroom_type_id, start_at, order_item_id)
     VALUES (1, CURRENT_TIMESTAMP, 1);
   `);

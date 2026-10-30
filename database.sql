@@ -176,7 +176,6 @@ CREATE TABLE public.orders (
 CREATE TABLE public.order_items (
   order_item_id     SERIAL PRIMARY KEY,
   order_id          INTEGER NOT NULL,
-  item_type         VARCHAR NOT NULL,
   rental_package_id INTEGER,
   mushroom_type_id  INTEGER,
   quantity          INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
@@ -203,6 +202,7 @@ CREATE TABLE public.payments (
   payos_payment_link_id TEXT,
   payos_checkout_url  TEXT,
   payos_qr_code       TEXT,
+  expires_at          TIMESTAMPTZ,
   CONSTRAINT fk_payments_order FOREIGN KEY (order_id) REFERENCES public.orders(order_id)
 );
 
@@ -307,11 +307,14 @@ CREATE TABLE public.tray_reservations (
   reservation_id SERIAL PRIMARY KEY,
   order_item_id  INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
   quantity       INTEGER NOT NULL CHECK (quantity > 0),
+  spawn_quantity INTEGER NOT NULL,
   status         VARCHAR NOT NULL DEFAULT 'HELD'
     CHECK (status IN ('HELD', 'CONSUMED', 'RELEASED', 'EXPIRED')),
-  expires_at     TIMESTAMP NOT NULL,
+  expires_at     TIMESTAMPTZ NOT NULL,
   created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  released_at    TIMESTAMP
+  released_at    TIMESTAMP,
+  CONSTRAINT tray_reservations_spawn_quantity_check
+    CHECK (spawn_quantity = quantity * 3)
 );
 
 CREATE TABLE public.harvest_requests (
@@ -611,6 +614,11 @@ CREATE INDEX idx_session_trays_session_id    ON public.cultivation_session_trays
 CREATE INDEX idx_session_trays_tray_id       ON public.cultivation_session_trays(tray_id);
 CREATE INDEX idx_tray_reservations_item_status
   ON public.tray_reservations(order_item_id, status);
+CREATE INDEX idx_tray_reservations_active_hold
+  ON public.tray_reservations(status, expires_at);
+CREATE INDEX idx_payments_payos_pending_expiry
+  ON public.payments(order_id, status, expires_at)
+  WHERE payment_method = 'PAYOS';
 CREATE INDEX idx_inspections_session_tray_date
   ON public.cultivation_inspections(session_tray_id, inspection_date DESC);
 CREATE INDEX idx_cultivation_issues_session_tray_id
