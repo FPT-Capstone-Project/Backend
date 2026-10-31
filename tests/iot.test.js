@@ -110,13 +110,17 @@ test('publishes plain ON/OFF on exact firmware topic, QoS 1, no retention and sh
 test('disconnect discards unacknowledged commands and does not replay on reconnect', async () => {
   const h = harness();
   try {
+    assert.equal(h.service.getDisconnectVersion(),0);
     h.client.mode = 'wait';
     const pending = h.service.publish('master01', 1, 'ON');
     const rejected = assert.rejects(pending, { statusCode: 503 });
     h.client.connected = false; h.client.emit('close');
+    assert.equal(h.service.getDisconnectVersion(),1);
+    h.client.emit('offline');assert.equal(h.service.getDisconnectVersion(),1);
     await rejected;
     assert.equal(h.client.outgoing.size, 0);
     h.client.connected = true; h.client.emit('connect');
+    assert.equal(h.service.getDisconnectVersion(),1);
     assert.equal(h.client.publications.length, 1);
   } finally { await h.service.stop(); }
 });

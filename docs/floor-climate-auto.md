@@ -2,21 +2,37 @@
 
 ## Triển khai
 
-Chạy `migrations/007_add_floor_climate_profiles.sql` sau migration IoT 004 và AUTO 005,
-trước khi khởi động phiên bản backend này. Migration giữ cấu hình cũ ở `LEGACY`,
-`cooling_enabled=false`; không tự bật phun làm mát hoặc tạo phiên AUTO.
+Database mới: chạy `database.sql`. Database đã tạo theo bản schema chỉnh sửa có
+`tray_positions`, `position_id`, `total_rows`, `total_columns`: chạy
+`migrations/012_restore_auto_control_integrity.sql` trước khi khởi động backend.
+Không chạy lại các migration tạo bảng 004/005/007/009 trên schema đã có đủ bảng/cột.
+
+Migration 012 khôi phục UNIQUE cho SSR `(master_id, channel)`, mapping tầng/node/kênh,
+một phiên AUTO RUNNING mỗi tầng, kiểm tra khoảng điều kiện và các trigger bảo vệ
+phòng của master, kênh đèn/van. Nếu dữ liệu hiện có trùng hoặc không hợp lệ,
+migration báo lỗi và rollback; cần sửa các bản ghi đó trước khi chạy lại.
+Migration không tạo thiết bị, đổi mapping, bật van hoặc tự tạo phiên AUTO.
+Master phải được khai báo trong `iot_masters` với đúng `master_identifier` của firmware
+và `cultivation_room_id`; không còn giả định database tự tạo sẵn `master01`.
 
 Các API trả kết quả trong `{ "data": ... }`. Mapping, gán khay, lấy gợi ý,
 lưu, Start, Stop và Evaluate yêu cầu JWT và quyền `iot.automation.manage`.
-Migration 005 cấp quyền này theo tên role Admin/Farm Operator, không cấp Customer.
+Migration 012 cấp quyền này theo tên role Admin/Farm Operator, không cấp Customer.
+Nếu tạo role sau khi khởi tạo database, chạy lại migration 012 để cấp quyền.
 Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
 
 ## Luồng màn hình
 
 1. Chọn phòng và tầng. Tạo mapping bằng `POST /api/iot/floors`, hoặc sửa bằng
    `PUT /api/iot/floors/:floorId`. Gán đúng `master_id` (ID database),
-   `node_address`, `misting_ssr_channel`. Không suy ra kênh van từ số tầng.
+   `node_address`, `misting_ssr_channel`. Có thể gửi thêm `total_rows`, `total_columns`
+   (1–32767 hoặc null). Khi sửa, bỏ qua trường kích thước sẽ giữ nguyên giá trị;
+   không được thu nhỏ hơn các vị trí đã khai báo. Không suy ra kênh van từ số tầng.
 2. Gán các khay cùng phòng bằng `PUT /api/iot/floors/:floorId/trays/:trayId`.
+   Body tùy chọn `{"position_id":123}` chọn vị trí đã khai báo trong `tray_positions`;
+   vị trí phải ACTIVE, còn trống, thuộc tầng/phòng và nằm trong kích thước tầng.
+   `{"position_id":null}` gỡ vị trí nhưng giữ tầng; bỏ body/field giữ nguyên vị trí.
+   Dừng AUTO và hoàn tất xác nhận OFF trước khi gán.
 3. Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm, gói và số khay.
    Sau khi PayOS xác nhận thanh toán, backend tạo session ACTIVE theo order item,
    gắn từng khay qua `cultivation_session_trays`, và chuyển khay sang OCCUPIED.
@@ -38,7 +54,8 @@ mỗi lần kiểm tra lưu `cultivation_inspections` và cập nhật lịch s�
 
 `GET .../auto-control` cũng có `floorSuggestion` cùng định dạng để hỗ trợ màn hình
 cấu hình hiện tại. `suggestions` cũ vẫn được giữ cho client dùng cấu hình LEGACY.
-`cultivation.trays` liệt kê khay đã gán và phiên/loại nấm hiện tại.
+`cultivation.trays` liệt kê khay đã gán và phiên/loại nấm hiện tại, kèm
+`position_id`, `row_number`, `column_number`, `position_status`.
 Không tự đổi ngưỡng hoặc tự Start khi người dùng chọn loại nấm.
 
 ## Dữ liệu chung và preset
@@ -52,9 +69,10 @@ Thời hạn gói chỉ là kế hoạch; AUTO dùng trạng thái phiên và kh
 đang trồng, không tự ngừng chăm sóc chỉ vì qua ngày dự kiến.
 Khay chưa gán ở nơi khác trong phòng không ảnh hưởng profile FLOOR.
 
-Với nhiệt độ, độ ẩm và CO₂, khoảng chung là:
-`min = max(các min)`, `max = min(các max)`. CO₂ được dùng để kiểm tra tương thích
-nếu tất cả loại nấm có dữ liệu, không điều khiển thiết bị CO₂. Thiếu CO₂ trả warning.
+Nguồn ngưỡng là min/max nhiệt độ và độ ẩm trong `mushroom_conditions`.
+`cultivation_protocol_steps.target_temperature/target_humidity` không thay thế ngưỡng AUTO;
+quy trình và giai đoạn trồng vẫn phục vụ theo dõi phiên. CO₂ đã bỏ khỏi schema và AUTO.
+Khoảng chung là `min = max(các min)`, `max = min(các max)`.
 Thiếu nhiệt độ/độ ẩm, khoảng rỗng, độ ẩm chung rộng không quá 2 điểm phần trăm,
 hoặc nhiệt độ chung rộng dưới 1°C sẽ không sinh preset.
 
@@ -81,15 +99,16 @@ hết cooldown, còn ngân sách và dữ liệu hợp lệ. Khi bật cooling, 
 Trần phải lớn hơn ngưỡng ngừng bù ẩm và không vượt humidity_max.
 
 Nhiệt độ cao nhưng chạm trần ẩm: không phun thêm; `runtime.last_reason` ghi
-`Cooling blocked by humidity limit; ventilation or other cooling required`.
+`Không thể làm mát do độ ẩm đã đạt giới hạn; cần thông gió hoặc dùng phương pháp làm mát khác`.
 Nếu đang phun, yêu cầu OFF ngay ở lần đánh giá tiếp theo. Nhiệt độ giảm qua
 ngưỡng stop xóa nhu cầu nhịp tiếp; nhịp hiện tại vẫn bị giới hạn bởi deadline.
 Làm mát dùng chung pulse, cooldown, watchdog, ngân sách và cơ chế xác nhận OFF
 với bù ẩm. Không có điều khiển quạt, đo lưu lượng, hoặc xác nhận hiệu quả làm mát.
 
 Khi bật cooling, phải đủ số mẫu nhiệt độ hữu hạn trong [-40,80]°C từ các
-cảm biến độ ẩm hợp lệ; kiểm tra cả độ chênh nhiệt độ. Dữ liệu sai/cũ gây FAULT
-và yêu cầu OFF nếu đang phun. Log quyết định lưu cả average_temperature.
+cảm biến độ ẩm hợp lệ; kiểm tra cả độ chênh nhiệt độ. Dữ liệu sai/cũ chuyển sang
+SENSOR_FAULT, kết thúc phiên bằng FAULT và yêu cầu OFF nếu đang phun.
+Log quyết định lưu cả average_temperature.
 
 Profile FLOOR được kiểm tra lại khi Start, mỗi lần đánh giá và trước khi giữ
 chỗ cho lệnh ON. Thay đổi tập loại nấm hoặc khoảng điều kiện so với snapshot
@@ -98,5 +117,15 @@ Lấy gợi ý mới, duyệt/lưu lại rồi Start. Thêm khay cùng loại, c
 không tự làm đổi profile.
 
 Các điều kiện phần cứng vẫn giữ nguyên: MQTT, SSR OFF mới không retained,
-watchdog đã khai báo đủ dài. Khởi động lại backend không tự khôi phục AUTO.
-Publish OFF chưa có feedback vẫn là OFF_PENDING.
+watchdog đã khai báo đủ dài (`AUTO_MISTING_REAL_ENABLED=true` và
+`AUTO_MISTING_VERIFIED_WATCHDOGS` theo master thực tế). Mất DB, MQTT/thiết bị,
+lỗi cảm biến, lỗi gửi lệnh hoặc khởi động lại backend kết thúc phiên AUTO.
+Khi kết nối trở lại, backend chỉ hoàn tất OFF đang chờ; phải bấm Start để chạy phiên mới.
+Publish OFF chưa có feedback vẫn là OFF_PENDING, dù mode đã là MANUAL.
+
+Nếu DB mất kết nối thì backend không ghi được trạng thái ngay; worker chặn lệnh ON
+và kết thúc các phiên cũ sau khi lấy lại kết nối. Nếu backend chết hoặc MQTT mất,
+lệnh OFF có thể không tới thiết bị; firmware phải có watchdog tự tắt van theo thời hạn
+đã xác minh. Việc khai báo biến môi trường không tự cài watchdog lên firmware.
+Mất mạng riêng trên mobile không phải tín hiệu dừng AUTO; giao diện cần báo mất kết nối,
+không suy diễn van đã OFF từ lỗi HTTP.

@@ -60,7 +60,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    AND p.permission_name='iot.automation.manage' ON CONFLICT DO NOTHING`);
   await db.exec('INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())');
   await db.exec("INSERT INTO users(role_id,email,password_hash,full_name) VALUES(1,'operator@example.test','test','Operator')");
-  await db.exec('UPDATE iot_masters SET cultivation_room_id=1 WHERE id=1');
+  await db.exec("INSERT INTO iot_masters(master_identifier,cultivation_room_id) VALUES('master01',1)");
   await t.test('migration preserves trays without guessing floors and grants named operator roles only',async()=>{
    assert.equal((await repo.one('SELECT floor_id FROM cultivation_trays')).floor_id,null);
    assert.equal((await repo.rows('SELECT * FROM role_permissions')).length,2);
@@ -72,6 +72,33 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
   // A failed insert consumes the SERIAL value; resolve actual IDs.
   const [f1,f2]=await repo.list(),id=f1.floor_id,other=f2.floor_id;
   await service.assignTray(id,1);
+  await t.test('floor grid and tray positions respect room, bounds, status and occupancy',async()=>{
+   const mapping={room_id:1,floor_number:1,floor_name:'Floor 1',master_id:1,node_address:1,misting_ssr_channel:1};
+   await service.map(id,{...mapping,total_rows:2,total_columns:3});
+   await db.query(`INSERT INTO tray_positions(floor_id,room_id,row_number,column_number,status)
+    VALUES($1,1,2,3,'ACTIVE'),($1,1,1,2,'MAINTENANCE'),($2,1,1,1,'ACTIVE')`,[id,other]);
+   const positions=await repo.rows('SELECT * FROM tray_positions ORDER BY position_id');
+   const assigned=await service.assignTray(id,1,{position_id:positions[0].position_id});
+   assert.equal(assigned.position_id,positions[0].position_id);
+   const listed=(await service.configuration(id)).cultivation.trays[0];
+   assert.equal(listed.row_number,2);assert.equal(listed.column_number,3);
+   assert.equal((await service.assignTray(id,1)).position_id,assigned.position_id);
+   await assert.rejects(()=>service.assignTray(id,1,{position_id:positions[1].position_id}),{statusCode:409});
+   await assert.rejects(()=>service.assignTray(id,1,{position_id:positions[2].position_id}),{statusCode:400});
+   await assert.rejects(()=>service.assignTray(id,1,{position_id:9999}),{statusCode:400});
+   await assert.rejects(()=>service.assignTray(id,1,{other:1}),{statusCode:400});
+   await assert.rejects(()=>service.map(id,{...mapping,total_rows:1}),{statusCode:409});
+   await assert.rejects(()=>service.map(id,{...mapping,total_columns:32768}),{statusCode:400});
+   await assert.rejects(()=>service.map(id,{...mapping,total_rows:0}),{statusCode:400});
+   const extra=await repo.one("INSERT INTO cultivation_trays(room_id,tray_code) VALUES(1,'POSITION-TEST') RETURNING *");
+   await assert.rejects(()=>service.assignTray(id,extra.tray_id,{position_id:assigned.position_id}),{statusCode:409});
+   await repo.rows('DELETE FROM cultivation_trays WHERE tray_id=$1',[extra.tray_id]);
+   // Keep later fixture IDs stable without changing production provisioning.
+   await db.exec("SELECT setval(pg_get_serial_sequence('cultivation_trays','tray_id'),1)");
+   assert.equal((await service.assignTray(id,1,{position_id:null})).position_id,null);
+   const preserved=await service.map(id,mapping);
+   assert.equal(preserved.total_rows,2);assert.equal(preserved.total_columns,3);
+  });
   for(const n of [1,2])for(const s of [1,2,3])await db.query(`INSERT INTO iot_sensor_latest(master_id,node_address,sensor_address,temperature,humidity,is_valid,last_received_at)
    VALUES(1,$1,$2,26,81,true,$3)`,[n,s,new Date(now)]);
   await t.test('mapping uniqueness and master room constraints',async()=>{
@@ -92,6 +119,11 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    assert.equal(start.run.config_snapshot.humidity_min,85);
    await assert.rejects(()=>service.start(id,{},null),/Dừng chế độ tự động/);
    await assert.rejects(()=>service.save(id,config,null),/Dừng chế độ tự động/);
+   await assert.rejects(()=>service.assignTray(id,1,{position_id:null}),/Dừng chế độ tự động/);
+   const saved=await repo.config(id);
+   await assert.rejects(()=>repo.createRun(id,saved,null,true),{constraint:'idx_auto_one_run'});
+   await assert.rejects(()=>repo.rows('UPDATE iot_auto_control_configs SET humidity_min=99 WHERE floor_id=$1',[id]),{constraint:'auto_humidity_bounds'});
+   await assert.rejects(()=>repo.rows('UPDATE iot_auto_control_configs SET cooling_enabled=true WHERE floor_id=$1',[id]),{constraint:'auto_cooling_bounds'});
    await assert.rejects(()=>service.map(id,{room_id:1,floor_number:1,floor_name:'Edit',master_id:1,node_address:1,misting_ssr_channel:1}),/Dừng chế độ tự động/);
   });
   await t.test('Floor 1 AUTO, Floor 2 MANUAL; preview has no writes; concurrent evaluations reserve one pulse',async()=>{
@@ -112,12 +144,12 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.stop(other,null);assert.equal((await repo.run(other)).status,'STOPPED');
    assert.equal((await repo.run(id)).status,'RUNNING');
   });
-  await t.test('restart preserves AUTO, discards the old pulse and observes cooldown',async()=>{
+  await t.test('restart ends AUTO and discards the old pulse without replaying ON',async()=>{
    now+=61000;await fresh();await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'MISTING');
    const run=await repo.run(id),budget=await repo.budget(id);
-   await service.recover();assert.equal((await repo.run(id)).status,'RUNNING');
+   await service.recover();assert.equal((await repo.run(id)).status,'FAULT');
    assert.equal((await repo.run(id)).id,run.id);
-   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
    assert.equal((await repo.runtime(id)).pulse_deadline_at,null);
    assert.deepEqual(await repo.budget(id),budget);
    assert.equal((await repo.run(other)).status,'STOPPED');
@@ -174,7 +206,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     await service.evaluate(id);
     assert.ok(calls.slice(before).length>0);
     assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
-    assert.equal((await repo.run(id)).status,'RUNNING');
+    assert.equal((await repo.run(id)).status,'FAULT');
     assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
     now+=5001;await service.evaluate(id);
     assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
@@ -193,41 +225,44 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    const before=calls.length;
    await service.evaluate(id);
    assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
-   assert.equal((await repo.run(id)).status,'RUNNING');
-   assert.match((await repo.runtime(id)).last_error,/quá cũ/);
+   assert.equal((await repo.run(id)).status,'FAULT');
+   assert.match((await repo.run(id)).stop_reason,/quá cũ/);
    await service.stop(id,null);
   });
-  await t.test('temporary sensor and connection failures wait and recover in the same AUTO run',async()=>{
+  await t.test('sensor and connection failures both end AUTO until explicit Start',async()=>{
    await fresh();const started=await service.start(id,{dryRun:false},null);
    now+=20001;const before=calls.length;
-   assert.equal((await service.evaluate(id)).action,'NONE');
+   assert.equal((await service.evaluate(id)).action,'FAULT');
    assert.equal((await repo.runtime(id)).control_state,'SENSOR_FAULT');
-   assert.equal((await service.status(id)).mode,'AUTO');
-   now+=5001;await fresh();connected=false;
+   assert.equal((await service.status(id)).mode,'MANUAL');
+   await fresh();await service.evaluate(id);assert.equal((await repo.run(id)).status,'FAULT');
+   const restarted=await service.start(id,{dryRun:false},null);
+   assert.notEqual(restarted.run.id,started.run.id);
+   connected=false;
    await service.evaluate(id);
-   assert.equal((await repo.runtime(id)).control_state,'DEVICE_OFFLINE');
-   assert.equal(calls.length,before);
+   assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
+   assert.equal((await repo.run(id)).status,'FAULT');
+   assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
    connected=true;now+=5001;await fresh();await service.evaluate(id);
-   assert.equal((await repo.run(id)).id,started.run.id);
-   assert.equal((await repo.runtime(id)).control_state,'MISTING');
-   assert.equal((await repo.runtime(id)).last_error,null);
-   await service.stop(id,null);
+   assert.equal((await repo.run(id)).id,restarted.run.id);
+   assert.equal((await service.status(id)).mode,'MANUAL');
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
+   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
   });
-  await t.test('ON timeout keeps AUTO but requires live OFF and cooldown before a new pulse',async()=>{
+  await t.test('ON timeout ends AUTO and never retries ON after feedback recovers',async()=>{
    await fresh();const started=await service.start(id,{dryRun:false},null);
    failOn=504;await service.evaluate(id);failOn=false;
-   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.equal((await repo.run(id)).status,'FAULT');
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    const onCount=calls.filter(c=>c.action==='ON').length;
    now+=5001;await fresh();await service.evaluate(id);
    assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
-   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
    now+=5001;await fresh();await service.evaluate(id);
    assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
    now+=60001;await fresh();await service.evaluate(id);
-   assert.equal(calls.filter(c=>c.action==='ON').length,onCount+1);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
    assert.equal((await repo.run(id)).id,started.run.id);
    await service.stop(id,null);
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
@@ -266,11 +301,11 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
   });
-  await t.test('sensor fault during pulse requests OFF and waits for recovery',async()=>{
+  await t.test('sensor fault during pulse ends AUTO and requests OFF',async()=>{
    await fresh();await service.start(id,{dryRun:false},1);await service.evaluate(id);
    await db.exec('UPDATE iot_sensor_latest SET is_valid=false WHERE node_address=1 AND sensor_address=1');
    now+=1000;await service.evaluate(id);
-   assert.equal((await repo.run(id)).status,'RUNNING');assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'FAULT');assert.equal(calls.at(-1).action,'OFF');
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await service.evaluate(id)).action,'NONE');
    await service.stop(id,null);

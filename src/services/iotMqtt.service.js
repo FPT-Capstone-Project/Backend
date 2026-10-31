@@ -14,6 +14,7 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
   let client;
   let stopping = false;
   let ready = false;
+  let disconnectVersion = 0;
   let maintenance;
   // Separate bounded lanes: sensor backlog must not delay or reject SSR feedback.
   // Serial SSR writes preserve ON/OFF arrival order, including equal timestamps.
@@ -26,6 +27,7 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
   const packetIds = new Set();
 
   function cancelPending() {
+    if (ready) disconnectVersion += 1;
     ready = false;
     // MQTT.js otherwise retransmits unacknowledged QoS 1 packets on reconnect.
     for (const id of [...packetIds]) client.removeOutgoingMessage(id);
@@ -126,6 +128,7 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
       };
       pending.add(finish);
       timer = setTimeout(() => {
+        if (ready) disconnectVersion += 1;
         ready = false;
         finish(new AppError('Hết thời gian gửi lệnh; chưa xác định lệnh đã được chuyển đến thiết bị hay chưa', 504));
         // Drop transport buffers too; bytes already delivered cannot be recalled.
@@ -150,7 +153,8 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
     }
     await drain();
   }
-  return { start, stop, publish, drain, isReady: () => !!(ready && client?.connected && !client.disconnecting && !stopping) };
+  return { start, stop, publish, drain, getDisconnectVersion: () => disconnectVersion,
+    isReady: () => !!(ready && client?.connected && !client.disconnecting && !stopping) };
 }
 
 module.exports = { ...createMqttService(), createMqttService, TOPICS };

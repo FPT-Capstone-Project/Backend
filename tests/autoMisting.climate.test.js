@@ -39,7 +39,7 @@ test('cooling has independent hysteresis, humidity cutoff and normal safety limi
  assert.equal(decision(30,94,active).action,'OFF');
  assert.equal(decision(30,93,{}, {count:20}).action,'NONE');
  assert.equal(decision(30,93,{cooldown_until:new Date(now+1000)}).action,'NONE');
- assert.equal(decision(30,93,{}, {online:false}).action,'NONE');
+ assert.equal(decision(30,93,{}, {online:false}).action,'FAULT');
  assert.equal(decision(30,93,{}, {online:false}).state,'DEVICE_OFFLINE');
 });
 test('temperature missing, out of bounds or disagreement blocks cooling',()=>{

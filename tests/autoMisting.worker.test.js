@@ -37,9 +37,9 @@ test('lost leader session prevents activation and forces recovery on next acquis
  }};
  const w=createWorker(repo,service,{error(){}});
  await w.tick();assert.equal(canActivate,false);
- await w.tick();await w.tick();assert.equal(recoveries,2);await w.stop();
+ await w.tick();await w.tick();assert.equal(recoveries,3);await w.stop();
 });
-test('candidate query failure retries without releasing leadership or stopping AUTO again',async()=>{
+test('candidate query failure closes leadership and requires stopping interrupted AUTO before evaluation',async()=>{
  let acquisitions=0,recoveries=0,evaluations=0,releases=0,queries=0;
  const failure=new Error('temporary candidate query failure'),logs=[];
  const client=new EventEmitter();
@@ -52,8 +52,8 @@ test('candidate query failure retries without releasing leadership or stopping A
   assert.equal(guard(),true);evaluations++;
  }},{error:(...args)=>logs.push(args)});
  await w.tick();await w.tick();
- assert.equal(acquisitions,1);assert.equal(recoveries,1);
- assert.equal(releases,0);assert.equal(evaluations,1);assert.equal(logs[0][1],failure);
+ assert.equal(acquisitions,2);assert.equal(recoveries,2);
+ assert.equal(releases,1);assert.equal(evaluations,1);assert.equal(logs[0][1],failure);
  await w.stop();
 });
 
@@ -66,6 +66,38 @@ test('connection error during recovery cannot reopen the actuation gate',async()
    evaluate:async()=>evaluations++},{error(){}});
  await w.tick();
  assert.equal(evaluations,0);assert.equal(releases,1);
+ await w.stop();
+});
+
+test('evaluation DB failure closes sibling ON gates and stops old runs before retry',async()=>{
+ let recoveries=0,releases=0,fail=true;
+ const repo={acquireLeader:async()=>{
+  const client=new EventEmitter();client.query=async()=>({rows:[]});client.release=()=>releases++;return client;
+ },candidates:async()=>[{floor_id:1},{floor_id:2},{floor_id:3}]};
+ const seen=[];
+ const w=createWorker(repo,{recover:async()=>recoveries++,evaluate:async(id,preview,guard)=>{
+  seen.push(id);
+  if(id===1 && fail)throw Object.assign(new Error('DB connection lost'),{code:'ECONNRESET'});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(guard(),!fail);
+ }},{error(){}});
+ await w.tick();assert.deepEqual(seen,[1,2]);assert.equal(releases,1);
+ fail=false;await w.tick();assert.equal(recoveries,2);
+ assert.deepEqual(seen,[1,2,1,2,3]);await w.stop();
+});
+
+test('brief MQTT disconnect between ticks still ends runs before any new evaluation',async()=>{
+ let version=0,guard;
+ const events=[];
+ const client=new EventEmitter();client.query=async()=>({rows:[]});client.release=()=>{};
+ const w=createWorker({acquireLeader:async()=>client,candidates:async()=>[{floor_id:1}]},
+  {recover:async reason=>events.push(['stop',reason]),evaluate:async(id,preview,canActuate)=>{guard=canActuate;events.push(['evaluate']);}},
+  {error(){}},{getDisconnectVersion:()=>version});
+ await w.tick();assert.equal(guard(),true);
+ version++;assert.equal(guard(),false);
+ await w.tick();
+ assert.match(events[2][1],/Mất kết nối MQTT/);
+ assert.equal(events[3][0],'evaluate');assert.equal(guard(),true);
  await w.stop();
 });
 

@@ -59,7 +59,7 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
     SELECT 1,permission_id FROM permissions WHERE permission_name='iot.automation.manage';
    INSERT INTO cultivation_rooms(room_code,room_name) VALUES('R1','Recovery room');
    INSERT INTO mushroom_types(name,growing_days,price) VALUES('Test mushroom',30,1);
-   UPDATE iot_masters SET cultivation_room_id=1,reported_status='online' WHERE id=1;
+   INSERT INTO iot_masters(master_identifier,cultivation_room_id,reported_status) VALUES('master01',1,'online');
    INSERT INTO cultivation_floors(room_id,floor_number,floor_name,master_id,node_address,misting_ssr_channel)
     VALUES(1,1,'Recovery floor',1,1,1);
    INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now());
@@ -70,14 +70,16 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    VALUES(1,1,$1,26,81,true,$2)`,[sensor,new Date(now)]);
   await service.save(1,config,1);
 
-  for(const active of [false,true])await t.test(`restart from ${active?'MISTING':'IDLE'} preserves the run and requires fresh OFF then cooldown`,async()=>{
+  for(const active of [false,true])await t.test(`restart from ${active?'MISTING':'IDLE'} ends the run and requires explicit Start`,async()=>{
    await reset();const run=await start();
    if(active)await evaluate();
    const budget=await repo.budget(1),oldCycle=(await repo.runtime(1)).cycle_id;
    now+=300000;await fresh();const first=calls.length;
    await service.recover();
    assert.deepEqual(calls.slice(first),['OFF']);
-   assert.equal((await service.status(1)).mode,'AUTO');
+   assert.equal((await service.status(1)).mode,'MANUAL');
+   assert.equal((await repo.run(1)).status,'FAULT');
+   await assert.rejects(()=>start(),/hoàn tất xác nhận tắt/);
    assert.equal((await repo.runtime(1)).control_state,'OFF_PENDING');
    assert.equal((await repo.runtime(1)).cycle_id,null);
    assert.equal((await repo.runtime(1)).pulse_deadline_at,null);
@@ -93,43 +95,44 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    await feedback();now+=20001;await evaluate(); // Acknowledgement is now stale.
    assert.equal((await repo.runtime(1)).control_state,'OFF_PENDING');
    now++;await feedback();await evaluate();
-   assert.equal((await repo.runtime(1)).control_state,'COOLDOWN');
+   assert.equal((await repo.runtime(1)).control_state,'DISABLED');
    await fresh();await evaluate();
    assert.ok(calls.slice(first).every(action=>action==='OFF'));
    now+=60001;await fresh();await evaluate();
-   assert.equal(calls.at(-1),'ON');
+   assert.ok(calls.slice(first).every(action=>action==='OFF'));
    assert.equal((await repo.run(1)).id,run.id);
-   assert.equal((await repo.run(1)).status,'RUNNING');
+   const restarted=await start();assert.notEqual(restarted.id,run.id);
+   await evaluate();assert.equal(calls.at(-1),'ON');
    assert.notEqual((await repo.runtime(1)).cycle_id,oldCycle);
   });
 
-  await t.test('offline recovery and stale sensors wait without ending AUTO',async()=>{
+  await t.test('offline recovery ends AUTO and reconnection cannot reactivate it',async()=>{
    await reset();const run=await start();online=false;now+=30000;
    await service.recover();await evaluate();
-   assert.equal((await repo.run(1)).status,'RUNNING');
+   assert.equal((await repo.run(1)).status,'FAULT');
    assert.equal((await repo.runtime(1)).control_state,'OFF_PENDING');
    assert.match((await repo.runtime(1)).last_error,/MQTT unavailable/);
    online=true;now+=3000;await evaluate();now++;await feedback();await evaluate();
    now+=60001;await evaluate();
-   assert.equal((await repo.runtime(1)).control_state,'SENSOR_FAULT');
+   assert.equal((await repo.runtime(1)).control_state,'DISABLED');
    await fresh();online=false;now+=5001;await evaluate();
-   assert.equal((await repo.runtime(1)).control_state,'DEVICE_OFFLINE');
+   assert.equal((await repo.runtime(1)).control_state,'DISABLED');
    assert.ok(calls.every(action=>action==='OFF'));
    online=true;now+=5001;await fresh();await evaluate();
-   assert.equal(calls.at(-1),'ON');assert.equal((await repo.run(1)).id,run.id);
+   assert.ok(calls.every(action=>action==='OFF'));assert.equal((await repo.run(1)).id,run.id);
   });
 
-  for(const stage of ['preparation','publication'])await t.test(`leadership lost during ON ${stage} preserves AUTO and cancels ON`,async()=>{
+  for(const stage of ['preparation','publication'])await t.test(`leadership lost during ON ${stage} ends AUTO and cancels ON`,async()=>{
    await reset();await start();
    if(stage==='preparation')beforeOn=async()=>{guard=false;};
    else afterReserve=async()=>{guard=false;};
    await evaluate();
    assert.ok(calls.every(action=>action==='OFF'));
-   assert.equal((await repo.run(1)).status,'RUNNING');
+   assert.equal((await repo.run(1)).status,'FAULT');
    assert.equal((await repo.runtime(1)).control_state,'OFF_PENDING');
    guard=true;beforeOn=null;afterReserve=null;
    await service.recover();now++;await feedback();await evaluate();
-   now+=60001;await fresh();await evaluate();assert.equal(calls.at(-1),'ON');
+   now+=60001;await fresh();await evaluate();assert.ok(calls.every(action=>action==='OFF'));
   });
 
   await t.test('operator Stop, manual OFF and FAULT are never reactivated by recovery',async()=>{
@@ -171,6 +174,7 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    await reset();await service.save(1,{...config,max_activations_per_hour:1},1);
    await start();await evaluate();const before=calls.length;
    await service.recover();now++;await feedback();await evaluate();
+   await start();
    now+=60001;await fresh();await evaluate();
    assert.equal((await repo.run(1)).status,'RUNNING');
    assert.equal((await repo.runtime(1)).last_reason,'Đã đạt giới hạn phun sương an toàn trong giờ');
@@ -189,7 +193,7 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
     now++;await feedback();await evaluate();
     now+=60001;await fresh();await evaluate();
     assert.equal((await repo.run(1)).status,'FAULT');
-    assert.match((await repo.run(1)).stop_reason,/Điều kiện trồng trọt của tầng đã thay đổi/);
+    await assert.rejects(()=>start(),/Điều kiện trồng trọt của tầng đã thay đổi/);
     assert.ok(calls.every(action=>action==='OFF'));
    }finally{repo.profiles=original;}
   });
@@ -203,8 +207,8 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    assert.ok(calls.every(action=>action==='OFF'));
   });
 
-  await t.test('shutdown preserves RUNNING and replacement worker reconciles before resuming',async()=>{
-   await reset();const run=await start();
+  await t.test('shutdown ends RUNNING and replacement worker only reconciles OFF',async()=>{
+   await reset();
    let owner=null;
    const workerRepo={candidates:repo.candidates,acquireLeader:async()=>{
     if(owner)return null;
@@ -213,16 +217,16 @@ test('AUTO recovery uses isolated PostgreSQL and mocked device feedback',async t
    }};
    const a=createWorker(workerRepo,service,{error(){}}),b=createWorker(workerRepo,service,{error(){}});
    try {
-    await a.tick();now++;await feedback();await a.tick();
-    now+=60001;await fresh();await a.tick();assert.equal(calls.at(-1),'ON');
-    await a.stop();assert.equal((await repo.run(1)).status,'RUNNING');
+    await a.tick();const run=await start();
+    await a.tick();assert.equal(calls.at(-1),'ON');
+    await a.stop();assert.equal((await repo.run(1)).status,'FAULT');
     assert.equal((await repo.runtime(1)).control_state,'OFF_PENDING');
     assert.equal(calls.at(-1),'OFF');
     now+=30000;await fresh();const before=calls.length;
     await b.tick();assert.ok(calls.length>before);
     assert.ok(calls.slice(before).every(action=>action==='OFF'));
     now++;await feedback();await b.tick();
-    now+=60001;await fresh();await b.tick();assert.equal(calls.at(-1),'ON');
+    now+=60001;await fresh();await b.tick();assert.ok(calls.slice(before).every(action=>action==='OFF'));
     assert.equal((await repo.run(1)).id,run.id);
    }finally{await a.stop();await b.stop();}
   });

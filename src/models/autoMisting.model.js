@@ -95,6 +95,7 @@ function createRepository(db = pool) {
     return lows.length && highs.length && Math.max(...lows)>Math.min(...highs);
    });
    const trays=await rows(`SELECT t.tray_id,t.tray_code,t.status AS tray_status,
+    t.position_id,p.row_number,p.column_number,p.status AS position_status,
     s.session_id,st.session_tray_id,s.mushroom_type_id,
     s.status AS cultivation_status,m.name AS mushroom_name
     FROM cultivation_trays t LEFT JOIN (
@@ -102,6 +103,7 @@ function createRepository(db = pool) {
      JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'
     ) ON st.tray_id=t.tray_id AND s.status='ACTIVE'
     LEFT JOIN mushroom_types m ON m.mushroom_type_id=s.mushroom_type_id
+    LEFT JOIN tray_positions p ON p.position_id=t.position_id
     WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);
    return {profiles,trays,conflict,unassignedTrays:unassigned.count,requiresApproval:profiles.length>1 || conflict || unassigned.count>0};
   },
