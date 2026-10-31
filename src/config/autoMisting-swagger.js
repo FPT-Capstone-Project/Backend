@@ -10,7 +10,8 @@ Object.assign(config.properties,{
 });
 const mapping={type:'object',additionalProperties:false,required:['room_id','floor_number','floor_name','master_id','node_address','misting_ssr_channel'],properties:{
  room_id:{type:'integer',minimum:1},floor_number:{type:'integer',minimum:1},floor_name:{type:'string',maxLength:200},
- master_id:{type:'integer',minimum:1},node_address:{type:'integer',minimum:1,maximum:247},misting_ssr_channel:{type:'integer',minimum:1,maximum:8},status:{type:'string',enum:['ACTIVE','INACTIVE']}}};
+ master_id:{type:'integer',minimum:1},node_address:{type:'integer',minimum:1,maximum:247},misting_ssr_channel:{type:'integer',minimum:1,maximum:8},status:{type:'string',enum:['ACTIVE','INACTIVE']},
+ total_rows:{type:'integer',minimum:1,maximum:32767,nullable:true},total_columns:{type:'integer',minimum:1,maximum:32767,nullable:true}}};
 const example={mushroom_type_id:1,humidity_min:85,humidity_max:95,humidity_start_threshold:83,humidity_stop_threshold:87,
  misting_pulse_ms:5000,cooldown_ms:60000,evaluation_interval_ms:5000,sensor_max_age_ms:20000,required_valid_sensors:3,
  max_sensor_spread_percent:10,max_activations_per_hour:20,max_cumulative_on_ms_per_hour:100000};
@@ -49,7 +50,10 @@ function add(path,method,summary,schema,description='') {
 const base='/api/iot/floors',floor=base+'/{floorId}',auto=floor+'/auto-control';
 add(base,'get','List floor mappings');add(base,'post','Create floor mapping',mapping,'Master must already belong to this room. No inferred node/floor assignments.');
 add(floor,'put','Replace floor mapping',mapping,'Stop and resolve OFF first. Channels and nodes are unique per master.');
-add(floor+'/trays/{trayId}','put','Assign a same-room tray to a stopped floor');
+add(floor+'/trays/{trayId}','put','Assign a same-room tray to a stopped floor',
+ {type:'object',additionalProperties:false,properties:{position_id:{type:'integer',minimum:1,nullable:true}}},
+ 'Optional body: position_id selects an ACTIVE unoccupied position in this floor and room; null clears the position, omission preserves it. Stop AUTO before changing assignment.');
+paths[floor+'/trays/{trayId}'].put.requestBody.required=false;
 add(floor+'/environment','get','Get three sensors, averages, freshness and thresholds');
 add(auto,'get','Read saved configuration, mode, cultivation conflicts and suggestions');
 add(auto+'/suggestions','get','Suggest a shared floor climate configuration',null,
@@ -58,7 +62,7 @@ add(auto,'put','Save configuration without starting AUTO',config,'Example thresh
 add(auto+'/start','post','Explicitly start a run',{type:'object',additionalProperties:false,properties:{dryRun:{type:'boolean',default:true}}},'Fresh non-retained sensors required. Real runs require MQTT and a verified local watchdog, then send OFF and wait up to 5 seconds after publication for new non-retained SSR OFF feedback before starting AUTO. Missing feedback returns 504 without starting a run. Default dryRun=true publishes nothing.');
 add(auto+'/stop','post','Stop AUTO and request OFF',null,'Blocks new ON; unresolved physical state remains OFF_PENDING. OFF publish success is not confirmation.');
 add(auto+'/status','get','Get run, operator, desired/reported SSR, deadlines and errors',null,
- 'RUNNING/AUTO intent survives worker restart and backend shutdown. Recovery waits in OFF_PENDING for fresh live OFF feedback, then observes cooldown and rechecks prerequisites before a new pulse. STOPPED/FAULT runs are never automatically restarted.');
+ 'Connection/sensor failure, worker restart or backend shutdown ends the interrupted AUTO run. Reconnection only reconciles OFF_PENDING using fresh live OFF feedback; it never resumes ON. Explicit Start is required. MANUAL with OFF_PENDING does not confirm physical OFF.');
 add(auto+'/logs','get','Read paginated decision history');
 add(auto+'/evaluate','post','Preview current algorithm decision without side effects',null,'Does not start AUTO, update runtime or publish MQTT. MANUAL yields NONE. Use a dry run Start to simulate pulses.');
 module.exports={paths,schemas:{AutoMistingConfiguration:config,CultivationFloorMapping:mapping}};

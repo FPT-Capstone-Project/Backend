@@ -13,7 +13,7 @@ function summarize(profiles) {
    .map(k=>[k,p[k]==null?null:Number(p[k])])))
   .sort((a,b)=>a.mushroom_type_id-b.mushroom_type_id);
  const issues=[], warnings=[], common={};
- if(!sourceProfiles.length)issues.push('Tầng này không có phiên trồng đang hoạt động liên kết với đơn thuê đang hoạt động');
+ if(!sourceProfiles.length)issues.push('Tầng này không có phiên trồng đang hoạt động được gán vào khay');
  for(const metric of ['temperature','humidity']) {
   const label=metric==='temperature'?'nhiệt độ':'độ ẩm';
   const complete=sourceProfiles.length>0 && sourceProfiles.every(p=>

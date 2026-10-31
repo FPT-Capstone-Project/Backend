@@ -1,11 +1,14 @@
 const repository=require('../models/autoMisting.model');
 const service=require('./autoMisting.service');
+const mqtt=require('./iotMqtt.service');
 const {randomUUID}=require('node:crypto');
 
 // A dedicated session elects one worker. Losing that session closes the local
-// actuation gate; a replacement reconciles OFF before allowing new pulses.
-function createWorker(repo=repository,control=service,logger=console) {
+// actuation gate; a replacement ends interrupted runs and reconciles OFF.
+function createWorker(repo=repository,control=service,logger=console,transport=mqtt) {
  let timer,leader,busy=false,stopping=false,healthy=false;
+ const transportVersion=()=>transport.getDisconnectVersion?.() ?? 0;
+ let observedTransportVersion=transportVersion();
  const workerId=randomUUID();
  let recoveryReason='Tiến trình lần đầu nhận quyền điều khiển chính (khởi động hoặc tiếp quản)';
  let sessionFailure;
@@ -39,8 +42,14 @@ function createWorker(repo=repository,control=service,logger=console) {
      logger.error('Kết nối của tiến trình điều khiển phun sương chính đã đóng',diagnostics('phiên kết nối cơ sở dữ liệu đã đóng'));
     });
     stage='khôi phục';
-    logger.info?.('Đã nhận quyền điều khiển phun sương chính; đang xác nhận trạng thái tắt (OFF) và giữ chế độ tự động (AUTO)',{...diagnostics(stage),reason:recoveryReason});
+    logger.info?.('Đã nhận quyền điều khiển phun sương chính; đang dừng AUTO bị gián đoạn và xác nhận tắt (OFF)',{...diagnostics(stage),reason:recoveryReason});
     await control.recover(recoveryReason);
+   }
+   if(observedTransportVersion!==transportVersion()) {
+    const version=transportVersion();
+    stage='dừng AUTO sau mất kết nối MQTT';
+    await control.recover('Mất kết nối MQTT; AUTO đã dừng, cần bấm Start lại');
+    observedTransportVersion=version;
    }
    stage='kiểm tra hoạt động của tiến trình điều khiển chính';
    await leader.query('SELECT 1');
@@ -48,20 +57,18 @@ function createWorker(repo=repository,control=service,logger=console) {
    stage='cập nhật tín hiệu hoạt động';
    await leader.query(`INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())
     ON CONFLICT(id) DO UPDATE SET heartbeat_at=now()`);
-   let floors;
-   try {floors=await repo.candidates();}
-   catch(error) {
-    // This query uses the pool, not the session holding the leader lock.
-    // Retry next tick without triggering takeover recovery for unrelated errors.
-    logger.error('Không thể truy vấn các tầng cần điều khiển phun sương; sẽ thử lại ở chu kỳ tiếp theo',error,diagnostics('truy vấn các tầng cần điều khiển'));
-    return;
-   }
+   stage='truy vấn các tầng cần điều khiển';
+   const floors=await repo.candidates();
    // Bounded parallelism keeps one delayed device from blocking every floor.
    for(let i=0;i<floors.length;i+=2) {
-    await Promise.all(floors.slice(i,i+2).map(async f=>{
-     try {await control.evaluate(f.floor_id,false,()=>healthy && !stopping);}
-     catch(error) {logger.error(`Không thể đánh giá phun sương tự động cho tầng ${f.floor_id}`,error);}
+    stage='đánh giá các tầng';
+    const results=await Promise.allSettled(floors.slice(i,i+2).map(async f=>{
+     try {await control.evaluate(f.floor_id,false,()=>healthy && !stopping && observedTransportVersion===transportVersion());}
+     catch(error) {healthy=false;throw error;}
     }));
+    const failure=results.find(result=>result.status==='rejected');
+    if(failure)throw failure.reason;
+    if(!healthy)throw new Error('Tiến trình đã mất quyền điều khiển chính');
    }
   } catch(error) {
    healthy=false;

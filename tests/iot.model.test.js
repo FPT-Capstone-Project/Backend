@@ -24,10 +24,11 @@ test('IoT migration and model SQL against isolated PostgreSQL', async (t) => {
   try {
     // Use the repository's complete existing schema, not invented user/room tables.
     await db.exec(fs.readFileSync(path.join(__dirname, '../database.sql'), 'utf8'));
+    await db.exec("INSERT INTO iot_masters(master_identifier) VALUES('master01')");
     const message = { type: 'sensor', master: 'master01', node: 1, sensor: 1, ok: true, temperature: 27.5, humidity: 85.2 };
     const first = new Date('2026-10-16T10:00:00Z'); const second = new Date('2026-10-16T10:01:00Z');
 
-    await t.test('migration provisions master01 and all eight unknown SSR channels', async () => {
+    await t.test('explicitly provisioned master exposes all eight unknown SSR channels', async () => {
       assert.equal((await model.findMasters()).length, 1);
       const states = await model.findSsr(1);
       assert.equal(states.length, 8);

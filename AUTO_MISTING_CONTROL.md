@@ -167,17 +167,16 @@ does not set a cleared latch. Humidity at/above the hard maximum never starts a
 pulse and ends an active one early.
 
 `DISABLED → IDLE → ON_REQUESTED → MISTING → OFF_PENDING → COOLDOWN → IDLE` is the
-normal progression. SENSOR_FAULT and DEVICE_OFFLINE suspend actuation while the run
-remains RUNNING/AUTO. The worker retries at the configured evaluation interval
-and logs RETRY_WAIT with the reason and available sensor readings. A temporary
-failure during a pulse requests OFF; a timed-out/failed MQTT ON also requires a
-new live OFF confirmation and normal cooldown before another pulse. Reservations
-still count toward hourly limits. Stale/retained OFF feedback is refreshed before
-ON; missing feedback keeps OFF_PENDING and blocks ON. Publication has up to five
+normal progression. SENSOR_FAULT and DEVICE_OFFLINE end the run with FAULT;
+connection recovery never resumes AUTO. A failure during a pulse requests OFF;
+a timed-out/failed MQTT ON also ends the run and requires new live OFF confirmation.
+The operator must explicitly Start again. Reservations still count toward hourly
+limits. Stale/retained OFF feedback is refreshed before ON; missing feedback ends
+the run, keeps OFF_PENDING and blocks ON. Publication has up to five
 seconds, capped by the remaining reserved pulse time, rather than a fixed one-second
 budget. Profile changes, missing device safety verification, unexpected failures,
-and operator Stop still end the run and require a new Start. Worker recovery and
-backend shutdown preserve RUNNING/AUTO intent and reconcile OFF before resuming.
+and operator Stop also end the run and require a new Start. Worker recovery and
+backend shutdown end interrupted runs and reconcile OFF without resuming ON.
 OFF reconciliation remains eligible for
 the worker even after a run is STOPPED/FAULT. MANUAL floors do not run misting
 decisions or send automatic commands, except completing an already-owned OFF.
@@ -214,14 +213,14 @@ existing bounded command timeout. OFF remains pending and is retried on reconnec
 
 One dedicated database session elects the worker. Other instances stay on standby.
 Every new leader first reconciles all RUNNING floors, including idle floors, and
-incomplete OFF cycles. RUNNING intent and the original run/configuration snapshot
-are preserved. Interrupted pulse deadlines, cycle IDs and demand latches are
-cleared; hourly reservations are retained. Real floors enter OFF_PENDING and send
+incomplete OFF cycles. Interrupted RUNNING runs become FAULT; their original
+configuration snapshot remains available for audit. Pulse deadlines, cycle IDs
+and demand latches are cleared; hourly reservations are retained. Real floors enter OFF_PENDING and send
 OFF even if stored feedback already says OFF. New, non-retained OFF feedback must
 be at or after the recovery OFF request, within sensor_max_age_ms, and not paired
-with a desired ON state. Only then does the normal cooldown begin. Evaluations
-recheck mapping, crop profile, watchdog, MQTT, sensors and hourly budgets before
-issuing a new pulse. Missing feedback or offline devices keep AUTO waiting;
+with a desired ON state. Confirmation moves the stopped runtime to DISABLED.
+Explicit Start rechecks mapping, crop profile, watchdog, MQTT and sensors before
+creating a new run. Missing feedback keeps OFF_PENDING even though mode is MANUAL;
 STOPPED/FAULT runs are never reactivated. Dry runs simulate OFF without publishing.
 Per-floor locks,
 rechecking run state before ON, a leadership gate before publication, and durable
@@ -230,9 +229,10 @@ at most two floors concurrently, ordered by pulse deadline, and never overlaps
 its own sweeps. Database sessions must be stable: use a direct connection or
 session-mode pooler, **not transaction-mode pooling**, for advisory locks.
 
-A failed candidate-list query on the shared pool skips that sweep and retries on
-the next tick without discarding the dedicated leader session. Failures on the
-leader session still trigger recovery. RECOVERY_WAIT log reasons distinguish initial
+A failed candidate-list query or unhandled evaluation error closes the ON gate
+and releases the dedicated leader session. Reacquisition ends interrupted runs
+before any further evaluation. A disconnect counter also detects brief MQTT
+outages that reconnect between worker ticks. INTERRUPTION_STOP log reasons distinguish initial
 leadership acquisition (startup or takeover) from reacquisition after a database
 session error, session closure, health-check failure, heartbeat failure or failed
 recovery. Reacquisition reasons include the database error code when available.
@@ -244,19 +244,21 @@ Use `npm start` for
 unattended AUTO operation: `npm run dev` uses nodemon and can restart on file edits.
 
 Shutdown closes the ON gate and requests OFF while MQTT is still available,
-preserving RUNNING intent for the next leader, then closes MQTT/database
-connections. Leadership loss during an ON attempt also preserves the run and
-requires OFF reconciliation. A crash leaves durable state for the next leader.
+ending RUNNING runs, then closes MQTT/database connections. Leadership loss during
+an ON attempt also ends the run and requires OFF reconciliation.
+A crash leaves durable state for the next leader to stop and reconcile.
 If OFF cannot be
 confirmed, mapping/configuration changes and new Start remain blocked. Pending
 OFF is a visible unresolved condition, not silently reset to MANUAL-safe.
 
-No migration is required for automatic recovery. Historical runs already marked
-STOPPED by an older deployment remain stopped; explicitly Start once after
-upgrading if the floor is currently MANUAL. During a rolling deployment, an old
-instance can still stop a run on shutdown until all instances use the new code.
+No new migration is required for this stop-on-disconnection behavior. Historical
+STOPPED/FAULT runs remain stopped. Deploy this version to every backend instance
+before testing; an older instance may still implement automatic resumption.
 This does not keep the hosting process awake: automation cannot evaluate or
 publish while the host is asleep or offline.
+While the database is unreachable, run status cannot be persisted immediately:
+the worker blocks ON locally and stops old runs once database access returns.
+Physical OFF during backend/DB/MQTT failure depends on the verified device watchdog.
 
 Errors: 400 invalid input, 401 missing/invalid JWT, 403 missing permission, 404
 unknown floor, 409 incompatible state/mapping/sensors/safety gate, 503 unavailable
@@ -289,8 +291,8 @@ AUTO_MISTING_VERIFIED_WATCHDOGS={"master01":10000}
 This is a deployment attestation, not a backend firmware capability probe. The
 attested limit must be at least the requested pulse and at most 60 seconds. Then
 restart, wait for live sensors and OFF feedback, and explicitly Start with
-`{"dryRun":false}` for a new run. Existing RUNNING runs recover through OFF and
-cooldown after restart; previously STOPPED/FAULT runs remain stopped.
+`{"dryRun":false}` for a new run. Restart ends existing RUNNING runs and reconciles
+OFF; previously STOPPED/FAULT runs remain stopped.
 
 Backend deadlines are **not a guarantee of physical valve safety**. Event-loop,
 database, network, sweep backlog, broker and device delays can delay OFF. The
