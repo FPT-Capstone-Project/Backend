@@ -125,7 +125,7 @@ async function sendOtpToUser(user, type) {
   }
 
   try {
-    await sendOtpEmail(user.email, otp, type);
+    await sendOtpEmail(user.email, otp, type, user.full_name);
   } catch (error) {
     await userModel.clearOtp(user.user_id);
     throw new AppError('Unable to send OTP email', 500);

@@ -265,6 +265,8 @@ SMTP_FROM=sender@gmail.com
 
 Port `587` dùng STARTTLS; port `465` dùng TLS trực tiếp. Với Gmail, bật xác minh 2 bước và dùng App Password làm `SMTP_PASSWORD` (không dùng mật khẩu đăng nhập thông thường). `SMTP_FROM` nên là địa chỉ được phép gửi bởi tài khoản SMTP. Giữ thông tin SMTP trong `.env`/secret environment, không commit hoặc chia sẻ công khai.
 
+Email OTP dùng giao diện HTML tương thích với email client, nhận diện SmartMush bằng tông xanh lá. Tiêu đề và nội dung được điều chỉnh riêng cho xác thực đăng ký, đặt lại mật khẩu và xác nhận đổi mật khẩu.
+
 ## 6. Chuẩn bị database
 
 Ứng dụng không chạy migration tự động khi khởi động. Với database đã tồn tại, không chạy lại `database.sql`; hãy áp dụng các migration cần thiết cho database production trước khi deploy.
