@@ -20,7 +20,7 @@ const router = express.Router();
  *           type: integer
  *     responses:
  *       200:
- *         description: Current customer-visible cultivation state
+ *         description: Customer-visible session status, harvest readiness, latest growth progress, and assigned trays
  *       404:
  *         description: Order not found or not accessible to this user
  */

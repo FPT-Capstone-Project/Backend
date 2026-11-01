@@ -10,6 +10,31 @@ async function adminGetById(req, res) {
   res.json({ data: session });
 }
 
+async function adminListAvailableTrays(req, res) {
+  const trays = await cultivationSessionService.getAvailableTraysForAdmin();
+  res.json({ data: trays });
+}
+
+async function adminGetProgress(req, res) {
+  const progress = await cultivationSessionService.getProgressForAdmin(req.params.sessionId);
+  res.json({ data: progress });
+}
+
+async function adminAssignTrays(req, res) {
+  const result = await cultivationSessionService.assignTraysForAdmin(req.params.sessionId);
+  res.status(201).json({ message: 'Cultivation trays assigned successfully', data: result });
+}
+
+async function adminActivate(req, res) {
+  const session = await cultivationSessionService.activateForAdmin(req.params.sessionId);
+  res.json({ message: 'Cultivation session activated successfully', data: session });
+}
+
+async function adminMarkHarvestReady(req, res) {
+  const session = await cultivationSessionService.markHarvestReadyForAdmin(req.params.sessionId);
+  res.json({ message: 'Cultivation session marked harvest ready', data: session });
+}
+
 async function adminCreateProgress(req, res) {
   const progress = await cultivationSessionService.createProgressForAdmin(
     req.params.sessionId,
@@ -25,6 +50,29 @@ async function adminCreateInspection(req, res) {
     req.user.user_id,
   );
   res.status(201).json({ message: 'Daily tray inspection recorded successfully', data: result });
+}
+
+async function adminAddInspectionImage(req, res) {
+  const image = await cultivationSessionService.addInspectionImageForAdmin(
+    req.params.inspectionId,
+    req.file,
+    req.body || {},
+  );
+  res.status(201).json({ message: 'Cultivation inspection image uploaded successfully', data: image });
+}
+
+async function adminCreateIncident(req, res) {
+  const incident = await cultivationSessionService.createIncidentForAdmin(
+    req.params.sessionId,
+    req.body || {},
+    req.user.user_id,
+  );
+  res.status(201).json({ message: 'Cultivation incident recorded successfully', data: incident });
+}
+
+async function adminListIncidents(req, res) {
+  const incidents = await cultivationSessionService.listIncidentsForAdmin(req.params.sessionId);
+  res.json({ data: incidents });
 }
 
 async function adminCreateHarvest(req, res) {
@@ -64,8 +112,16 @@ async function adminCreateNotification(req, res) {
 module.exports = {
   adminList,
   adminGetById,
+  adminListAvailableTrays,
+  adminGetProgress,
+  adminAssignTrays,
+  adminActivate,
+  adminMarkHarvestReady,
   adminCreateProgress,
   adminCreateInspection,
+  adminAddInspectionImage,
+  adminCreateIncident,
+  adminListIncidents,
   adminCreateHarvest,
   adminComplete,
   adminCancel,

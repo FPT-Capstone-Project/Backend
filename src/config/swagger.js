@@ -25,7 +25,7 @@ const options = {
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
       { name: 'Orders', description: 'Customer cultivation orders for packages, mushroom types, and tray quantities' },
-      { name: 'Cultivation Sessions', description: 'Paid cultivation sessions, daily tray inspections, progress, and harvests' },
+      { name: 'Cultivation Sessions', description: 'WF-03 cultivation preparation, monitoring, progress, incidents, and harvest readiness' },
       { name: 'Farm Spawn Workflow', description: 'Farm spawn handling and customer cultivation tracking' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
       { name: 'Notifications', description: 'Customer notifications linked to cultivation sessions' },

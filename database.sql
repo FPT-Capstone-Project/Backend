@@ -281,10 +281,13 @@ CREATE TABLE public.cultivation_sessions (
   end_at           TIMESTAMP,
   duration_days    INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
   status           VARCHAR NOT NULL DEFAULT 'PENDING',
+  harvest_status   VARCHAR NOT NULL DEFAULT 'NOT_READY',
   harvest_date     DATE,
   created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   order_item_id    INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
   protocol_id      INTEGER REFERENCES public.cultivation_protocols(protocol_id),
+  CONSTRAINT chk_cultivation_session_harvest_status
+    CHECK (harvest_status IN ('NOT_READY', 'HARVEST_READY')),
   CONSTRAINT fk_sessions_mushroom
     FOREIGN KEY (mushroom_type_id) REFERENCES public.mushroom_types(mushroom_type_id)
 );
@@ -686,6 +689,8 @@ CREATE INDEX idx_inventory_transactions_session_id
   ON public.inventory_transactions(session_id);
 CREATE INDEX idx_session_trays_session_id    ON public.cultivation_session_trays(session_id);
 CREATE INDEX idx_session_trays_tray_id       ON public.cultivation_session_trays(tray_id);
+CREATE UNIQUE INDEX uq_active_tray
+  ON public.cultivation_session_trays(tray_id) WHERE status = 'ACTIVE';
 CREATE INDEX idx_tray_reservations_item_status
   ON public.tray_reservations(order_item_id, status);
 CREATE INDEX idx_tray_reservations_active_hold
@@ -834,5 +839,33 @@ END $$;
 DROP TRIGGER IF EXISTS floor_light_channel_guard ON public.cultivation_floors;
 CREATE TRIGGER floor_light_channel_guard BEFORE INSERT OR UPDATE ON public.cultivation_floors
  FOR EACH ROW EXECUTE FUNCTION public.check_floor_light_channel();
+
+COMMIT;
+
+-- ===========================================================================
+-- WF-03 SUPABASE UPGRADE FOR AN EXISTING DATABASE
+-- Run only this BEGIN...COMMIT block in Supabase SQL Editor after updating
+-- application code. Do not rerun this entire fresh-schema file on a database
+-- that already contains the project tables.
+-- ===========================================================================
+BEGIN;
+
+ALTER TABLE public.cultivation_sessions
+  ADD COLUMN IF NOT EXISTS harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY';
+
+ALTER TABLE public.cultivation_sessions
+  DROP CONSTRAINT IF EXISTS chk_cultivation_session_harvest_status;
+ALTER TABLE public.cultivation_sessions
+  ADD CONSTRAINT chk_cultivation_session_harvest_status
+  CHECK (harvest_status IN ('NOT_READY', 'HARVEST_READY')) NOT VALID;
+
+UPDATE public.cultivation_sessions
+SET harvest_status = 'HARVEST_READY'
+WHERE status IN ('HARVESTING', 'COMPLETED')
+  AND harvest_status = 'NOT_READY';
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_active_tray
+  ON public.cultivation_session_trays (tray_id)
+  WHERE status = 'ACTIVE';
 
 COMMIT;

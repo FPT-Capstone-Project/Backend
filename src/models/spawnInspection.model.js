@@ -2,7 +2,7 @@ const pool = require('../config/db');
 const AppError = require('../utils/app-error');
 
 const sessionSelect = `
-  SELECT s.session_id, s.status, s.start_at, s.harvest_date, s.duration_days,
+  SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date, s.duration_days,
          oi.order_item_id, oi.quantity AS tray_quantity,
          oi.quantity * 3 AS spawn_quantity, oi.mushroom_type_id,
          mt.name AS mushroom_name, o.order_id, o.user_id, o.payment_status,
@@ -30,7 +30,7 @@ async function findAllForFarm(status) {
     filter = `WHERE o.payment_status = 'PAID' AND s.status = $1`;
   }
   const result = await pool.query(
-    `SELECT s.session_id, s.status, s.start_at, s.harvest_date,
+    `SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date,
             oi.order_item_id, oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
             mt.name AS mushroom_name, o.order_id, u.full_name AS customer_name,
             (SELECT MAX(si.inspected_at) FROM spawn_inspections si
@@ -280,7 +280,6 @@ async function changeStage(sessionId, nextStage) {
       PENDING: 'SPAWN_RESTING',
       SPAWN_RESTING: 'MYCELIAL_DEVELOPMENT',
       MYCELIAL_DEVELOPMENT: 'READY_FOR_CULTIVATION',
-      READY_FOR_CULTIVATION: 'CULTIVATING',
       CULTIVATING: 'HARVESTING',
     };
     if (transitions[session.status] !== nextStage) {
@@ -315,16 +314,8 @@ async function changeStage(sessionId, nextStage) {
     }
 
     if (nextStage === 'HARVESTING') {
-      const progress = await client.query(
-        `SELECT current_stage
-         FROM cultivation_progress
-         WHERE session_id = $1
-         ORDER BY progress_id DESC
-         LIMIT 1`,
-        [sessionId],
-      );
-      if (!progress.rows[0] || progress.rows[0].current_stage !== 'HARVEST') {
-        throw new AppError('Cultivation progress must reach HARVEST before entering the harvesting status', 409);
+      if (session.harvest_status !== 'HARVEST_READY') {
+        throw new AppError('Cultivation session must be harvest ready before entering harvesting', 409, 'HARVEST_NOT_READY');
       }
     }
 
@@ -341,78 +332,28 @@ async function changeStage(sessionId, nextStage) {
         || latestInspection.rows[0].stage !== 'MYCELIAL_DEVELOPMENT'
         || latestInspection.rows[0].condition !== 'NORMAL'
         || Number(latestInspection.rows[0].total_checked) !== Number(session.spawn_quantity)) {
-        throw new AppError('A normal inspection of all spawn units is required before assigning trays', 409);
+        throw new AppError('A normal inspection of all spawn units is required before cultivation', 409);
       }
 
-      const trays = await client.query(
-        `SELECT t.tray_id
-         FROM cultivation_trays t
-         INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
-         WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE'
-         ORDER BY t.tray_id
-         FOR UPDATE OF t`,
-      );
-      const held = await client.query(
-        `SELECT COALESCE(SUM(tr.quantity), 0)::int AS quantity
-         FROM tray_reservations tr
-         INNER JOIN order_items oi ON oi.order_item_id = tr.order_item_id
-         INNER JOIN orders o ON o.order_id = oi.order_id
-         WHERE tr.status = 'HELD' AND tr.expires_at > CURRENT_TIMESTAMP
-           AND o.status = 'PENDING'
-           AND o.payment_status IN ('UNPAID', 'PENDING', 'FAILED')`,
-      );
-      const otherSessions = await client.query(
-        `SELECT COALESCE(SUM(oi.quantity), 0)::int AS quantity
-         FROM cultivation_sessions s
-         INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
-         WHERE s.status IN ('PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT')
-           AND s.session_id <> $1`,
-        [sessionId],
-      );
-      const quantity = Number(session.tray_quantity);
-      const available = trays.rows.length
-        - Number(held.rows[0]?.quantity || 0)
-        - Number(otherSessions.rows[0]?.quantity || 0);
-      if (available < quantity) {
-        throw new AppError('Not enough available trays to start cultivation', 409, 'INSUFFICIENT_TRAYS');
-      }
-      for (const tray of trays.rows.slice(0, quantity)) {
-        const assigned = await client.query(
-          `UPDATE cultivation_trays
-           SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
-           WHERE tray_id = $1 AND status = 'AVAILABLE'
-           RETURNING tray_id`,
-          [tray.tray_id],
-        );
-        if (!assigned.rows[0]) throw new AppError('A cultivation tray is no longer available', 409);
-        await client.query(
-          `INSERT INTO cultivation_session_trays (session_id, tray_id, status)
-           VALUES ($1, $2, 'ACTIVE')`,
-          [sessionId, tray.tray_id],
-        );
-      }
     }
 
     const updated = await client.query(
       `UPDATE cultivation_sessions
-       SET status = $2::varchar,
-           start_at = CASE WHEN $2::varchar = 'CULTIVATING' THEN CURRENT_TIMESTAMP ELSE start_at END,
-           harvest_date = CASE
-             WHEN $2::varchar = 'CULTIVATING' THEN CURRENT_DATE + duration_days
-             ELSE harvest_date
-           END
+       SET status = $2::varchar
        WHERE session_id = $1
-       RETURNING session_id, status, start_at, harvest_date`,
+       RETURNING session_id, status, harvest_status, start_at, harvest_date`,
       [sessionId, nextStage],
     );
-    await client.query(
-      `INSERT INTO cultivation_progress (
-         session_id, current_stage, progress_percent, start_date,
-         expected_harvest_date, description
-       )
-       VALUES ($1, $2, 0, CURRENT_DATE, $3, $4)`,
-      [sessionId, nextStage, updated.rows[0].harvest_date, `Spawn stage changed to ${nextStage}`],
-    );
+    if (nextStage !== 'HARVESTING') {
+      await client.query(
+        `INSERT INTO cultivation_progress (
+           session_id, current_stage, progress_percent, start_date,
+           expected_harvest_date, description
+         )
+         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4)`,
+        [sessionId, nextStage, updated.rows[0].harvest_date, `Spawn stage changed to ${nextStage}`],
+      );
+    }
     await client.query('COMMIT');
     return updated.rows[0];
   } catch (error) {
@@ -427,13 +368,32 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
   const ownerFilter = isAdmin ? '' : 'AND o.user_id = $2';
   const values = isAdmin ? [orderId] : [orderId, userId];
   const result = await pool.query(
-    `SELECT s.session_id, s.status, s.start_at, s.harvest_date, s.duration_days,
+    `SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date,
+            s.harvest_date AS expected_harvest_date, s.duration_days,
             oi.order_item_id, oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
-            mt.name AS mushroom_name, o.order_id
+            mt.name AS mushroom_name, o.order_id,
+            latest_progress.current_stage, latest_progress.progress_percent,
+            latest_progress.updated_at AS progress_updated_at,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                'session_tray_id', st.session_tray_id,
+                'tray_id', st.tray_id,
+                'status', st.status
+              ) ORDER BY st.session_tray_id)
+              FROM cultivation_session_trays st
+              WHERE st.session_id = s.session_id AND st.status = 'ACTIVE'
+            ), '[]'::json) AS assigned_trays
      FROM cultivation_sessions s
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN orders o ON o.order_id = oi.order_id
      INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
+     LEFT JOIN cultivation_progress latest_progress ON latest_progress.progress_id = (
+       SELECT cp.progress_id
+       FROM cultivation_progress cp
+       WHERE cp.session_id = s.session_id
+       ORDER BY cp.progress_id DESC
+       LIMIT 1
+     )
      WHERE o.order_id = $1 ${ownerFilter}
      ORDER BY s.session_id`,
     values,
@@ -455,11 +415,13 @@ async function findCustomerProgress(orderId, userId, isAdmin = false) {
   const values = isAdmin ? [orderId] : [orderId, userId];
   const result = await pool.query(
     `SELECT cp.progress_id, cp.session_id, cp.current_stage, cp.progress_percent,
-            cp.start_date, cp.expected_harvest_date, cp.description, cp.updated_at
+            cp.start_date, cp.expected_harvest_date, cp.description, cp.updated_at,
+            s.status, s.harvest_status, mt.name AS mushroom_name
      FROM cultivation_progress cp
      INNER JOIN cultivation_sessions s ON s.session_id = cp.session_id
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN orders o ON o.order_id = oi.order_id
+     INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
      WHERE o.order_id = $1 ${ownerFilter}
      ORDER BY cp.session_id, cp.progress_id`,
     values,
