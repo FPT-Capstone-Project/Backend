@@ -69,8 +69,13 @@ function loadWorkflowModel({
     harvest_date: '2026-10-21',
   },
   activeAssignments = [],
-  availableTrays = [{ tray_id: 10 }, { tray_id: 11 }],
-  unavailableTrayId,
+  floor = { floor_id: 2, floor_name: 'Floor 2', status: 'ACTIVE' },
+  selectedTrays = [
+    { tray_id: 10, tray_code: 'F2-TRAY-01', tray_name: 'Tray 1', floor_id: 2, status: 'AVAILABLE' },
+    { tray_id: 11, tray_code: 'F2-TRAY-02', tray_name: 'Tray 2', floor_id: 2, status: 'AVAILABLE' },
+  ],
+  occupiedAssignments = [],
+  occupiedTrayIds,
   latestProgress = { progress_id: 9, current_stage: 'MATURATION', progress_percent: '100' },
   maturityInspection = { inspection_id: 20 },
 } = {}) {
@@ -90,9 +95,18 @@ function loadWorkflowModel({
       if (statement.startsWith('SELECT session_tray_id FROM cultivation_session_trays')) {
         return { rows: activeAssignments };
       }
-      if (statement.startsWith('SELECT t.tray_id FROM cultivation_trays')) return { rows: availableTrays };
+      if (statement.startsWith('SELECT floor_id, floor_name, status FROM cultivation_floors')) {
+        return { rows: floor ? [floor] : [] };
+      }
+      if (statement.startsWith('SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status')) {
+        return { rows: selectedTrays };
+      }
+      if (statement.startsWith('SELECT tray_id FROM cultivation_session_trays')) {
+        return { rows: occupiedAssignments };
+      }
       if (statement.startsWith('UPDATE cultivation_trays')) {
-        return { rows: values[0] === unavailableTrayId ? [] : [{ tray_id: values[0] }] };
+        const ids = occupiedTrayIds ?? values[0];
+        return { rows: ids.map((trayId) => ({ tray_id: trayId })) };
       }
       if (statement.startsWith('INSERT INTO cultivation_session_trays')) {
         insertedAssignments += 1;
@@ -215,42 +229,97 @@ test('rejects a daily growth-stage regression', async () => {
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
 });
 
-test('assigns exactly the required available trays transactionally', async () => {
+test('assigns only the Farm Operator selected trays on the selected floor transactionally', async () => {
   const { model, statements } = loadWorkflowModel();
-  const result = await model.assignTraysForAdmin(77);
+  const result = await model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] });
 
-  assert.equal(result.sessionId, 77);
-  assert.deepEqual(result.assignedTrays.map((tray) => tray.tray_id), [10, 11]);
-  assert.equal(statements.filter(({ statement }) => statement.startsWith('UPDATE cultivation_trays')).length, 2);
+  assert.equal(result.session_id, 77);
+  assert.deepEqual(result.floor, { floor_id: 2, floor_name: 'Floor 2' });
+  assert.equal(result.required_trays, 2);
+  assert.equal(result.assigned_trays_count, 2);
+  assert.deepEqual(result.assigned_trays.map((tray) => tray.tray_id), [10, 11]);
+  assert.deepEqual(result.assigned_trays.map((tray) => tray.tray_code), ['F2-TRAY-01', 'F2-TRAY-02']);
+  assert.equal(statements.filter(({ statement }) => statement.startsWith('UPDATE cultivation_trays')).length, 1);
   assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')).length, 2);
+  assert.ok(statements.some(({ statement }) => statement.includes('FOR UPDATE OF t')));
   assert.equal(statements.at(-1).statement, 'COMMIT');
 });
 
-test('does not partially assign trays when capacity changes', async () => {
-  const { model, statements } = loadWorkflowModel({ unavailableTrayId: 11 });
+test('rejects a selected tray count that does not equal the session requirement before writes', async () => {
+  const { model, statements } = loadWorkflowModel();
 
   await assert.rejects(
-    () => model.assignTraysForAdmin(77),
-    { statusCode: 409, code: 'INSUFFICIENT_TRAYS' },
+    () => model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10] }),
+    { statusCode: 409, code: 'INVALID_TRAY_QUANTITY' },
   );
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
   assert.ok(!statements.some(({ statement }) => statement === 'COMMIT'));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('UPDATE cultivation_trays')));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
 });
 
-test('rejects duplicate or insufficient tray assignment before inserting links', async () => {
-  const duplicate = loadWorkflowModel({ activeAssignments: [{ session_tray_id: 9, tray_id: 10 }] });
+test('rejects missing, wrong-floor, unavailable, and already-active selected trays atomically', async () => {
+  const missing = loadWorkflowModel({
+    selectedTrays: [{ tray_id: 10, tray_code: 'F2-TRAY-01', floor_id: 2, status: 'AVAILABLE' }],
+  });
   await assert.rejects(
-    () => duplicate.model.assignTraysForAdmin(77),
-    { statusCode: 409, code: 'TRAYS_ALREADY_ASSIGNED' },
+    () => missing.model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 999999] }),
+    { statusCode: 404, code: 'TRAY_NOT_FOUND' },
   );
-  assert.ok(!duplicate.statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
+  assert.ok(!missing.statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
 
-  const insufficient = loadWorkflowModel({ availableTrays: [{ tray_id: 10 }] });
+  const wrongFloor = loadWorkflowModel({
+    selectedTrays: [
+      { tray_id: 10, tray_code: 'F2-TRAY-01', floor_id: 2, status: 'AVAILABLE' },
+      { tray_id: 11, tray_code: 'F3-TRAY-01', floor_id: 3, status: 'AVAILABLE' },
+    ],
+  });
   await assert.rejects(
-    () => insufficient.model.assignTraysForAdmin(77),
-    { statusCode: 409, code: 'INSUFFICIENT_TRAYS' },
+    () => wrongFloor.model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] }),
+    { statusCode: 409, code: 'TRAY_FLOOR_MISMATCH' },
   );
-  assert.ok(!insufficient.statements.some(({ statement }) => statement.startsWith('UPDATE cultivation_trays')));
+  assert.ok(!wrongFloor.statements.some(({ statement }) => statement.startsWith('UPDATE cultivation_trays')));
+
+  const unavailable = loadWorkflowModel({
+    selectedTrays: [
+      { tray_id: 10, tray_code: 'F2-TRAY-01', floor_id: 2, status: 'AVAILABLE' },
+      { tray_id: 11, tray_code: 'F2-TRAY-02', floor_id: 2, status: 'OCCUPIED' },
+    ],
+  });
+  await assert.rejects(
+    () => unavailable.model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] }),
+    { statusCode: 409, code: 'TRAY_UNAVAILABLE' },
+  );
+  assert.ok(!unavailable.statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
+
+  const activeElsewhere = loadWorkflowModel({ occupiedAssignments: [{ tray_id: 10 }] });
+  await assert.rejects(
+    () => activeElsewhere.model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] }),
+    { statusCode: 409, code: 'TRAY_UNAVAILABLE' },
+  );
+  assert.ok(activeElsewhere.statements.some(({ statement }) => statement === 'ROLLBACK'));
+});
+
+test('rolls back when the selected tray update changes during assignment', async () => {
+  const { model, statements } = loadWorkflowModel({ occupiedTrayIds: [10] });
+
+  await assert.rejects(
+    () => model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] }),
+    { statusCode: 409, code: 'TRAY_UNAVAILABLE' },
+  );
+  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_session_trays')));
+});
+
+test('rejects selected trays when the session is not ready for cultivation', async () => {
+  const { model, statements } = loadWorkflowModel({
+    session: { session_id: 77, status: 'SPAWN_RESTING', tray_quantity: 2 },
+  });
+  await assert.rejects(
+    () => model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] }),
+    { statusCode: 409, code: 'INVALID_SESSION_STATUS' },
+  );
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('UPDATE cultivation_trays')));
 });
 
 test('activates only after all trays are assigned and creates FRUITING_INITIATION progress', async () => {

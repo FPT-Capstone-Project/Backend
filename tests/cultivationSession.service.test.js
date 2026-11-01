@@ -18,7 +18,13 @@ function loadService() {
     },
     assignTraysForAdmin: async (...args) => {
       calls.push(args);
-      return { assignments: [{ session_tray_id: 1 }] };
+      return {
+        session_id: args[0],
+        floor: { floor_id: args[1].floorId, floor_name: 'Floor 2' },
+        assigned_trays: [{ session_tray_id: 1, tray_id: args[1].trayIds[0], status: 'ACTIVE' }],
+        required_trays: args[1].trayIds.length,
+        assigned_trays_count: args[1].trayIds.length,
+      };
     },
     findAvailableTraysForAdmin: async (...args) => {
       calls.push(args);
@@ -101,31 +107,48 @@ test('validates daily inspection input and passes the Farm Operator ID', async (
   );
 });
 
-test('delegates tray assignment, activation, and harvest readiness with parsed session IDs', async () => {
+test('validates and delegates the Farm Operator selected floor and trays', async () => {
   const { service, calls } = loadService();
 
-  await service.assignTraysForAdmin('7');
+  const assignment = await service.assignTraysForAdmin('7', {
+    floorId: '2',
+    trayIds: ['10', 11],
+  });
   await service.activateForAdmin('7');
   const ready = await service.markHarvestReadyForAdmin('7');
 
-  assert.deepEqual(calls, [[7], [7], [7]]);
+  assert.equal(assignment.floor.floor_id, 2);
+  assert.deepEqual(calls, [[7, { floorId: 2, trayIds: [10, 11] }], [7], [7]]);
   assert.deepEqual(ready, {
     session_id: 1,
     status: 'CULTIVATING',
     harvest_status: 'HARVEST_READY',
   });
+
+  await assert.rejects(
+    () => service.assignTraysForAdmin('7', { floorId: 2, trayIds: [10, 10] }),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.assignTraysForAdmin('7', { floorId: 2, trayIds: [] }),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.assignTraysForAdmin('7', { trayIds: [10, 11] }),
+    { statusCode: 400 },
+  );
 });
 
 test('lists currently assignable trays and returns immutable cultivation progress history', async () => {
   const { service, calls } = loadService();
 
-  const trays = await service.getAvailableTraysForAdmin();
+  const trays = await service.getAvailableTraysForAdmin({ floorId: '2' });
   const progress = await service.getProgressForAdmin('7');
 
   assert.deepEqual(trays, [{ tray_id: 10, status: 'AVAILABLE' }]);
   assert.equal(progress.session_id, 7);
   assert.equal(progress.current_stage, 'PINNING');
-  assert.deepEqual(calls, [[], [7]]);
+  assert.deepEqual(calls, [[2], [7]]);
 });
 
 test('validates and records cultivation incidents through the existing issue history', async () => {

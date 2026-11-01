@@ -94,16 +94,25 @@ async function setupDatabase() {
     );
 
     INSERT INTO orders (user_id) VALUES (2);
-    INSERT INTO order_items (order_id, quantity) VALUES (1, 2);
+    INSERT INTO order_items (order_id, quantity) VALUES (1, 2), (1, 2);
     INSERT INTO cultivation_sessions (
       order_item_id, mushroom_type_id, duration_days, status
     ) VALUES (1, 1, 20, 'READY_FOR_CULTIVATION');
     INSERT INTO cultivation_rooms (room_name) VALUES ('Room 1');
-    INSERT INTO cultivation_floors (status) VALUES ('ACTIVE');
+    INSERT INTO cultivation_floors (floor_number, floor_name, status)
+      VALUES (1, 'Floor 1', 'ACTIVE'), (2, 'Floor 2', 'ACTIVE'), (3, 'Floor 3', 'INACTIVE');
     INSERT INTO cultivation_trays (room_id, floor_id, tray_code, status)
-      VALUES (1, 1, 'T-01', 'AVAILABLE'), (1, 1, 'T-02', 'AVAILABLE'), (1, 1, 'T-03', 'AVAILABLE');
+      VALUES
+        (1, 1, 'F1-TRAY-01', 'AVAILABLE'),
+        (1, 1, 'F1-TRAY-02', 'AVAILABLE'),
+        (1, 1, 'F1-TRAY-03', 'AVAILABLE'),
+        (1, 2, 'F2-TRAY-01', 'AVAILABLE'),
+        (1, 3, 'F3-TRAY-01', 'AVAILABLE');
     INSERT INTO cultivation_session_trays (session_id, tray_id, status)
       VALUES (999, 3, 'ACTIVE');
+    INSERT INTO cultivation_sessions (
+      order_item_id, mushroom_type_id, duration_days, status
+    ) VALUES (2, 1, 20, 'SPAWN_RESTING');
   `);
   return db;
 }
@@ -124,23 +133,73 @@ function loadModel(db) {
   return require('../src/models/cultivationSession.model');
 }
 
-test('WF-03 assigns trays, activates cultivation, records maturity, and ends harvest-ready', async () => {
+function isConflictOrInputError(error) {
+  return [400, 404, 409].includes(error?.statusCode);
+}
+
+test('WF-03 assigns only Farm Operator selected trays, activates cultivation, records maturity, and ends harvest-ready', async () => {
   const db = await setupDatabase();
   try {
     const model = loadModel(db);
 
-    const availableBeforeAssignment = await model.findAvailableTraysForAdmin();
-    assert.deepEqual(availableBeforeAssignment.map((tray) => tray.tray_id), [1, 2]);
+    const floorOneAvailable = await model.findAvailableTraysForAdmin(1);
+    const floorTwoAvailable = await model.findAvailableTraysForAdmin(2);
+    const inactiveFloorAvailable = await model.findAvailableTraysForAdmin(3);
+    assert.deepEqual(floorOneAvailable.map((tray) => tray.tray_id), [1, 2]);
+    assert.deepEqual(floorTwoAvailable.map((tray) => tray.tray_id), [4]);
+    assert.deepEqual(inactiveFloorAvailable, []);
 
-    const assignment = await model.assignTraysForAdmin(1);
-    assert.equal(assignment.assignedTrays.length, 2);
-    assert.deepEqual(
-      (await db.query('SELECT status FROM cultivation_trays ORDER BY tray_id')).rows.map((row) => row.status),
-      ['OCCUPIED', 'OCCUPIED', 'AVAILABLE'],
+    await assert.rejects(
+      () => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1] }),
+      isConflictOrInputError,
     );
     await assert.rejects(
-      () => model.assignTraysForAdmin(1),
-      { statusCode: 409, code: 'TRAYS_ALREADY_ASSIGNED' },
+      () => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1, 4] }),
+      isConflictOrInputError,
+    );
+    await assert.rejects(
+      () => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1, 3] }),
+      isConflictOrInputError,
+    );
+    await assert.rejects(
+      () => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1, 999999] }),
+      isConflictOrInputError,
+    );
+    await assert.rejects(
+      () => model.assignTraysForAdmin(2, { floorId: 1, trayIds: [1, 2] }),
+      isConflictOrInputError,
+    );
+    assert.equal(
+      (await db.query('SELECT COUNT(*)::int AS count FROM cultivation_session_trays WHERE session_id IN (1, 2)'))
+        .rows[0].count,
+      0,
+    );
+    assert.deepEqual(
+      (await db.query('SELECT status FROM cultivation_trays WHERE tray_id IN (1, 2, 4) ORDER BY tray_id'))
+        .rows.map((row) => row.status),
+      ['AVAILABLE', 'AVAILABLE', 'AVAILABLE'],
+    );
+
+    const assignment = await model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1, 2] });
+    assert.equal(assignment.session_id, 1);
+    assert.deepEqual(assignment.floor, { floor_id: 1, floor_name: 'Floor 1' });
+    assert.equal(assignment.required_trays, 2);
+    assert.equal(assignment.assigned_trays_count, 2);
+    assert.deepEqual(assignment.assigned_trays.map((tray) => tray.tray_id), [1, 2]);
+    assert.deepEqual(assignment.assigned_trays.map((tray) => tray.tray_code), ['F1-TRAY-01', 'F1-TRAY-02']);
+    assert.ok(assignment.assigned_trays.every((tray) => tray.status === 'ACTIVE'));
+    assert.deepEqual(
+      (await db.query('SELECT status FROM cultivation_trays ORDER BY tray_id')).rows.map((row) => row.status),
+      ['OCCUPIED', 'OCCUPIED', 'AVAILABLE', 'AVAILABLE', 'AVAILABLE'],
+    );
+    await db.query("UPDATE cultivation_sessions SET status = 'READY_FOR_CULTIVATION' WHERE session_id = 2");
+    await assert.rejects(
+      () => model.assignTraysForAdmin(2, { floorId: 1, trayIds: [1, 2] }),
+      isConflictOrInputError,
+    );
+    assert.equal(
+      (await db.query('SELECT COUNT(*)::int AS count FROM cultivation_session_trays WHERE session_id = 2')).rows[0].count,
+      0,
     );
 
     const activated = await model.activateForAdmin(1);
@@ -151,7 +210,7 @@ test('WF-03 assigns trays, activates cultivation, records maturity, and ends har
       'FRUITING_INITIATION',
     );
 
-    const sessionTrayId = assignment.assignedTrays[0].session_tray_id;
+    const sessionTrayId = assignment.assigned_trays[0].session_tray_id;
     for (const [growthStage, growthProgress] of [
       ['PINNING', 25],
       ['YOUNG_FRUITING', 65],
