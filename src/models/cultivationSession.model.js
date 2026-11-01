@@ -161,8 +161,8 @@ async function createProgressForAdmin(sessionId, data) {
     await client.query('BEGIN');
     const session = await lockSession(client, sessionId);
     if (!session) throw new AppError('Cultivation session not found', 404);
-    if (session.status !== 'ACTIVE') {
-      throw new AppError('Only active cultivation sessions can record progress', 409);
+    if (!['CULTIVATING', 'HARVESTING'].includes(session.status)) {
+      throw new AppError('Only cultivating or harvesting sessions can record progress', 409);
     }
 
     const latest = await lockLatestProgress(client, sessionId);
@@ -208,7 +208,8 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
     );
     const assignment = assignmentResult.rows[0];
     if (!assignment) throw new AppError('Cultivation session tray not found', 404);
-    if (assignment.assignment_status !== 'ACTIVE' || assignment.session_status !== 'ACTIVE') {
+    if (assignment.assignment_status !== 'ACTIVE'
+      || !['CULTIVATING', 'HARVESTING'].includes(assignment.session_status)) {
       throw new AppError('Only active session trays can be inspected', 409);
     }
 
@@ -276,8 +277,8 @@ async function createHarvestForAdmin(sessionTrayId, data, harvestedBy) {
     );
     const assignment = assignmentResult.rows[0];
     if (!assignment) throw new AppError('Cultivation session tray not found', 404);
-    if (assignment.assignment_status !== 'ACTIVE' || assignment.session_status !== 'ACTIVE') {
-      throw new AppError('Harvests can only be recorded for an active session tray', 409);
+    if (assignment.assignment_status !== 'ACTIVE' || assignment.session_status !== 'HARVESTING') {
+      throw new AppError('Harvests can only be recorded for a harvesting session tray', 409);
     }
 
     const latest = await lockLatestProgress(client, assignment.session_id);
@@ -319,8 +320,8 @@ async function completeForAdmin(sessionId, note) {
     await client.query('BEGIN');
     const session = await lockSession(client, sessionId);
     if (!session) throw new AppError('Cultivation session not found', 404);
-    if (session.status !== 'ACTIVE') {
-      throw new AppError('Only active cultivation sessions can be completed', 409);
+    if (session.status !== 'HARVESTING') {
+      throw new AppError('Only harvesting sessions can be completed', 409);
     }
 
     const harvestResult = await client.query(
@@ -363,7 +364,10 @@ async function completeForAdmin(sessionId, note) {
        WHERE order_item_id IN (
          SELECT order_item_id FROM order_items WHERE order_id = $1
        )
-         AND status IN ('PLANNED', 'ACTIVE')`,
+         AND status IN (
+           'PLANNED', 'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
+           'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING', 'ACTIVE'
+         )`,
       [session.order_id],
     );
     let orderStatus = session.order_status;
@@ -407,8 +411,11 @@ async function cancelForAdmin(sessionId, reason) {
     await client.query('BEGIN');
     const session = await lockSession(client, sessionId);
     if (!session) throw new AppError('Cultivation session not found', 404);
-    if (!['PLANNED', 'ACTIVE'].includes(session.status)) {
-      throw new AppError('Only planned or active cultivation sessions can be cancelled', 409);
+    if (![
+      'PLANNED', 'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
+      'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING', 'ACTIVE',
+    ].includes(session.status)) {
+      throw new AppError('Only unfinished cultivation sessions can be cancelled', 409);
     }
 
     const updatedSessionResult = await client.query(

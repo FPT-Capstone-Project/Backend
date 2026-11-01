@@ -22,6 +22,8 @@ rootRouter.use('/cultivation-rooms', cultivationRoomRoutes);
 rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
 rootRouter.use('/orders', orderRoutes);
 rootRouter.use('/cultivation-sessions', cultivationSessionRoutes);
+rootRouter.use('/farm', require('./farm.routes'));
+rootRouter.use('/customer', require('./customerCultivation.routes'));
 rootRouter.use('/payments', paymentRoutes);
 rootRouter.use('/notifications', notificationRoutes);
 rootRouter.use('/iot', require('./iot.routes'));

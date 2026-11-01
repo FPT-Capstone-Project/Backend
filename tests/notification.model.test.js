@@ -24,7 +24,7 @@ test('stores cultivation-session references and scopes notification reads to the
       INSERT INTO order_items(order_id, mushroom_type_id, unit_price, total_price)
       VALUES (1, 1, 100, 100);
       INSERT INTO cultivation_sessions(mushroom_type_id, start_at, order_item_id, status)
-      VALUES (1, CURRENT_TIMESTAMP, 1, 'ACTIVE');
+      VALUES (1, CURRENT_TIMESTAMP, 1, 'CULTIVATING');
       INSERT INTO notifications (
         user_id, notification_type, title, message, reference_type, reference_id
       )
@@ -69,7 +69,7 @@ test('stores cultivation-session references and scopes notification reads to the
       userId: 3, isRead: false, limit: 20, offset: 0,
     });
 
-    assert.deepEqual(recipient, { session_id: 1, status: 'ACTIVE', user_id: 1, user_status: 'ACTIVE' });
+    assert.deepEqual(recipient, { session_id: 1, status: 'CULTIVATING', user_id: 1, user_status: 'ACTIVE' });
     assert.equal(created.user_id, 1);
     assert.equal(created.reference_type, 'CULTIVATION_SESSION');
     assert.equal(created.reference_id, 1);

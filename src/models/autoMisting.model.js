@@ -87,7 +87,7 @@ function createRepository(db = pool) {
     JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'
     JOIN cultivation_trays t ON t.tray_id=st.tray_id
     LEFT JOIN mushroom_conditions c ON c.mushroom_type_id=s.mushroom_type_id
-    WHERE t.floor_id=$1 AND s.status='ACTIVE'`,[id]);
+    WHERE t.floor_id=$1 AND s.status IN ('CULTIVATING', 'HARVESTING')`,[id]);
    const unassigned=await one(`SELECT count(*)::int AS count FROM cultivation_trays WHERE room_id=$1 AND floor_id IS NULL`,[f.room_id]);
    const conflict=['temperature','humidity'].some(k=>{
     const lows=profiles.map(p=>p[`${k}_min`]).filter(v=>v!=null).map(Number);
@@ -101,7 +101,7 @@ function createRepository(db = pool) {
     FROM cultivation_trays t LEFT JOIN (
      cultivation_sessions s
      JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'
-    ) ON st.tray_id=t.tray_id AND s.status='ACTIVE'
+    ) ON st.tray_id=t.tray_id AND s.status IN ('CULTIVATING', 'HARVESTING')
     LEFT JOIN mushroom_types m ON m.mushroom_type_id=s.mushroom_type_id
     LEFT JOIN tray_positions p ON p.position_id=t.position_id
     WHERE t.floor_id=$1 ORDER BY t.tray_id,s.session_id`,[id]);

@@ -63,8 +63,17 @@ async function lockCultivationCapacity(client, {
        AND o.payment_status IN ('UNPAID', 'PENDING', 'FAILED')`,
     [orderItemId],
   );
+  const unassignedSessionTraysResult = await client.query(
+    `SELECT COALESCE(SUM(oi.quantity), 0)::int AS quantity
+     FROM cultivation_sessions s
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     WHERE s.status IN ('PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT')
+       AND s.order_item_id <> $1`,
+    [orderItemId],
+  );
   const availableTrayQuantity = traysResult.rows.length
-    - Number(heldTraysResult.rows[0]?.quantity || 0);
+    - Number(heldTraysResult.rows[0]?.quantity || 0)
+    - Number(unassignedSessionTraysResult.rows[0]?.quantity || 0);
 
   const heldSpawnResult = await client.query(
     `SELECT COALESCE(SUM(tr.spawn_quantity), 0)::numeric AS quantity

@@ -6,7 +6,7 @@ function loadInspectionModel({
     session_tray_id: 14,
     session_id: 77,
     assignment_status: 'ACTIVE',
-    session_status: 'ACTIVE',
+    session_status: 'CULTIVATING',
     start_at: '2026-10-01T00:00:00.000Z',
     harvest_date: '2026-10-21',
   },

@@ -445,7 +445,7 @@ async function fulfillCultivationPlan(client, orderId, plan) {
        order_item_id, protocol_id
      )
      VALUES (
-       $1, CURRENT_TIMESTAMP, $2, 'ACTIVE',
+       $1, CURRENT_TIMESTAMP, $2, 'PENDING',
        CURRENT_DATE + $2::integer, $3, $4
      )
      RETURNING session_id, mushroom_type_id, start_at, duration_days, status, harvest_date`,
@@ -485,24 +485,6 @@ async function fulfillCultivationPlan(client, orderId, plan) {
     ],
   );
 
-  for (const tray of capacity.trays.slice(0, Number(item.quantity))) {
-    const updatedTrayResult = await client.query(
-      `UPDATE cultivation_trays
-       SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
-       WHERE tray_id = $1 AND status = 'AVAILABLE'
-       RETURNING tray_id`,
-      [tray.tray_id],
-    );
-    if (updatedTrayResult.rows.length === 0) {
-      throw new AppError('A reserved cultivation tray is no longer available', 409);
-    }
-    await client.query(
-      `INSERT INTO cultivation_session_trays (session_id, tray_id, status)
-       VALUES ($1, $2, 'ACTIVE')`,
-      [session.session_id, tray.tray_id],
-    );
-  }
-
   await client.query(
     `UPDATE tray_reservations
      SET status = 'CONSUMED'
@@ -514,15 +496,15 @@ async function fulfillCultivationPlan(client, orderId, plan) {
        session_id, current_stage, progress_percent, start_date,
        expected_harvest_date, description
      )
-     VALUES ($1, 'PREPARATION', 0, CURRENT_DATE, $2::date, 'Cultivation started after payment')`,
+     VALUES ($1, 'SPAWN_PENDING', 0, CURRENT_DATE, $2::date, 'Spawn allocated after payment; awaiting farm acceptance')`,
     [session.session_id, session.harvest_date],
   );
   await client.query(
     `INSERT INTO notifications (
        user_id, notification_type, title, message, reference_type, reference_id
      )
-     SELECT user_id, 'CULTIVATION_STARTED', 'Cultivation has started',
-            'Your mushroom spawn has been allocated to cultivation trays.',
+     SELECT user_id, 'CULTIVATION_STARTED', 'Your spawn is being prepared',
+            'Your mushroom spawn has been allocated and is awaiting farm processing.',
             'CULTIVATION_SESSION', $2
      FROM orders
      WHERE order_id = $1`,

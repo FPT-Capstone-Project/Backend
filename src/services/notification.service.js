@@ -3,7 +3,15 @@ const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 
 const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'];
-const NOTIFIABLE_SESSION_STATUSES = ['PLANNED', 'ACTIVE'];
+const NOTIFIABLE_SESSION_STATUSES = [
+  'PLANNED',
+  'PENDING',
+  'SPAWN_RESTING',
+  'MYCELIAL_DEVELOPMENT',
+  'READY_FOR_CULTIVATION',
+  'CULTIVATING',
+  'HARVESTING',
+];
 const DEFAULT_NOTIFICATION_TITLE = 'Thông báo từ SmartMush Farm';
 
 function parseId(value, fieldName) {

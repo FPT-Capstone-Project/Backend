@@ -19,7 +19,7 @@ const adminOnly = [authenticate, authorizeRoles(1)];
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PLANNED, ACTIVE, COMPLETED, CANCELLED]
+ *           enum: [PENDING, SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, CULTIVATING, HARVESTING, COMPLETED, CANCELLED]
  *       - in: query
  *         name: userId
  *         schema:

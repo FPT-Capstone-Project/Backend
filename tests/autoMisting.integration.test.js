@@ -329,7 +329,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
      INSERT INTO order_items(order_id,rental_package_id,mushroom_type_id,unit_price,total_price)
       VALUES(1,1,1,1,1),(2,1,2,1,1);
      INSERT INTO cultivation_sessions(mushroom_type_id,start_at,duration_days,status,order_item_id)
-      VALUES(1,CURRENT_TIMESTAMP,30,'ACTIVE',1),(2,CURRENT_TIMESTAMP,30,'ACTIVE',2);
+      VALUES(1,CURRENT_TIMESTAMP,30,'CULTIVATING',1),(2,CURRENT_TIMESTAMP,30,'CULTIVATING',2);
      INSERT INTO cultivation_session_trays(session_id,tray_id,status)
       VALUES(1,1,'ACTIVE'),(2,2,'ACTIVE');
      UPDATE cultivation_trays SET status='OCCUPIED' WHERE tray_id IN (1,2);
@@ -342,7 +342,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal(cultivation.trays[1].mushroom_name,'Second mushroom');
     await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE session_id=2");
     assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
-    await db.exec("UPDATE cultivation_sessions SET status='ACTIVE' WHERE session_id=2");
+    await db.exec("UPDATE cultivation_sessions SET status='CULTIVATING' WHERE session_id=2");
     const suggestion=await service.suggestions(id);
     assert.equal(suggestion.common.humidity_min,88);
     assert.equal(suggestion.common.temperature_max,28);

@@ -110,6 +110,9 @@ function loadPaymentModel({
       if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity)')) {
         return { rows: [{ quantity: state.heldTrays }] };
       }
+      if (statement.startsWith('SELECT COALESCE(SUM(oi.quantity)')) {
+        return { rows: [{ quantity: 0 }] };
+      }
       if (statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity)')) {
         return { rows: [{ quantity: state.heldSpawn }] };
       }
@@ -198,7 +201,7 @@ function loadPaymentModel({
             mushroom_type_id: values[0],
             start_at: new Date(),
             duration_days: values[1],
-            status: 'ACTIVE',
+            status: 'PENDING',
             harvest_date: '2030-02-01',
           }],
         };
@@ -355,7 +358,7 @@ test('fulfills a paid order idempotently, deducts spawn, and records an OUT tran
   assert.equal(replay.status, 'PAID');
   assert.equal(state.paymentPaidUpdates, 1);
   assert.equal(state.sessionsCreated, 1);
-  assert.equal(state.assignedTrayCount, 2);
+  assert.equal(state.assignedTrayCount, 0);
   assert.equal(state.inventory.quantity, '6');
   assert.equal(state.inventoryTransactions, 1);
   assert.equal(state.reservation.status, 'CONSUMED');
