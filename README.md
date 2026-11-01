@@ -271,6 +271,8 @@ Email OTP dùng giao diện HTML tương thích với email client, nhận diệ
 
 Ứng dụng không chạy migration tự động khi khởi động. Với database đã tồn tại, không chạy lại `database.sql`; hãy áp dụng các migration cần thiết cho database production trước khi deploy.
 
+Để đồng bộ database hiện có với schema điều trị và thu hoạch mới, chạy `migrations/015_add_harvest_and_treatment_schema.sql` một lần. Migration thêm `harvest_status`, cho phép liên kết lỗi với kiểm tra phôi và tạo các bảng nhật ký điều trị/media. Database mới có thể được tạo từ `database.sql`.
+
 Bảng `users` cần tồn tại trước khi gọi API đăng ký. Bảng `users` có foreign key tới bảng `roles`, vì vậy bảng `roles` và role tương ứng cũng phải tồn tại trước.
 
 Ví dụ cấu trúc bảng `users`:

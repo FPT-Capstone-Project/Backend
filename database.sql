@@ -285,6 +285,8 @@ CREATE TABLE public.cultivation_sessions (
   created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   order_item_id    INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
   protocol_id      INTEGER REFERENCES public.cultivation_protocols(protocol_id),
+  harvest_status   VARCHAR NOT NULL DEFAULT 'NOT_READY'
+    CHECK (harvest_status IN ('NOT_READY', 'HARVEST_READY')),
   CONSTRAINT fk_sessions_mushroom
     FOREIGN KEY (mushroom_type_id) REFERENCES public.mushroom_types(mushroom_type_id)
 );
@@ -467,15 +469,17 @@ CREATE TABLE public.notifications (
 
 CREATE TABLE public.cultivation_issues (
   issue_id       SERIAL PRIMARY KEY,
-  session_tray_id INTEGER NOT NULL
+  session_tray_id INTEGER
     REFERENCES public.cultivation_session_trays(session_tray_id),
   inspection_id  INTEGER REFERENCES public.cultivation_inspections(inspection_id),
+  spawn_inspection_id BIGINT REFERENCES public.spawn_inspections(inspection_id),
   reported_by    INTEGER NOT NULL REFERENCES public.users(user_id),
   issue_type     VARCHAR NOT NULL,
   title          VARCHAR NOT NULL,
   description    TEXT,
   severity       VARCHAR CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH')),
-  status         VARCHAR NOT NULL DEFAULT 'OPEN',
+  status         VARCHAR NOT NULL DEFAULT 'OPEN'
+    CHECK (status IN ('OPEN', 'WAITING_EXPERT', 'IN_PROGRESS', 'MONITORING', 'RESOLVED')),
   action_taken   TEXT,
   next_action    TEXT,
   reported_at    TIMESTAMP NOT NULL DEFAULT now(),
@@ -489,9 +493,32 @@ CREATE TABLE public.expert_consultations (
   question        TEXT NOT NULL,
   diagnosis       TEXT,
   solution        TEXT,
-  status          VARCHAR NOT NULL DEFAULT 'PENDING',
+  status          VARCHAR NOT NULL DEFAULT 'PENDING'
+    CHECK (status IN ('PENDING', 'IN_PROGRESS', 'ANSWERED', 'CLOSED')),
   created_at      TIMESTAMP NOT NULL DEFAULT now(),
   responded_at    TIMESTAMP
+);
+
+CREATE TABLE public.disease_treatment_logs (
+  treatment_log_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  consultation_id  INTEGER NOT NULL
+    REFERENCES public.expert_consultations(consultation_id),
+  performed_by     INTEGER NOT NULL REFERENCES public.users(user_id),
+  action_description TEXT NOT NULL,
+  result_description TEXT,
+  performed_at     TIMESTAMP NOT NULL DEFAULT now()
+);
+
+CREATE TABLE public.treatment_media (
+  media_id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  treatment_log_id BIGINT NOT NULL
+    REFERENCES public.disease_treatment_logs(treatment_log_id),
+  media_url        TEXT NOT NULL,
+  media_type       VARCHAR NOT NULL CHECK (media_type IN ('IMAGE', 'VIDEO')),
+  media_stage      VARCHAR NOT NULL CHECK (media_stage IN ('BEFORE', 'DURING', 'AFTER')),
+  caption          TEXT,
+  uploaded_by      INTEGER NOT NULL REFERENCES public.users(user_id),
+  uploaded_at      TIMESTAMP NOT NULL DEFAULT now()
 );
 
 -- ---------- IOT ----------
