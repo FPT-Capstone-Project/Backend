@@ -1,5 +1,6 @@
 const express = require('express');
 const spawnInspectionController = require('../controllers/spawnInspection.controller');
+const diseaseManagementController = require('../controllers/diseaseManagement.controller');
 const { authenticate } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
@@ -85,6 +86,22 @@ router.get(
   '/orders/:orderId/spawn-inspections/:inspectionId',
   authenticate,
   spawnInspectionController.customerSpawnInspection,
+);
+
+router.get(
+  '/sessions/:sessionId/issues',
+  authenticate,
+  diseaseManagementController.customerSessionIssues,
+);
+router.get(
+  '/issues/:issueId',
+  authenticate,
+  diseaseManagementController.customerIssue,
+);
+router.get(
+  '/issues/:issueId/timeline',
+  authenticate,
+  diseaseManagementController.customerIssueTimeline,
 );
 
 /**

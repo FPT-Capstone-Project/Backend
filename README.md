@@ -269,7 +269,19 @@ Email OTP dùng giao diện HTML tương thích với email client, nhận diệ
 
 ## 6. Chuẩn bị database
 
-Ứng dụng không chạy migration tự động khi khởi động. Với database đã tồn tại, không chạy lại `database.sql`; hãy áp dụng các migration cần thiết cho database production trước khi deploy.
+Ứng dụng không chạy migration tự động khi khởi động. Với database hiện có, không chạy lại `database.sql`. Các API WF-06 được điều chỉnh để dùng các bảng, cột và trạng thái trong database đã cung cấp; không cần migration 016 cho các API này. Migration 016 dành cho schema WF-06 mới hơn và thay đổi constraint trạng thái issue, vì vậy không áp dụng migration đó lên database đang dùng schema cũ này.
+
+### WF-06 — Mushroom disease diagnosis and treatment
+
+Các endpoint WF-06 tương thích với schema hiện có: issue dùng các trạng thái `OPEN`, `WAITING_EXPERT`, `IN_PROGRESS`, `MONITORING`, `RESOLVED`; consultation dùng `PENDING`, `IN_PROGRESS`, `ANSWERED`, `CLOSED`. Sau khi chuyên gia yêu cầu bổ sung, consultation trở về `PENDING`, FO bổ sung thông tin rồi consultation trở lại `IN_PROGRESS`. `MONITORING` là trạng thái FO đã ghi kết quả xử lý và chờ chuyên gia; expert được phân công có thể chuyển issue sang `RESOLVED`.
+
+Farm Operator tạo issue qua `POST /api/issues` với đúng một nguồn: `sessionTrayId` (kèm `inspectionId` tùy chọn) hoặc `spawnInspectionId`. Backend kiểm tra session đã thanh toán và nguồn inspection hợp lệ. Giai đoạn cùng snapshot sensor được trả trong phản hồi tạo issue, không lưu vào các cột mới. Ảnh issue dùng chung bảng ảnh inspection hiện có: `POST /api/issues/:issueId/media` chỉ nhận ảnh và issue phải liên kết với inspection.
+
+Consultation dùng `POST /api/issues/:issueId/consultations`; chuyên gia xem `GET /api/consultations`, nhận/phân công bằng `PATCH /api/consultations/:consultationId/assign`, phản hồi bằng `PATCH /api/consultations/:consultationId/respond`, rồi đóng bằng `PATCH /api/consultations/:consultationId/close`. Do schema hiện tại chưa có bảng message riêng, nội dung FO bổ sung qua `POST /api/consultations/:consultationId/messages` được nối vào `expert_consultations.question` và hiển thị trong lịch sử timeline. Admin có thể chỉ định chuyên gia qua `expertId`; expert tự nhận yêu cầu. Role expert được nhận diện theo tên role có chứa `expert`.
+
+Farm Operator ghi lần xử lý ở `POST /api/consultations/:consultationId/treatments`, xem lịch sử qua GET cùng endpoint và upload ảnh/video ở `POST /api/treatments/:treatmentLogId/media` (`mediaStage`: `BEFORE`, `DURING`, `AFTER`). Database chỉ lưu URL media; khi xóa, backend lấy public ID từ URL Cloudinary. Chỉ người tạo treatment hoặc admin được xóa media trước khi issue chuyển sang `MONITORING` hoặc `RESOLVED`. Sau khi ghi kết quả, chuyển issue sang `MONITORING` bằng `PATCH /api/issues/:issueId/status`; chuyên gia được phân công xem xét và giải quyết qua `PATCH /api/issues/:issueId/resolve`.
+
+Customer xem issue theo session ở `GET /api/customer/sessions/:sessionId/issues`, chi tiết ở `GET /api/customer/issues/:issueId` và timeline ở `GET /api/customer/issues/:issueId/timeline`. Backend xác thực quyền sở hữu session qua order trước khi trả dữ liệu. File media tối đa 25 MB và được lưu trên Cloudinary.
 
 Bảng `users` cần tồn tại trước khi gọi API đăng ký. Bảng `users` có foreign key tới bảng `roles`, vì vậy bảng `roles` và role tương ứng cũng phải tồn tại trước.
 

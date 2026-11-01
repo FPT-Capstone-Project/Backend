@@ -27,6 +27,7 @@ const options = {
       { name: 'Orders', description: 'Customer cultivation orders for packages, mushroom types, and tray quantities' },
       { name: 'Cultivation Sessions', description: 'WF-03 cultivation preparation, monitoring, progress, incidents, and harvest readiness' },
       { name: 'Farm Spawn Workflow', description: 'Farm spawn handling and customer cultivation tracking' },
+      { name: 'Disease Management', description: 'WF-06 issue diagnosis, expert consultations, treatments, media, and customer timelines' },
       { name: 'Payments', description: 'PayOS checkout payments for customer orders' },
       { name: 'Notifications', description: 'Customer notifications linked to cultivation sessions' },
     ],
