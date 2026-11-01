@@ -46,6 +46,17 @@ function parseId(value, fieldName) {
   return parsed;
 }
 
+function parseTrayIds(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new AppError('trayIds must be a non-empty array', 400);
+  }
+  const trayIds = value.map((trayId, index) => parseId(trayId, `trayIds[${index}]`));
+  if (new Set(trayIds).size !== trayIds.length) {
+    throw new AppError('trayIds must not contain duplicates', 400);
+  }
+  return trayIds;
+}
+
 function parseStatus(value) {
   if (value === undefined || String(value).trim() === '') return undefined;
   const status = String(value).trim().toUpperCase();
@@ -161,8 +172,12 @@ async function getByIdForAdmin(sessionId) {
   return session;
 }
 
-async function getAvailableTraysForAdmin() {
-  return cultivationSessionModel.findAvailableTraysForAdmin();
+async function getAvailableTraysForAdmin(query = {}) {
+  const rawFloorId = query.floorId ?? query.floor_id;
+  const floorId = rawFloorId === undefined || rawFloorId === null || String(rawFloorId).trim() === ''
+    ? undefined
+    : parseId(rawFloorId, 'floorId');
+  return cultivationSessionModel.findAvailableTraysForAdmin(floorId);
 }
 
 async function getProgressForAdmin(sessionId) {
@@ -189,8 +204,14 @@ function parseGrowthStage(value, fieldName) {
   return stage;
 }
 
-async function assignTraysForAdmin(sessionId) {
-  return cultivationSessionModel.assignTraysForAdmin(parseId(sessionId, 'sessionId'));
+async function assignTraysForAdmin(sessionId, payload = {}) {
+  return cultivationSessionModel.assignTraysForAdmin(
+    parseId(sessionId, 'sessionId'),
+    {
+      floorId: parseId(payload.floorId ?? payload.floor_id, 'floorId'),
+      trayIds: parseTrayIds(payload.trayIds ?? payload.tray_ids),
+    },
+  );
 }
 
 async function activateForAdmin(sessionId) {

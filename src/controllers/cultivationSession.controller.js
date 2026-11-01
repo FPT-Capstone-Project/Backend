@@ -11,7 +11,7 @@ async function adminGetById(req, res) {
 }
 
 async function adminListAvailableTrays(req, res) {
-  const trays = await cultivationSessionService.getAvailableTraysForAdmin();
+  const trays = await cultivationSessionService.getAvailableTraysForAdmin(req.query || {});
   res.json({ data: trays });
 }
 
@@ -21,7 +21,10 @@ async function adminGetProgress(req, res) {
 }
 
 async function adminAssignTrays(req, res) {
-  const result = await cultivationSessionService.assignTraysForAdmin(req.params.sessionId);
+  const result = await cultivationSessionService.assignTraysForAdmin(
+    req.params.sessionId,
+    req.body || {},
+  );
   res.status(201).json({ message: 'Cultivation trays assigned successfully', data: result });
 }
 

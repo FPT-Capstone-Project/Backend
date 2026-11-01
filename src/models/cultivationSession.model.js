@@ -131,15 +131,23 @@ async function findByIdForAdmin(sessionId) {
   return result.rows[0] || null;
 }
 
-async function findAvailableTraysForAdmin() {
+async function findAvailableTraysForAdmin(floorId) {
+  const values = [];
+  let floorFilter = '';
+  if (floorId !== undefined) {
+    values.push(floorId);
+    floorFilter = `AND cf.floor_id = $${values.length}`;
+  }
   const result = await pool.query(
     `SELECT t.tray_id, t.tray_code, t.tray_name, t.room_id, t.floor_id,
-            cr.room_name, cf.floor_name, cf.floor_number
+            t.status, cr.room_name, cf.floor_name, cf.floor_number
      FROM cultivation_trays t
      INNER JOIN cultivation_floors cf ON cf.floor_id = t.floor_id
      INNER JOIN cultivation_rooms cr ON cr.room_id = t.room_id
      WHERE ${assignableTrayWhere('cf')}
+       ${floorFilter}
      ORDER BY cr.room_name, cf.floor_number, t.tray_code, t.tray_id`,
+    values,
   );
   return result.rows;
 }
@@ -168,6 +176,17 @@ async function lockSession(client, sessionId) {
      WHERE s.session_id = $1
      FOR UPDATE OF s, o`,
     [sessionId],
+  );
+  return result.rows[0] || null;
+}
+
+async function lockFloor(client, floorId) {
+  const result = await client.query(
+    `SELECT floor_id, floor_name, status
+     FROM cultivation_floors
+     WHERE floor_id = $1
+     FOR UPDATE`,
+    [floorId],
   );
   return result.rows[0] || null;
 }
@@ -218,7 +237,7 @@ function assertProgressMovesForward(previous, stage, percent) {
   }
 }
 
-async function assignTraysForAdmin(sessionId) {
+async function assignTraysForAdmin(sessionId, data) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -232,6 +251,13 @@ async function assignTraysForAdmin(sessionId) {
     if (!Number.isSafeInteger(requiredTrayQuantity) || requiredTrayQuantity < 1) {
       throw new AppError('Cultivation session has an invalid required tray quantity', 409);
     }
+    if (data.trayIds.length !== requiredTrayQuantity) {
+      throw new AppError(
+        `Exactly ${requiredTrayQuantity} trays must be selected for this cultivation session`,
+        409,
+        'INVALID_TRAY_QUANTITY',
+      );
+    }
     const activeAssignments = await client.query(
       `SELECT session_tray_id, tray_id
        FROM cultivation_session_trays
@@ -243,45 +269,84 @@ async function assignTraysForAdmin(sessionId) {
       throw new AppError('Trays are already assigned to this cultivation session', 409, 'TRAYS_ALREADY_ASSIGNED');
     }
 
-    const availableTrays = await client.query(
-      `SELECT t.tray_id
-       FROM cultivation_trays t
-       INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
-       WHERE ${assignableTrayWhere()}
-       ORDER BY t.tray_id
-       LIMIT $1
-       FOR UPDATE OF t`,
-      [requiredTrayQuantity],
-    );
-    if (availableTrays.rows.length < requiredTrayQuantity) {
-      throw new AppError('Not enough available trays to start cultivation', 409, 'INSUFFICIENT_TRAYS');
+    const floor = await lockFloor(client, data.floorId);
+    if (!floor) throw new AppError('Cultivation floor not found', 404, 'FLOOR_NOT_FOUND');
+    if (floor.status !== 'ACTIVE') {
+      throw new AppError('Cultivation floor is not active', 409, 'FLOOR_NOT_ACTIVE');
     }
 
+    const selectedTrays = await client.query(
+      `SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status
+       FROM cultivation_trays t
+       WHERE t.tray_id = ANY($1::integer[])
+       ORDER BY t.tray_id
+       FOR UPDATE OF t`,
+      [data.trayIds],
+    );
+    if (selectedTrays.rows.length !== data.trayIds.length) {
+      throw new AppError('One or more selected cultivation trays were not found', 404, 'TRAY_NOT_FOUND');
+    }
+    if (selectedTrays.rows.some((tray) => Number(tray.floor_id) !== data.floorId)) {
+      throw new AppError('All selected trays must belong to the selected cultivation floor', 409, 'TRAY_FLOOR_MISMATCH');
+    }
+    if (selectedTrays.rows.some((tray) => tray.status !== 'AVAILABLE')) {
+      throw new AppError('One or more selected cultivation trays are unavailable', 409, 'TRAY_UNAVAILABLE');
+    }
+
+    const occupiedAssignments = await client.query(
+      `SELECT tray_id
+       FROM cultivation_session_trays
+       WHERE tray_id = ANY($1::integer[]) AND status = 'ACTIVE'
+       FOR UPDATE`,
+      [data.trayIds],
+    );
+    if (occupiedAssignments.rows.length > 0) {
+      throw new AppError('One or more selected cultivation trays are already assigned', 409, 'TRAY_UNAVAILABLE');
+    }
+
+    const occupied = await client.query(
+      `UPDATE cultivation_trays
+       SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
+       WHERE tray_id = ANY($1::integer[]) AND status = 'AVAILABLE'
+       RETURNING tray_id`,
+      [data.trayIds],
+    );
+    if (occupied.rows.length !== data.trayIds.length) {
+      throw new AppError('One or more selected cultivation trays are unavailable', 409, 'TRAY_UNAVAILABLE');
+    }
+
+    const traysById = new Map(selectedTrays.rows.map((tray) => [Number(tray.tray_id), tray]));
     const assignedTrays = [];
-    for (const tray of availableTrays.rows) {
-      const occupied = await client.query(
-        `UPDATE cultivation_trays
-         SET status = 'OCCUPIED', updated_at = CURRENT_TIMESTAMP
-         WHERE tray_id = $1 AND status = 'AVAILABLE'
-         RETURNING tray_id`,
-        [tray.tray_id],
-      );
-      if (!occupied.rows[0]) {
-        throw new AppError('A cultivation tray is no longer available', 409, 'INSUFFICIENT_TRAYS');
-      }
+    for (const trayId of data.trayIds) {
       const assignment = await client.query(
         `INSERT INTO cultivation_session_trays (session_id, tray_id, status)
          VALUES ($1, $2, 'ACTIVE')
          RETURNING session_tray_id, session_id, tray_id, status, assigned_at`,
-        [sessionId, tray.tray_id],
+        [sessionId, trayId],
       );
-      assignedTrays.push(assignment.rows[0]);
+      const tray = traysById.get(trayId);
+      assignedTrays.push({
+        ...assignment.rows[0],
+        tray_code: tray.tray_code,
+        tray_name: tray.tray_name,
+        floor_id: floor.floor_id,
+        floor_name: floor.floor_name,
+      });
     }
 
     await client.query('COMMIT');
-    return { sessionId, assignedTrays };
+    return {
+      session_id: sessionId,
+      floor: { floor_id: floor.floor_id, floor_name: floor.floor_name },
+      assigned_trays: assignedTrays,
+      required_trays: requiredTrayQuantity,
+      assigned_trays_count: assignedTrays.length,
+    };
   } catch (error) {
     await client.query('ROLLBACK');
+    if (error.code === '23505') {
+      throw new AppError('One or more selected cultivation trays are already assigned', 409, 'TRAY_UNAVAILABLE');
+    }
     throw error;
   } finally {
     client.release();

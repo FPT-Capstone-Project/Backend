@@ -17,7 +17,9 @@ test('session management allows operator inspections and restricts cancellation 
   let incidentCalls = 0;
   let incidentListCalls = 0;
   let availableTrayCalls = 0;
+  let availableFloorId;
   let progressHistoryCalls = 0;
+  let assignmentBody;
   const noop = (req, res) => res.sendStatus(204);
 
   require.cache[userModelPath] = {
@@ -31,6 +33,7 @@ test('session management allows operator inspections and restricts cancellation 
       adminGetById: noop,
       adminListAvailableTrays: (req, res) => {
         availableTrayCalls += 1;
+        availableFloorId = req.query.floorId;
         res.sendStatus(204);
       },
       adminGetProgress: (req, res) => {
@@ -45,6 +48,7 @@ test('session management allows operator inspections and restricts cancellation 
       adminAddInspectionImage: noop,
       adminAssignTrays: (req, res) => {
         assignmentCalls += 1;
+        assignmentBody = req.body;
         res.sendStatus(204);
       },
       adminActivate: (req, res) => {
@@ -103,11 +107,12 @@ test('session management allows operator inspections and restricts cancellation 
     assert.equal(inspectionCalls, 1);
 
     const availableTraysResponse = await fetch(
-      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/available-trays`,
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/available-trays?floorId=2`,
       { headers: { authorization: `Bearer ${operatorToken}` } },
     );
     assert.equal(availableTraysResponse.status, 204);
     assert.equal(availableTrayCalls, 1);
+    assert.equal(availableFloorId, '2');
 
     const progressHistoryResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/progress`,
@@ -118,10 +123,18 @@ test('session management allows operator inspections and restricts cancellation 
 
     const assignmentResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/trays`,
-      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operatorToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ floorId: 2, trayIds: [10, 11] }),
+      },
     );
     assert.equal(assignmentResponse.status, 204);
     assert.equal(assignmentCalls, 1);
+    assert.deepEqual(assignmentBody, { floorId: 2, trayIds: [10, 11] });
 
     const activationResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/activate`,

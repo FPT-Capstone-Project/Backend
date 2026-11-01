@@ -60,11 +60,33 @@ router.get('/admin', adminOrFarmOperator, cultivationSessionController.adminList
  *   get:
  *     tags: [Cultivation Sessions]
  *     summary: List trays currently assignable to a qualified cultivation session
- *     description: Returns AVAILABLE trays on ACTIVE floors with no active cultivation-session assignment. This is a read-only preview; POST tray assignment rechecks availability under row locks.
+ *     description: Returns AVAILABLE trays on ACTIVE floors with no active cultivation-session assignment. Optionally filter to a Farm Operator-selected floor. This is a read-only preview; POST tray assignment rechecks availability under row locks.
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: floorId
+ *         schema: { type: integer, minimum: 1 }
+ *         description: Optional active cultivation floor ID
  *     responses:
- *       200: { description: Active-floor trays available for assignment }
+ *       200:
+ *         description: Active-floor trays available for assignment
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       tray_id: { type: integer, example: 21 }
+ *                       tray_code: { type: string, example: F2-TRAY-01 }
+ *                       floor_id: { type: integer, example: 2 }
+ *                       floor_name: { type: string, example: Floor 2 }
+ *                       status: { type: string, example: AVAILABLE }
+ *       400: { description: Invalid floor ID }
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
  */
@@ -97,7 +119,8 @@ router.get('/admin/:sessionId', adminOrFarmOperator, cultivationSessionControlle
  * /api/cultivation-sessions/admin/{sessionId}/trays:
  *   post:
  *     tags: [Cultivation Sessions]
- *     summary: Assign all required active-floor trays to a qualified session
+ *     summary: Assign Farm Operator-selected trays on one floor to a qualified session
+ *     description: Farm Operator selects a cultivation floor and specific available trays for a session whose spawn passed WF-02 qualification. The backend validates and atomically assigns only the selected trays; this action does not activate cultivation.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -105,13 +128,55 @@ router.get('/admin/:sessionId', adminOrFarmOperator, cultivationSessionControlle
  *         name: sessionId
  *         required: true
  *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [floorId, trayIds]
+ *             properties:
+ *               floorId: { type: integer, minimum: 1, example: 2 }
+ *               trayIds:
+ *                 type: array
+ *                 minItems: 1
+ *                 uniqueItems: true
+ *                 items: { type: integer, minimum: 1 }
+ *                 example: [21, 22, 25]
  *     responses:
- *       201: { description: Required trays assigned without activating the session }
- *       400: { description: Invalid session ID }
+ *       201:
+ *         description: Selected trays assigned without activating the session
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string }
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     session_id: { type: integer, example: 9 }
+ *                     floor:
+ *                       type: object
+ *                       properties:
+ *                         floor_id: { type: integer, example: 2 }
+ *                         floor_name: { type: string, example: Floor 2 }
+ *                     required_trays: { type: integer, example: 3 }
+ *                     assigned_trays_count: { type: integer, example: 3 }
+ *                     assigned_trays:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           session_tray_id: { type: integer, example: 31 }
+ *                           tray_id: { type: integer, example: 21 }
+ *                           tray_code: { type: string, example: F2-TRAY-01 }
+ *                           status: { type: string, example: ACTIVE }
+ *       400: { description: Invalid session ID, floor ID, or selected tray IDs }
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
- *       404: { description: Session not found }
- *       409: { description: "Invalid session status, existing assignment, or insufficient trays" }
+ *       404: { description: Session, floor, or selected tray not found }
+ *       409: { description: Invalid session status, incorrect tray count, wrong floor, unavailable tray, or existing assignment }
  */
 router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionController.adminAssignTrays);
 
