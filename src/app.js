@@ -22,17 +22,27 @@ app.use((req, res) => {
 });
 
 app.use((error, req, res, next) => {
-  const statusCode = error.statusCode || 500;
+  const isInvalidJson = error.type === 'entity.parse.failed';
+  const isEntityTooLarge = error.type === 'entity.too.large';
+  const statusCode = error.statusCode || (isInvalidJson ? 400 : isEntityTooLarge ? 413 : 500);
 
   if (error && error.name === 'MulterError') {
     return res.status(400).json({
-      message: error.code === 'LIMIT_FILE_SIZE' ? 'Image file size must be under 5MB' : error.message,
+      message: error.code === 'LIMIT_FILE_SIZE'
+        ? 'Uploaded file exceeds the allowed size'
+        : error.message,
     });
   }
 
   if (statusCode >= 500) console.error('Lỗi xử lý yêu cầu trên máy chủ:', error);
   const body = {
-    message: error.isOperational ? error.message : 'Internal server error',
+    message: isInvalidJson
+      ? 'Invalid JSON request body'
+      : isEntityTooLarge
+        ? 'Request body is too large'
+        : error.isOperational
+          ? error.message
+          : 'Internal server error',
   };
   if (error.isOperational && error.code) body.code = error.code;
   res.status(statusCode).json(body);
