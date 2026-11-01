@@ -1,8 +1,8 @@
 const cultivationSessionModel = require('../models/cultivationSession.model');
+const cloudinaryService = require('./cloudinary.service');
 const AppError = require('../utils/app-error');
 
 const SESSION_STATUSES = [
-  'PLANNED',
   'PENDING',
   'SPAWN_RESTING',
   'MYCELIAL_DEVELOPMENT',
@@ -12,6 +12,28 @@ const SESSION_STATUSES = [
   'COMPLETED',
   'CANCELLED',
 ];
+const GROWTH_STAGES = [
+  'FRUITING_INITIATION',
+  'PINNING',
+  'YOUNG_FRUITING',
+  'MATURATION',
+];
+const INCIDENT_TYPES = [
+  'NO_PINNING',
+  'SLOW_GROWTH',
+  'DRY_SHRIVELED',
+  'MUSHY',
+  'DEFORMED_GROWTH',
+  'CONTAMINATION',
+  'DISEASE',
+  'DAMAGE',
+  'SENSOR_DATA_LOSS',
+  'DEVICE_FAILURE',
+  'DELAYED_MATURATION',
+  'QUALITY_FAILURE',
+  'OTHER',
+];
+const INCIDENT_SEVERITIES = ['LOW', 'MEDIUM', 'HIGH'];
 const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -22,6 +44,17 @@ function parseId(value, fieldName) {
     throw new AppError(`${fieldName} must be a positive integer`, 400);
   }
   return parsed;
+}
+
+function parseTrayIds(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new AppError('trayIds must be a non-empty array', 400);
+  }
+  const trayIds = value.map((trayId, index) => parseId(trayId, `trayIds[${index}]`));
+  if (new Set(trayIds).size !== trayIds.length) {
+    throw new AppError('trayIds must not contain duplicates', 400);
+  }
+  return trayIds;
 }
 
 function parseStatus(value) {
@@ -139,11 +172,58 @@ async function getByIdForAdmin(sessionId) {
   return session;
 }
 
+async function getAvailableTraysForAdmin(query = {}) {
+  const rawFloorId = query.floorId ?? query.floor_id;
+  const floorId = rawFloorId === undefined || rawFloorId === null || String(rawFloorId).trim() === ''
+    ? undefined
+    : parseId(rawFloorId, 'floorId');
+  return cultivationSessionModel.findAvailableTraysForAdmin(floorId);
+}
+
+async function getProgressForAdmin(sessionId) {
+  const session = await getByIdForAdmin(sessionId);
+  const progressHistory = await cultivationSessionModel.findProgressForAdmin(session.session_id);
+  const latestProgress = progressHistory.at(-1) || null;
+  return {
+    session_id: session.session_id,
+    status: session.status,
+    harvest_status: session.harvest_status,
+    expected_harvest_date: session.harvest_date,
+    current_stage: latestProgress?.current_stage ?? null,
+    progress_percent: latestProgress?.progress_percent ?? null,
+    latest_progress: latestProgress,
+    progress_history: progressHistory,
+  };
+}
+
+function parseGrowthStage(value, fieldName) {
+  const stage = parseText(value, fieldName, { required: true, maxLength: 100 }).toUpperCase();
+  if (!GROWTH_STAGES.includes(stage)) {
+    throw new AppError(`${fieldName} must be one of: ${GROWTH_STAGES.join(', ')}`, 400);
+  }
+  return stage;
+}
+
+async function assignTraysForAdmin(sessionId, payload = {}) {
+  return cultivationSessionModel.assignTraysForAdmin(
+    parseId(sessionId, 'sessionId'),
+    {
+      floorId: parseId(payload.floorId ?? payload.floor_id, 'floorId'),
+      trayIds: parseTrayIds(payload.trayIds ?? payload.tray_ids),
+    },
+  );
+}
+
+async function activateForAdmin(sessionId) {
+  return cultivationSessionModel.activateForAdmin(parseId(sessionId, 'sessionId'));
+}
+
+async function markHarvestReadyForAdmin(sessionId) {
+  return cultivationSessionModel.markHarvestReadyForAdmin(parseId(sessionId, 'sessionId'));
+}
+
 async function createProgressForAdmin(sessionId, payload = {}) {
-  const currentStage = parseText(payload.currentStage ?? payload.current_stage, 'currentStage', {
-    required: true,
-    maxLength: 100,
-  }).toUpperCase();
+  const currentStage = parseGrowthStage(payload.currentStage ?? payload.current_stage, 'currentStage');
   const progressPercent = parseDecimal(
     payload.progressPercent ?? payload.progress_percent,
     'progressPercent',
@@ -157,10 +237,7 @@ async function createProgressForAdmin(sessionId, payload = {}) {
 }
 
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
-  const growthStage = parseText(payload.growthStage ?? payload.growth_stage, 'growthStage', {
-    required: true,
-    maxLength: 100,
-  }).toUpperCase();
+  const growthStage = parseGrowthStage(payload.growthStage ?? payload.growth_stage, 'growthStage');
   const growthProgress = parseDecimal(
     payload.growthProgress ?? payload.growth_progress,
     'growthProgress',
@@ -181,6 +258,60 @@ async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy
     },
     parseId(inspectedBy, 'inspectedBy'),
   );
+}
+
+async function addInspectionImageForAdmin(inspectionId, file, payload = {}) {
+  const id = parseId(inspectionId, 'inspectionId');
+  if (!file) throw new AppError('Image file is required', 400);
+  const inspection = await cultivationSessionModel.findInspectionForImage(id);
+  if (!inspection) throw new AppError('Cultivation inspection not found', 404);
+  const imageUrl = await cloudinaryService.uploadImage(file, 'cultivation-inspections');
+  return cultivationSessionModel.createInspectionImage(
+    id,
+    imageUrl,
+    parseText(payload.caption, 'caption', { maxLength: 500 }),
+  );
+}
+
+async function createIncidentForAdmin(sessionId, payload = {}, reportedBy) {
+  const incidentType = parseText(payload.incidentType ?? payload.incident_type, 'incidentType', {
+    required: true,
+    maxLength: 100,
+  }).toUpperCase();
+  if (!INCIDENT_TYPES.includes(incidentType)) {
+    throw new AppError(`incidentType must be one of: ${INCIDENT_TYPES.join(', ')}`, 400);
+  }
+  const severityValue = payload.severity === undefined
+    ? undefined
+    : parseText(payload.severity, 'severity', { required: true, maxLength: 20 }).toUpperCase();
+  if (severityValue !== undefined && !INCIDENT_SEVERITIES.includes(severityValue)) {
+    throw new AppError(`severity must be one of: ${INCIDENT_SEVERITIES.join(', ')}`, 400);
+  }
+  return cultivationSessionModel.createIncidentForAdmin(
+    parseId(sessionId, 'sessionId'),
+    {
+      sessionTrayId: parseId(payload.sessionTrayId ?? payload.session_tray_id, 'sessionTrayId'),
+      inspectionId: payload.inspectionId === undefined && payload.inspection_id === undefined
+        ? undefined
+        : parseId(payload.inspectionId ?? payload.inspection_id, 'inspectionId'),
+      incidentType,
+      title: payload.title === undefined
+        ? incidentType.replaceAll('_', ' ')
+        : parseText(payload.title, 'title', { required: true, maxLength: 255 }),
+      description: parseText(payload.description, 'description', { maxLength: 5000 }),
+      severity: severityValue,
+      actionTaken: parseText(payload.actionTaken ?? payload.action_taken, 'actionTaken', { maxLength: 5000 }),
+      nextAction: parseText(payload.nextAction ?? payload.next_action, 'nextAction', { maxLength: 5000 }),
+    },
+    parseId(reportedBy, 'reportedBy'),
+  );
+}
+
+async function listIncidentsForAdmin(sessionId) {
+  const id = parseId(sessionId, 'sessionId');
+  const session = await cultivationSessionModel.findByIdForAdmin(id);
+  if (!session) throw new AppError('Cultivation session not found', 404);
+  return cultivationSessionModel.findIncidentsForAdmin(id);
 }
 
 async function createHarvestForAdmin(sessionTrayId, payload = {}, harvestedBy) {
@@ -250,7 +381,7 @@ async function sendSessionNotification(sessionId, payload = {}, createdBy) {
   const recipient = await cultivationSessionModel.findSessionRecipient(id);
   if (!recipient) throw new AppError('Cultivation session not found', 404);
   if (![
-    'PLANNED', 'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
+    'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
     'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING',
   ].includes(recipient.status)) {
     throw new AppError('Cannot send notifications for a completed or cancelled session', 409);
@@ -271,8 +402,16 @@ async function sendSessionNotification(sessionId, payload = {}, createdBy) {
 module.exports = {
   getAllForAdmin,
   getByIdForAdmin,
+  getAvailableTraysForAdmin,
+  getProgressForAdmin,
+  assignTraysForAdmin,
+  activateForAdmin,
+  markHarvestReadyForAdmin,
   createProgressForAdmin,
   createInspectionForAdmin,
+  addInspectionImageForAdmin,
+  createIncidentForAdmin,
+  listIncidentsForAdmin,
   createHarvestForAdmin,
   completeForAdmin,
   cancelForAdmin,

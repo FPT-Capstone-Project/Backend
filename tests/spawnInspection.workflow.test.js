@@ -35,6 +35,7 @@ async function setupWorkflowDatabase() {
         'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING',
         'COMPLETED', 'CANCELLED'
       )),
+      harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY',
       start_at TIMESTAMP NOT NULL DEFAULT now(),
       harvest_date DATE,
       duration_days INTEGER,
@@ -149,7 +150,7 @@ function loadModel(db) {
   return require('../src/models/spawnInspection.model');
 }
 
-test('farm workflow records inspections, replaces stock, and assigns trays only when ready', async () => {
+test('farm workflow qualifies spawn without assigning trays or activating cultivation', async () => {
   const db = await setupWorkflowDatabase();
   try {
     const model = loadModel(db);
@@ -199,11 +200,8 @@ test('farm workflow records inspections, replaces stock, and assigns trays only 
       'SELECT current_stage FROM cultivation_progress ORDER BY progress_id',
     );
     assert.equal(session.rows[0].status, 'READY_FOR_CULTIVATION');
-    assert.deepEqual(trays.rows.map((row) => row.status), ['OCCUPIED', 'OCCUPIED']);
-    assert.equal(assignments.rows[0].count, 2);
-    assert.ok(new Date((await db.query(
-      'SELECT start_at FROM cultivation_sessions WHERE session_id = 1',
-    )).rows[0].start_at).getTime() >= Date.now() - 10_000);
+    assert.deepEqual(trays.rows.map((row) => row.status), ['AVAILABLE', 'AVAILABLE']);
+    assert.equal(assignments.rows[0].count, 0);
     assert.deepEqual(progress.rows.map((row) => row.current_stage), [
       'SPAWN_RESTING',
       'MYCELIAL_DEVELOPMENT',
@@ -214,6 +212,9 @@ test('farm workflow records inspections, replaces stock, and assigns trays only 
     const customerProgress = await model.findCustomerProgress(1, 2);
     const customerInspections = await model.findCustomerInspections(1, 2);
     assert.equal(customerSessions[0].status, 'READY_FOR_CULTIVATION');
+    assert.equal(customerSessions[0].harvest_status, 'NOT_READY');
+    assert.equal(customerSessions[0].current_stage, 'READY_FOR_CULTIVATION');
+    assert.deepEqual(customerSessions[0].assigned_trays, []);
     assert.equal(customerSessions[0].spawn_quantity, 6);
     assert.equal(customerProgress.length, 3);
     assert.equal(customerInspections.length, 3);
@@ -236,30 +237,9 @@ test('farm workflow records inspections, replaces stock, and assigns trays only 
       () => model.findCustomerInspections(1, 99),
       { statusCode: 404 },
     );
-    const cultivating = await model.changeStage(1, 'CULTIVATING');
-    assert.equal(cultivating.status, 'CULTIVATING');
     await assert.rejects(
-      () => model.changeStage(1, 'HARVESTING'),
+      () => model.changeStage(1, 'CULTIVATING'),
       { statusCode: 409 },
-    );
-    await db.query(
-      `INSERT INTO cultivation_progress (session_id, current_stage, progress_percent)
-       VALUES (1, 'HARVEST', 100)`,
-    );
-    const harvesting = await model.changeStage(1, 'HARVESTING');
-    assert.equal(harvesting.status, 'HARVESTING');
-    assert.ok(new Date(harvesting.start_at).getTime() >= Date.now() - 10_000);
-    assert.deepEqual(
-      (await db.query('SELECT current_stage FROM cultivation_progress ORDER BY progress_id'))
-        .rows.map((row) => row.current_stage),
-      [
-        'SPAWN_RESTING',
-        'MYCELIAL_DEVELOPMENT',
-        'READY_FOR_CULTIVATION',
-        'CULTIVATING',
-        'HARVEST',
-        'HARVESTING',
-      ],
     );
   } finally {
     await db.close();

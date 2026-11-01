@@ -11,6 +11,15 @@ test('session management allows operator inspections and restricts cancellation 
   const routePath = require.resolve('../src/routes/cultivationSession.routes');
   let cancelCalls = 0;
   let inspectionCalls = 0;
+  let activationCalls = 0;
+  let assignmentCalls = 0;
+  let harvestReadyCalls = 0;
+  let incidentCalls = 0;
+  let incidentListCalls = 0;
+  let availableTrayCalls = 0;
+  let availableFloorId;
+  let progressHistoryCalls = 0;
+  let assignmentBody;
   const noop = (req, res) => res.sendStatus(204);
 
   require.cache[userModelPath] = {
@@ -22,9 +31,40 @@ test('session management allows operator inspections and restricts cancellation 
     exports: {
       adminList: noop,
       adminGetById: noop,
+      adminListAvailableTrays: (req, res) => {
+        availableTrayCalls += 1;
+        availableFloorId = req.query.floorId;
+        res.sendStatus(204);
+      },
+      adminGetProgress: (req, res) => {
+        progressHistoryCalls += 1;
+        res.sendStatus(204);
+      },
       adminCreateProgress: noop,
       adminCreateInspection: (req, res) => {
         inspectionCalls += 1;
+        res.sendStatus(204);
+      },
+      adminAddInspectionImage: noop,
+      adminAssignTrays: (req, res) => {
+        assignmentCalls += 1;
+        assignmentBody = req.body;
+        res.sendStatus(204);
+      },
+      adminActivate: (req, res) => {
+        activationCalls += 1;
+        res.sendStatus(204);
+      },
+      adminMarkHarvestReady: (req, res) => {
+        harvestReadyCalls += 1;
+        res.sendStatus(204);
+      },
+      adminCreateIncident: (req, res) => {
+        incidentCalls += 1;
+        res.sendStatus(204);
+      },
+      adminListIncidents: (req, res) => {
+        incidentListCalls += 1;
         res.sendStatus(204);
       },
       adminCreateHarvest: noop,
@@ -60,11 +100,69 @@ test('session management allows operator inspections and restricts cancellation 
           authorization: `Bearer ${operatorToken}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ growthStage: 'FRUITING', growthProgress: 60 }),
+        body: JSON.stringify({ growthStage: 'FRUITING_INITIATION', growthProgress: 60 }),
       },
     );
     assert.equal(inspectionResponse.status, 204);
     assert.equal(inspectionCalls, 1);
+
+    const availableTraysResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/available-trays?floorId=2`,
+      { headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(availableTraysResponse.status, 204);
+    assert.equal(availableTrayCalls, 1);
+    assert.equal(availableFloorId, '2');
+
+    const progressHistoryResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/progress`,
+      { headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(progressHistoryResponse.status, 204);
+    assert.equal(progressHistoryCalls, 1);
+
+    const assignmentResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/trays`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operatorToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ floorId: 2, trayIds: [10, 11] }),
+      },
+    );
+    assert.equal(assignmentResponse.status, 204);
+    assert.equal(assignmentCalls, 1);
+    assert.deepEqual(assignmentBody, { floorId: 2, trayIds: [10, 11] });
+
+    const activationResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/activate`,
+      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(activationResponse.status, 204);
+    assert.equal(activationCalls, 1);
+
+    const harvestReadyResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/harvest-ready`,
+      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(harvestReadyResponse.status, 204);
+    assert.equal(harvestReadyCalls, 1);
+
+    const incidentResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/incidents`,
+      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(incidentResponse.status, 204);
+    assert.equal(incidentCalls, 1);
+
+    const incidentListResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/incidents`,
+      { headers: { authorization: `Bearer ${operatorToken}` } },
+    );
+    assert.equal(incidentListResponse.status, 204);
+    assert.equal(incidentListCalls, 1);
 
     const operatorCancelResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/cancel`,
