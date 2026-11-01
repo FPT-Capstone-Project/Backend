@@ -1,7 +1,17 @@
 const cultivationSessionModel = require('../models/cultivationSession.model');
 const AppError = require('../utils/app-error');
 
-const SESSION_STATUSES = ['PLANNED', 'ACTIVE', 'COMPLETED', 'CANCELLED'];
+const SESSION_STATUSES = [
+  'PLANNED',
+  'PENDING',
+  'SPAWN_RESTING',
+  'MYCELIAL_DEVELOPMENT',
+  'READY_FOR_CULTIVATION',
+  'CULTIVATING',
+  'HARVESTING',
+  'COMPLETED',
+  'CANCELLED',
+];
 const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'];
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
@@ -239,7 +249,10 @@ async function sendSessionNotification(sessionId, payload = {}, createdBy) {
   const operatorId = parseId(createdBy, 'createdBy');
   const recipient = await cultivationSessionModel.findSessionRecipient(id);
   if (!recipient) throw new AppError('Cultivation session not found', 404);
-  if (!['PLANNED', 'ACTIVE'].includes(recipient.status)) {
+  if (![
+    'PLANNED', 'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
+    'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING',
+  ].includes(recipient.status)) {
     throw new AppError('Cannot send notifications for a completed or cancelled session', 409);
   }
   if (recipient.user_status !== 'ACTIVE') {

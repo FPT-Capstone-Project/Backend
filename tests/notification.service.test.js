@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 function loadService({
-  recipient = { session_id: 4, user_id: 8, status: 'ACTIVE', user_status: 'ACTIVE' },
+  recipient = { session_id: 4, user_id: 8, status: 'CULTIVATING', user_status: 'ACTIVE' },
   notification = { notification_id: 10 },
 } = {}) {
   const modelPath = require.resolve('../src/models/notification.model');
@@ -93,7 +93,7 @@ test('rejects missing, closed, and inactive session recipients', async () => {
     { statusCode: 409, message: 'Cannot send notifications for a completed or cancelled session' },
   );
   await assert.rejects(
-    () => loadService({ recipient: { user_id: 8, status: 'ACTIVE', user_status: 'BLOCKED' } })
+    () => loadService({ recipient: { user_id: 8, status: 'CULTIVATING', user_status: 'BLOCKED' } })
       .service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
     { statusCode: 409, message: 'Recipient account is not active' },
   );

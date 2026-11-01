@@ -193,9 +193,11 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
     const trays = await db.query("SELECT COUNT(*)::int AS count FROM cultivation_trays WHERE status = 'OCCUPIED'");
     const transactions = await db.query("SELECT transaction_type, quantity FROM inventory_transactions");
     const orderState = await db.query('SELECT status, payment_status FROM orders WHERE order_id = 1');
+    const sessionState = await db.query('SELECT status FROM cultivation_sessions WHERE order_item_id = 1');
     assert.equal(Number(inventory.rows[0].quantity), 4);
     assert.equal(reservation.rows[0].status, 'CONSUMED');
-    assert.equal(trays.rows[0].count, 2);
+    assert.equal(trays.rows[0].count, 0);
+    assert.equal(sessionState.rows[0].status, 'PENDING');
     assert.equal(transactions.rows[0].transaction_type, 'OUT');
     assert.equal(Number(transactions.rows[0].quantity), 6);
     assert.deepEqual(orderState.rows[0], { status: 'PROCESSING', payment_status: 'PAID' });

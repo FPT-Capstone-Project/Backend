@@ -91,6 +91,7 @@ function loadPaymentModel({
       }
       if (statement.startsWith('SELECT t.tray_id')) return { rows: state.trays };
       if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity)')) return { rows: [{ quantity: 0 }] };
+      if (statement.startsWith('SELECT COALESCE(SUM(oi.quantity)')) return { rows: [{ quantity: 0 }] };
       if (statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity)')) return { rows: [{ quantity: 0 }] };
       if (statement.startsWith('SELECT inventory_id, mushroom_type_id, quantity')) {
         return { rows: state.inventory ? [state.inventory] : [] };
@@ -110,7 +111,7 @@ function loadPaymentModel({
       if (statement.startsWith('INSERT INTO cultivation_sessions')) {
         state.sessionsCreated += 1;
         return {
-          rows: [{ session_id: 77, harvest_date: '2026-02-01', duration_days: 20, status: 'ACTIVE' }],
+          rows: [{ session_id: 77, harvest_date: '2026-02-01', duration_days: 20, status: 'PENDING' }],
         };
       }
       if (statement.startsWith('UPDATE spawn_inventory')) {
@@ -202,7 +203,7 @@ test('fulfills a paid order once, consumes spawn, and records the OUT transactio
   assert.equal(state.order.payment_status, 'PAID');
   assert.equal(state.order.status, 'PROCESSING');
   assert.equal(state.sessionsCreated, 1);
-  assert.equal(state.assignedTrayCount, 1);
+  assert.equal(state.assignedTrayCount, 0);
   assert.equal(state.inventory.quantity, 7);
   assert.equal(state.inventoryTransactions, 1);
   assert.equal(state.reservation.status, 'CONSUMED');
