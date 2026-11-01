@@ -150,11 +150,10 @@ async function changeFarmStage(sessionId, payload = {}) {
     'SPAWN_RESTING',
     'MYCELIAL_DEVELOPMENT',
     'READY_FOR_CULTIVATION',
-    'CULTIVATING',
     'HARVESTING',
   ].includes(nextStage)) {
     throw new AppError(
-      'stage must be SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, CULTIVATING, or HARVESTING',
+      'stage must be SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, or HARVESTING',
       400,
     );
   }

@@ -4,7 +4,6 @@ const { parsePagination } = require('../utils/pagination');
 
 const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSUE'];
 const NOTIFIABLE_SESSION_STATUSES = [
-  'PLANNED',
   'PENDING',
   'SPAWN_RESTING',
   'MYCELIAL_DEVELOPMENT',

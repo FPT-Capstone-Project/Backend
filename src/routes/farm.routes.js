@@ -165,7 +165,7 @@ router.post(
  * /api/farm/sessions/{id}/stage:
  *   patch:
  *     tags: [Farm Spawn Workflow]
- *     summary: Advance a session through spawn resting and mycelial development
+ *     summary: Advance spawn stages or explicitly hand off a harvest-ready session
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -184,10 +184,18 @@ router.post(
  *             properties:
  *               stage:
  *                 type: string
- *                 enum: [SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, CULTIVATING, HARVESTING]
+ *                 enum: [SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, HARVESTING]
  *     responses:
  *       200:
- *         description: Session advanced; trays are assigned when ready, cultivation dates begin at CULTIVATING
+ *         description: Spawn qualification advances to READY_FOR_CULTIVATION; HARVESTING requires harvest_status HARVEST_READY
+ *       400:
+ *         description: Invalid stage or session ID
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       403:
+ *         description: Admin or Farm Operator role required
+ *       404:
+ *         description: Session not found
  *       409:
  *         description: Stage transition requirements are not met
  */
