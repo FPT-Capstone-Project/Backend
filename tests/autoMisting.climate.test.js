@@ -8,6 +8,16 @@ const profiles=[
 ];
 const config=suggest(profiles).config;
 const now=Date.now();
+test('planned floor profiles accept only unique numeric IDs and running crops must be approved',()=>{
+ assert.deepEqual(validateConfig({...config,mushroom_type_ids:[1,2]}).mushroom_type_ids,[1,2]);
+ for(const ids of [[],[1,1],['1'],[0],null])
+  assert.throws(()=>validateConfig({...config,mushroom_type_ids:ids}));
+ const approved={...config,source_profiles:summarize(profiles).sourceProfiles};
+ assert.doesNotThrow(()=>assertCompatible(approved,[profiles[0]],true));
+ assert.throws(()=>assertCompatible(approved,[],true));
+ assert.throws(()=>assertCompatible(approved,[{...profiles[0],mushroom_type_id:3}],true));
+ assert.throws(()=>assertCompatible(approved,[{...profiles[0],humidity_max:94}],true));
+});
 const decision=(temperature,humidity,runtime={},extra={})=>decide({
  running:true,config,runtime,environment:{healthy:true,averageTemperature:temperature,averageHumidity:humidity},now,...extra,
 });

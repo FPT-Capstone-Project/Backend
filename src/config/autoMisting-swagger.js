@@ -4,6 +4,7 @@ const config={type:'object',additionalProperties:false,
  properties:Object.fromEntries(Object.entries(ranges).map(([k,[minimum,maximum]])=>[k,{type:k.startsWith('humidity_') || k==='max_sensor_spread_percent'?'number':'integer',minimum,maximum}]))};
 Object.assign(config.properties,{profile_name:{type:'string',maxLength:200,nullable:true},profile_approved:{type:'boolean',default:false}});
 Object.assign(config.properties,{
+ mushroom_type_ids:{type:'array',minItems:1,uniqueItems:true,items:{type:'integer',minimum:1,maximum:2147483647},description:'FLOOR only: approve crop types before assigning sessions. Server reads conditions and stores source_profiles. Must include all crops currently on the floor.'},
  config_source:{type:'string',enum:['LEGACY','FLOOR'],default:'LEGACY',description:'FLOOR derives crop types from assigned tray sessions; requires a reviewed named profile. LEGACY requires mushroom_type_id.'},
  cooling_enabled:{type:'boolean',default:false,description:'When true all temperature fields and cooling_humidity_limit are required.'},
  ...Object.fromEntries(Object.entries(coolingRanges).map(([k,[minimum,maximum]])=>[k,{type:'number',minimum,maximum}]))

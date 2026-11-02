@@ -54,7 +54,8 @@ function assertCompatible(c,profiles,checkSnapshot=false) {
  const result=summarize(profiles);
  if(result.issues.length)throw new AppError(result.issues.join('; '),409);
  if(checkSnapshot && (!Array.isArray(c.source_profiles)
-  || JSON.stringify(result.sourceProfiles)!==JSON.stringify(summarize(c.source_profiles).sourceProfiles)))
+  || result.sourceProfiles.some(p=>!summarize(c.source_profiles).sourceProfiles.some(approved=>
+   JSON.stringify(p)===JSON.stringify(approved)))))
   throw new AppError('Điều kiện trồng trọt của tầng đã thay đổi; hãy kiểm tra và lưu lại cấu hình tầng',409);
  const shared=result.common;
  if(c.humidity_min<shared.humidity_min || c.humidity_max>shared.humidity_max

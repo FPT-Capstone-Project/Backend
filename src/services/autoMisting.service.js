@@ -61,7 +61,10 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
  }
  async function env(id,c) {const f=await repo.floor(id);return {masterId:f.master_identifier,nodeId:f.node_address,thresholds:c,...aggregate(await repo.sensors(f),c,now())};}
  async function verifyProfile(id,c) {
-  if(c.config_source==='FLOOR')assertCompatible(c,(await repo.profiles(id)).profiles,true);
+  const cultivation=await repo.profiles(id);
+  if(c.config_source==='FLOOR')assertCompatible(c,cultivation.profiles,true);
+  else if(cultivation.profiles.some(p=>Number(p.mushroom_type_id)!==Number(c.mushroom_type_id)))
+   throw new AppError('Loại nấm đang trồng không khớp cấu hình AUTO của tầng',409);
  }
  async function log(id,run,event,reason,details) {return repo.log(id,run,event,reason,details);}
  async function stopRecord(id,user,reason,status='STOPPED') {
@@ -139,9 +142,18 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     c.source_profiles=null;
     if(c.config_source==='FLOOR') {
      if(!c.profile_approved || !c.profile_name)throw new AppError('Kiểm tra, đặt tên và phê duyệt cấu hình tầng trước khi lưu',409);
-     c.source_profiles=assertCompatible(c,(await repo.profiles(id)).profiles);
+     const active=(await repo.profiles(id)).profiles;
+     let profiles=active;
+     if(c.mushroom_type_ids) {
+      profiles=await repo.plannedProfiles(c.mushroom_type_ids);
+      if(profiles.length!==c.mushroom_type_ids.length)throw new AppError('Không tìm thấy loại nấm đã chọn',404);
+      if(active.some(p=>!c.mushroom_type_ids.includes(Number(p.mushroom_type_id))))
+       throw new AppError('Cấu hình phải bao gồm tất cả loại nấm đang trồng trên tầng',409);
+     }
+     c.source_profiles=assertCompatible(c,profiles);
      c.mushroom_type_id=null;
     }
+    delete c.mushroom_type_ids;
     return repo.transaction(async()=>{const config=await repo.saveConfig(id,c,user);await log(id,null,'CONFIG_SAVED','Đã lưu cấu hình; vẫn duy trì chế độ thủ công (MANUAL)');return {config,mode:'MANUAL'};});
    });
   },
@@ -264,6 +276,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       if(!c.profile_approved || !c.profile_name)throw new AppError('Cần có cấu hình tầng đã đặt tên và được phê duyệt',409);
      } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Các khay có cấu hình khác nhau hoặc chưa được gán cần có cấu hình tầng đã đặt tên và được phê duyệt rõ ràng',409);
      const e=await env(id,c);if(!e.healthy)throw new AppError(e.reason,409);
+     await verifyProfile(id,c);
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Chưa cho phép điều khiển tự động thiết bị thực: cần xác minh bộ giám sát an toàn (watchdog) của thiết bị',409);
       if(!online(f))throw new AppError('MQTT hoặc bộ điều khiển trung tâm mất kết nối',503);
