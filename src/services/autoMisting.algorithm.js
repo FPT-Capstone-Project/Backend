@@ -15,10 +15,15 @@ const coolingRanges={
 function validateConfig(input = {}) {
  if(!input || typeof input!=='object' || Array.isArray(input))throw new AppError('Cấu hình không hợp lệ',400);
  const c = { sensor_max_age_ms: 20000, required_valid_sensors: 3, ...input };
- const allowed = [...Object.keys(ranges),...Object.keys(coolingRanges),'cooling_enabled','config_source','profile_name','profile_approved'];
+ const allowed = [...Object.keys(ranges),...Object.keys(coolingRanges),'cooling_enabled','config_source','profile_name','profile_approved','mushroom_type_ids'];
  if (Object.keys(c).some(k => !allowed.includes(k))) throw new AppError('Trường cấu hình không được hỗ trợ; hãy dùng chức năng khởi động để bật chế độ tự động (AUTO)',400);
  if(c.config_source!==undefined && !['LEGACY','FLOOR'].includes(c.config_source))throw new AppError('Nguồn cấu hình (config_source) không hợp lệ',400);
  if(c.config_source==='FLOOR' && c.mushroom_type_id!=null)throw new AppError('Cấu hình tầng xác định loại nấm từ các phiên trồng trong khay',400);
+ if(c.mushroom_type_ids!==undefined && (c.config_source!=='FLOOR'
+  || !Array.isArray(c.mushroom_type_ids) || !c.mushroom_type_ids.length
+  || c.mushroom_type_ids.some(id=>!Number.isInteger(id) || id<1 || id>2147483647)
+  || new Set(c.mushroom_type_ids).size!==c.mushroom_type_ids.length))
+  throw new AppError('mushroom_type_ids phải là danh sách ID loại nấm không trùng cho cấu hình FLOOR',400);
  for (const [key,[min,max]] of Object.entries(ranges)) {
   if(key==='mushroom_type_id' && c.config_source==='FLOOR')continue;
   if (typeof c[key] !== 'number' || !Number.isFinite(c[key]) || c[key]<min || c[key]>max

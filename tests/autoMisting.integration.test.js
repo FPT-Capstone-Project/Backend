@@ -324,6 +324,14 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
      INSERT INTO mushroom_types(name,growing_days,price) VALUES('Second mushroom',30,1);
      INSERT INTO mushroom_conditions(mushroom_type_id,temperature_min,temperature_max,humidity_min,humidity_max)
       VALUES(1,24,28,85,95),(2,25,29,88,96);
+    `);
+    const planned=require('../src/services/autoMisting.profile').suggest(await repo.plannedProfiles([1,2])).config;
+    await service.save(id,{...planned,profile_approved:true,mushroom_type_ids:[1,2]},1);
+    assert.equal((await repo.config(id)).source_profiles.length,2);
+    assert.equal((await repo.profiles(id)).profiles.length,0);
+    await assert.rejects(()=>service.start(id,{},1),/không có phiên trồng đang hoạt động/);
+    await assert.rejects(()=>service.save(id,{...planned,profile_approved:true,mushroom_type_ids:[999]},1),{statusCode:404});
+    await db.exec(`
      INSERT INTO rental_packages(package_name,duration_days,price) VALUES('Test package',30,1);
      INSERT INTO orders(user_id,status,payment_status) VALUES(1,'PROCESSING','PAID'),(1,'PROCESSING','PAID');
      INSERT INTO order_items(order_id,rental_package_id,mushroom_type_id,unit_price,total_price)
@@ -389,12 +397,25 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal((await repo.runtime(id)).control_state,'MISTING');
     await db.exec("UPDATE cultivation_sessions SET status='COMPLETED' WHERE session_id=2");
     await service.evaluate(id);
-    assert.equal((await repo.run(id)).status,'FAULT');
-    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+    assert.equal((await repo.run(id)).status,'RUNNING');
     assert.equal((await service.suggestions(id)).sourceProfiles.length,1);
     await db.exec("UPDATE cultivation_sessions SET status='CANCELLED' WHERE session_id=1");
+    await service.evaluate(id);
+    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
     assert.equal((await service.suggestions(id)).config,null);
     await assert.rejects(()=>service.start(id,{},1),/không có phiên trồng đang hoạt động/);
+    await db.exec("UPDATE cultivation_sessions SET status='CULTIVATING' WHERE session_id=1");
+    await service.save(id,{...config,profile_name:'Legacy approved',profile_approved:true},1);
+    await fresh();await service.start(id,{},1);await service.evaluate(id);
+    await db.exec("UPDATE cultivation_sessions SET status='CULTIVATING' WHERE session_id=2");
+    now+=config.evaluation_interval_ms;await fresh();
+    await service.evaluate(id);
+    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+    await assert.rejects(()=>service.start(id,{},1),/không khớp/);
+    await assert.rejects(()=>service.save(id,{...planned,profile_approved:true,mushroom_type_ids:[1]},1),
+     /bao gồm tất cả/);
   });
  }finally{
   for(const [key,value] of [['AUTO_MISTING_REAL_ENABLED',previousEnabled],['AUTO_MISTING_VERIFIED_WATCHDOGS',previousWatchdogs]])

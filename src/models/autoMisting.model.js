@@ -47,6 +47,9 @@ function createRepository(db = pool) {
    return f;
   },
   list:()=>rows('SELECT * FROM cultivation_floors ORDER BY room_id,floor_number'),
+  plannedProfiles:ids=>rows(`SELECT m.mushroom_type_id,c.temperature_min,c.temperature_max,c.humidity_min,c.humidity_max
+   FROM mushroom_types m LEFT JOIN mushroom_conditions c USING(mushroom_type_id)
+   WHERE m.mushroom_type_id=ANY($1::int[]) ORDER BY m.mushroom_type_id`,[ids]),
   config:id=>one('SELECT * FROM iot_auto_control_configs WHERE floor_id=$1',[id]),
   run:id=>one("SELECT * FROM iot_auto_control_runs WHERE floor_id=$1 ORDER BY id DESC LIMIT 1",[id]),
   runtime:async id=>(await one('SELECT * FROM iot_auto_control_runtime WHERE floor_id=$1',[id])) || {floor_id:id,control_state:'DISABLED'},
