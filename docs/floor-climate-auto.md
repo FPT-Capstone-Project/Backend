@@ -28,15 +28,25 @@ Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
    `node_address`, `misting_ssr_channel`. Có thể gửi thêm `total_rows`, `total_columns`
    (1–32767 hoặc null). Khi sửa, bỏ qua trường kích thước sẽ giữ nguyên giá trị;
    không được thu nhỏ hơn các vị trí đã khai báo. Không suy ra kênh van từ số tầng.
-2. Gán các khay cùng phòng bằng `PUT /api/iot/floors/:floorId/trays/:trayId`.
+2. Sinh khay theo lưới tầng qua `POST /api/iot/floors/:floorId/trays/generate`.
+   Hoặc gán các khay cùng phòng bằng `PUT /api/iot/floors/:floorId/trays/:trayId`.
    Body tùy chọn `{"position_id":123}` chọn vị trí đã khai báo trong `tray_positions`;
    vị trí phải ACTIVE, còn trống, thuộc tầng/phòng và nằm trong kích thước tầng.
    `{"position_id":null}` gỡ vị trí nhưng giữ tầng; bỏ body/field giữ nguyên vị trí.
    Dừng AUTO và hoàn tất xác nhận OFF trước khi gán.
-3. Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm, gói và số khay.
-   Sau khi PayOS xác nhận thanh toán, backend tạo session ACTIVE theo order item,
-   gắn từng khay qua `cultivation_session_trays`, và chuyển khay sang OCCUPIED.
-   Farm Operator không cần tạo session hoặc chọn lại loại nấm thủ công.
+3. Trước khi nhận đơn, lưu cấu hình FLOOR đã duyệt với `mushroom_type_ids`, ví dụ
+   `[1,2]`, cùng các ngưỡng và tên profile. Backend đọc `mushroom_conditions`,
+   kiểm tra khoảng chung rồi lưu snapshot vào `source_profiles`; frontend không
+   gửi snapshot. Trường này chỉ dùng lúc lưu, không cần migration mới.
+   Nếu đã có phiên trên tầng, danh sách phải bao gồm mọi loại nấm đang trồng.
+   Khi chưa có phiên, API suggestions vẫn không có gợi ý; form cấu hình dùng
+   điều kiện của các loại nấm đã chọn để điền ngưỡng.
+   Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm, gói và số khay.
+   Thanh toán không tự gán khay. Sau quy trình chuẩn bị, phiên phải ở trạng thái
+   `READY_FOR_CULTIVATION`; Farm Operator chọn tầng và đúng số khay của đơn.
+   Khay phải AVAILABLE, có vị trí ACTIVE đúng tầng/phòng, chưa có liên kết ACTIVE.
+   Gán thành công tạo `cultivation_session_trays`, đổi khay thành OCCUPIED và
+   chuyển phiên sang CULTIVATING trong cùng transaction.
 4. Gọi `GET /api/iot/floors/:floorId/auto-control/suggestions`.
 5. Hiển thị `common`, `sourceProfiles`, `warnings`. Nếu `config=null`,
    hiển thị `issues` và chưa cho lưu gợi ý. Nếu có config, dùng nó để điền form.
@@ -60,14 +70,20 @@ Không tự đổi ngưỡng hoặc tự Start khi người dùng chọn loại 
 
 ## Dữ liệu chung và preset
 
-Nguồn là các loại nấm DISTINCT của phiên `ACTIVE` trên các khay có `floor_id`
+Nguồn đang trồng là các loại nấm DISTINCT của phiên `CULTIVATING`, `HARVEST_READY`,
+`HARVESTING` trên các khay có `floor_id`
 tương ứng thông qua liên kết ACTIVE trong `cultivation_session_trays`.
-Phiên PLANNED/COMPLETED/CANCELLED hoặc liên kết khay không khớp không tham gia.
+Các trạng thái phiên khác hoặc liên kết khay không khớp không tham gia.
 Khay OCCUPIED nhưng không có phiên hợp lệ không tự
 đóng góp loại nấm. Không có phiên hợp lệ thì không sinh cấu hình gợi ý.
 Thời hạn gói chỉ là kế hoạch; AUTO dùng trạng thái phiên và khay được gán để xác định
 đang trồng, không tự ngừng chăm sóc chỉ vì qua ngày dự kiến.
 Khay chưa gán ở nơi khác trong phòng không ảnh hưởng profile FLOOR.
+Khi Start và khi chạy, các loại nấm thực tế phải thuộc snapshot đã duyệt và có
+điều kiện không đổi. Một phần loại nấm đã duyệt có thể chưa được trồng hoặc đã
+kết thúc phiên; AUTO vẫn dùng ngưỡng đã lưu cho các phiên còn lại. Hết phiên
+trên tầng thì FLOOR dừng. LEGACY cũng kiểm tra loại nấm thực tế trước Start và
+trong khi chạy, không cho profile đã duyệt bỏ qua loại nấm không khớp.
 
 Nguồn ngưỡng là min/max nhiệt độ và độ ẩm trong `mushroom_conditions`.
 `cultivation_protocol_steps.target_temperature/target_humidity` không thay thế ngưỡng AUTO;
