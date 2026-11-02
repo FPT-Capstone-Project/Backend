@@ -19,7 +19,7 @@ const farmOperator = [authenticate, authorizeRoles(1, 2)];
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, CULTIVATING, HARVESTING, COMPLETED, CANCELLED]
+ *           enum: [PENDING, SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, CULTIVATING, HARVEST_READY, HARVESTING, COMPLETED, CANCELLED]
  *     responses:
  *       200:
  *         description: Sessions with spawn and tray quantities
@@ -165,7 +165,8 @@ router.post(
  * /api/farm/sessions/{id}/stage:
  *   patch:
  *     tags: [Farm Spawn Workflow]
- *     summary: Advance spawn stages or explicitly hand off a harvest-ready session
+ *     summary: Start the combined resting/incubation phase or mark spawn ready for cultivation
+ *     description: Resting and mycelial development happen together. From PENDING choose SPAWN_RESTING or MYCELIAL_DEVELOPMENT (existing equivalent phase values). Either can move directly to READY_FOR_CULTIVATION after the latest spawn inspection is NORMAL and covers all spawn units. Payment and stock issuance are required. No sequential resting-to-incubation transition is needed.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -184,10 +185,10 @@ router.post(
  *             properties:
  *               stage:
  *                 type: string
- *                 enum: [SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, HARVESTING]
+ *                 enum: [SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION]
  *     responses:
  *       200:
- *         description: Spawn qualification advances to READY_FOR_CULTIVATION; HARVESTING requires harvest_status HARVEST_READY
+ *         description: Spawn phase updated successfully
  *       400:
  *         description: Invalid stage or session ID
  *       401:

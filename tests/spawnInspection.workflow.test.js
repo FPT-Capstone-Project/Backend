@@ -182,16 +182,6 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
       abnormalQuantity: 0,
       condition: 'NORMAL',
     });
-    await model.changeStage(1, 'MYCELIAL_DEVELOPMENT');
-    const mycelialInspection = await model.createInspection(1, 1, {
-      totalChecked: 6,
-      normalQuantity: 6,
-      warningQuantity: 0,
-      abnormalQuantity: 0,
-      condition: 'NORMAL',
-    });
-    assert.equal(mycelialInspection.stage, 'MYCELIAL_DEVELOPMENT');
-
     await model.changeStage(1, 'READY_FOR_CULTIVATION');
     const session = await db.query('SELECT status FROM cultivation_sessions WHERE session_id = 1');
     const trays = await db.query("SELECT status FROM cultivation_trays ORDER BY tray_id");
@@ -204,7 +194,6 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
     assert.equal(assignments.rows[0].count, 0);
     assert.deepEqual(progress.rows.map((row) => row.current_stage), [
       'SPAWN_RESTING',
-      'MYCELIAL_DEVELOPMENT',
       'READY_FOR_CULTIVATION',
     ]);
 
@@ -216,14 +205,14 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
     assert.equal(customerSessions[0].current_stage, 'READY_FOR_CULTIVATION');
     assert.deepEqual(customerSessions[0].assigned_trays, []);
     assert.equal(customerSessions[0].spawn_quantity, 6);
-    assert.equal(customerProgress.length, 3);
-    assert.equal(customerInspections.length, 3);
-    assert.deepEqual(customerInspections[2].images.map((image) => image.image_url), [
+    assert.equal(customerProgress.length, 2);
+    assert.equal(customerInspections.length, 2);
+    assert.deepEqual(customerInspections[1].images.map((image) => image.image_url), [
       'https://images.example.test/spawn.jpg',
     ]);
     assert.equal((await model.findCustomerSessions(1, 99, true)).length, 1);
-    assert.equal((await model.findCustomerProgress(1, 99, true)).length, 3);
-    assert.equal((await model.findCustomerInspections(1, 99, undefined, true)).length, 3);
+    assert.equal((await model.findCustomerProgress(1, 99, true)).length, 2);
+    assert.equal((await model.findCustomerInspections(1, 99, undefined, true)).length, 2);
     assert.equal((await model.findCustomerInspections(1, 99, 1, true)).length, 1);
     await assert.rejects(
       () => model.findCustomerSessions(1, 99),
@@ -246,7 +235,7 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
   }
 });
 
-test('FO cannot skip stages or proceed without a normal mycelial inspection', async () => {
+test('combined resting/incubation requires a complete NORMAL inspection before readiness', async () => {
   const db = await setupWorkflowDatabase();
   try {
     const model = loadModel(db);
@@ -254,19 +243,33 @@ test('FO cannot skip stages or proceed without a normal mycelial inspection', as
       () => model.changeStage(1, 'READY_FOR_CULTIVATION'),
       { statusCode: 409 },
     );
-    await model.changeStage(1, 'SPAWN_RESTING');
-    await model.createInspection(1, 1, {
-      totalChecked: 6,
-      normalQuantity: 6,
-      warningQuantity: 0,
-      abnormalQuantity: 0,
-      condition: 'NORMAL',
-    });
+    // Existing MYCELIAL_DEVELOPMENT value can also start the combined phase directly.
     await model.changeStage(1, 'MYCELIAL_DEVELOPMENT');
     await assert.rejects(
       () => model.changeStage(1, 'READY_FOR_CULTIVATION'),
       { statusCode: 409 },
     );
+    await model.createInspection(1, 1, {
+      totalChecked: 3,
+      normalQuantity: 3,
+      warningQuantity: 0,
+      abnormalQuantity: 0,
+      condition: 'NORMAL',
+    });
+    await assert.rejects(
+      () => model.changeStage(1, 'READY_FOR_CULTIVATION'),
+      { statusCode: 409 },
+    );
+    await model.createInspection(1, 1, {
+      totalChecked: 6, normalQuantity: 5, warningQuantity: 1,
+      abnormalQuantity: 0, condition: 'WARNING',
+    });
+    await assert.rejects(() => model.changeStage(1, 'READY_FOR_CULTIVATION'), { statusCode: 409 });
+    await model.createInspection(1, 1, {
+      totalChecked: 6, normalQuantity: 6, warningQuantity: 0,
+      abnormalQuantity: 0, condition: 'NORMAL',
+    });
+    assert.equal((await model.changeStage(1, 'READY_FOR_CULTIVATION')).status, 'READY_FOR_CULTIVATION');
   } finally {
     await db.close();
   }

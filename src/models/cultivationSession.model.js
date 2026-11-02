@@ -1,12 +1,6 @@
 const pool = require('../config/db');
 const AppError = require('../utils/app-error');
-
-const GROWTH_STAGES = [
-  'FRUITING_INITIATION',
-  'PINNING',
-  'YOUNG_FRUITING',
-  'MATURATION',
-];
+const { approvedMushroomConfigWhere } = require('./cultivationFloor.model');
 
 const sessionFrom = `
   FROM cultivation_sessions s
@@ -16,7 +10,7 @@ const sessionFrom = `
   INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
   LEFT JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
   LEFT JOIN LATERAL (
-    SELECT current_stage, progress_percent, updated_at
+    SELECT current_stage, progress_percent, condition, description, updated_at
     FROM cultivation_progress
     WHERE session_id = s.session_id
     ORDER BY progress_id DESC
@@ -32,6 +26,13 @@ const sessionFields = `
   oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
   s.start_at, s.end_at, s.duration_days, s.harvest_date, s.status, s.harvest_status,
   s.protocol_id, progress.current_stage, progress.progress_percent,
+  CASE WHEN progress.current_stage = 'MATURATION' THEN 'MATURE'
+       WHEN progress.current_stage = 'YOUNG_FRUITING' THEN 'NEAR_MATURE'
+       WHEN progress.current_stage = 'PINNING' THEN 'DEVELOPING'
+       WHEN progress.current_stage = 'FRUITING_INITIATION' THEN 'GROWING'
+       ELSE NULL END AS growth_status,
+  progress.condition, progress.description AS notes,
+  (s.status = 'HARVEST_READY' OR s.harvest_status = 'HARVEST_READY') AS harvest_ready,
   progress.updated_at AS progress_updated_at
 `;
 
@@ -92,6 +93,11 @@ function trayListQuery() {
 function assignableTrayWhere(floorAlias = 'f') {
   return `t.status = 'AVAILABLE'
     AND ${floorAlias}.status = 'ACTIVE'
+    AND t.room_id = ${floorAlias}.room_id
+    AND EXISTS (
+      SELECT 1 FROM tray_positions p WHERE p.position_id = t.position_id
+        AND p.floor_id = t.floor_id AND p.room_id = t.room_id AND p.status = 'ACTIVE'
+    )
     AND NOT EXISTS (
       SELECT 1
       FROM cultivation_session_trays st
@@ -140,10 +146,12 @@ async function findAvailableTraysForAdmin(floorId) {
   }
   const result = await pool.query(
     `SELECT t.tray_id, t.tray_code, t.tray_name, t.room_id, t.floor_id,
-            t.status, cr.room_name, cf.floor_name, cf.floor_number
+            t.status, cr.room_name, cf.floor_name, cf.floor_number,
+            t.position_id, p.row_number, p.column_number
      FROM cultivation_trays t
      INNER JOIN cultivation_floors cf ON cf.floor_id = t.floor_id
      INNER JOIN cultivation_rooms cr ON cr.room_id = t.room_id
+     INNER JOIN tray_positions p ON p.position_id = t.position_id
      WHERE ${assignableTrayWhere('cf')}
        ${floorFilter}
      ORDER BY cr.room_name, cf.floor_number, t.tray_code, t.tray_id`,
@@ -155,7 +163,7 @@ async function findAvailableTraysForAdmin(floorId) {
 async function findProgressForAdmin(sessionId) {
   const result = await pool.query(
     `SELECT progress_id, session_id, current_stage, progress_percent,
-            start_date, expected_harvest_date, description, updated_at
+            start_date, expected_harvest_date, condition, description, updated_at
      FROM cultivation_progress
      WHERE session_id = $1
      ORDER BY progress_id ASC`,
@@ -182,7 +190,7 @@ async function lockSession(client, sessionId) {
 
 async function lockFloor(client, floorId) {
   const result = await client.query(
-    `SELECT floor_id, floor_name, status
+    `SELECT floor_id, floor_name, status, room_id
      FROM cultivation_floors
      WHERE floor_id = $1
      FOR UPDATE`,
@@ -193,7 +201,7 @@ async function lockFloor(client, floorId) {
 
 async function lockLatestProgress(client, sessionId) {
   const result = await client.query(
-    `SELECT progress_id, current_stage, progress_percent
+    `SELECT progress_id, current_stage, progress_percent, condition
      FROM cultivation_progress
      WHERE session_id = $1
      ORDER BY progress_id DESC
@@ -202,39 +210,6 @@ async function lockLatestProgress(client, sessionId) {
     [sessionId],
   );
   return result.rows[0] || null;
-}
-
-function assertProgressMovesForward(previous, stage, percent) {
-  if (!GROWTH_STAGES.includes(stage)) {
-    throw new AppError(
-      `growthStage must be one of: ${GROWTH_STAGES.join(', ')}`,
-      409,
-      'INVALID_GROWTH_STAGE',
-    );
-  }
-  if (!previous) {
-    if (stage !== GROWTH_STAGES[0]) {
-      throw new AppError('Cultivation must begin at FRUITING_INITIATION', 409, 'INVALID_GROWTH_STAGE');
-    }
-    return;
-  }
-  if (Number(percent) < Number(previous.progress_percent)) {
-    throw new AppError('progressPercent cannot be lower than the latest progress', 409);
-  }
-  const previousIndex = GROWTH_STAGES.indexOf(previous.current_stage);
-  const nextIndex = GROWTH_STAGES.indexOf(stage);
-  if (previousIndex === -1) {
-    if (stage !== GROWTH_STAGES[0]) {
-      throw new AppError('Cultivation must begin at FRUITING_INITIATION', 409, 'INVALID_GROWTH_STAGE');
-    }
-    return;
-  }
-  if (nextIndex < previousIndex) {
-    throw new AppError('growthStage cannot be earlier than the latest stage', 409);
-  }
-  if (nextIndex > previousIndex + 1) {
-    throw new AppError('growthStage must advance one stage at a time', 409, 'INVALID_GROWTH_STAGE');
-  }
 }
 
 async function assignTraysForAdmin(sessionId, data) {
@@ -269,14 +244,24 @@ async function assignTraysForAdmin(sessionId, data) {
       throw new AppError('Trays are already assigned to this cultivation session', 409, 'TRAYS_ALREADY_ASSIGNED');
     }
 
-    const floor = await lockFloor(client, data.floorId);
+    const floorId = data.floorId;
+    const floor = await lockFloor(client, floorId);
     if (!floor) throw new AppError('Cultivation floor not found', 404, 'FLOOR_NOT_FOUND');
     if (floor.status !== 'ACTIVE') {
       throw new AppError('Cultivation floor is not active', 409, 'FLOOR_NOT_ACTIVE');
     }
+    const config = await client.query(
+      `SELECT c.id FROM iot_auto_control_configs c
+       WHERE c.floor_id = $1 AND ${approvedMushroomConfigWhere('c', '$2')}
+       FOR SHARE OF c`,
+      [floorId, session.mushroom_type_id],
+    );
+    if (!config.rows.length) {
+      throw new AppError('Selected floor has no approved profile for the session mushroom type', 409, 'FLOOR_MUSHROOM_MISMATCH');
+    }
 
     const selectedTrays = await client.query(
-      `SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status
+      `SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status, t.room_id, t.position_id
        FROM cultivation_trays t
        WHERE t.tray_id = ANY($1::integer[])
        ORDER BY t.tray_id
@@ -286,11 +271,27 @@ async function assignTraysForAdmin(sessionId, data) {
     if (selectedTrays.rows.length !== data.trayIds.length) {
       throw new AppError('One or more selected cultivation trays were not found', 404, 'TRAY_NOT_FOUND');
     }
-    if (selectedTrays.rows.some((tray) => Number(tray.floor_id) !== data.floorId)) {
+    if (selectedTrays.rows.some((tray) => Number(tray.floor_id) !== floorId)) {
       throw new AppError('All selected trays must belong to the selected cultivation floor', 409, 'TRAY_FLOOR_MISMATCH');
     }
     if (selectedTrays.rows.some((tray) => tray.status !== 'AVAILABLE')) {
       throw new AppError('One or more selected cultivation trays are unavailable', 409, 'TRAY_UNAVAILABLE');
+    }
+    const positions = await client.query(
+      `SELECT position_id, floor_id, room_id, status, row_number, column_number
+       FROM tray_positions WHERE position_id = ANY($1::integer[])
+       ORDER BY position_id FOR SHARE`,
+      [selectedTrays.rows.map(tray => tray.position_id).filter(id => id != null)],
+    );
+    const positionsById = new Map(positions.rows.map(position => [Number(position.position_id), position]));
+    if (selectedTrays.rows.some(tray => {
+      const position = positionsById.get(Number(tray.position_id));
+      return !position || position.status !== 'ACTIVE'
+        || Number(position.floor_id) !== floorId
+        || Number(position.room_id) !== Number(floor.room_id)
+        || Number(tray.room_id) !== Number(floor.room_id);
+    })) {
+      throw new AppError('Selected trays must have ACTIVE positions in the selected floor and room', 409, 'TRAY_POSITION_UNAVAILABLE');
     }
 
     const occupiedAssignments = await client.query(
@@ -334,9 +335,24 @@ async function assignTraysForAdmin(sessionId, data) {
       });
     }
 
+    const started = await client.query(
+      `UPDATE cultivation_sessions
+       SET status = 'CULTIVATING', start_at = CURRENT_TIMESTAMP,
+           harvest_date = CURRENT_DATE + duration_days, harvest_status = 'NOT_READY'
+       WHERE session_id = $1
+       RETURNING status, start_at, harvest_date, harvest_status`,
+      [sessionId],
+    );
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date, expected_harvest_date, description
+       ) VALUES ($1, 'FRUITING_INITIATION', 0, CURRENT_DATE, $2::date, 'Cultivation started after tray assignment')`,
+      [sessionId, started.rows[0].harvest_date],
+    );
     await client.query('COMMIT');
     return {
       session_id: sessionId,
+      ...started.rows[0],
       floor: { floor_id: floor.floor_id, floor_name: floor.floor_name },
       assigned_trays: assignedTrays,
       required_trays: requiredTrayQuantity,
@@ -353,112 +369,13 @@ async function assignTraysForAdmin(sessionId, data) {
   }
 }
 
-async function activateForAdmin(sessionId) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const session = await lockSession(client, sessionId);
-    if (!session) throw new AppError('Cultivation session not found', 404, 'SESSION_NOT_FOUND');
-    if (session.status !== 'READY_FOR_CULTIVATION') {
-      throw new AppError('Session must be ready for cultivation before activation', 409, 'INVALID_SESSION_STATUS');
-    }
-
-    const activeAssignments = await client.query(
-      `SELECT session_tray_id
-       FROM cultivation_session_trays
-       WHERE session_id = $1 AND status = 'ACTIVE'
-       FOR UPDATE`,
-      [sessionId],
-    );
-    if (activeAssignments.rows.length !== Number(session.tray_quantity)) {
-      throw new AppError('Required cultivation trays have not been assigned', 409, 'TRAYS_NOT_ASSIGNED');
-    }
-
-    const updated = await client.query(
-      `UPDATE cultivation_sessions
-       SET status = 'CULTIVATING',
-           start_at = CURRENT_TIMESTAMP,
-           harvest_date = CURRENT_DATE + duration_days,
-           harvest_status = 'NOT_READY'
-       WHERE session_id = $1
-       RETURNING session_id, status, start_at, harvest_date, harvest_status`,
-      [sessionId],
-    );
-    await client.query(
-      `INSERT INTO cultivation_progress (
-         session_id, current_stage, progress_percent, start_date,
-         expected_harvest_date, description
-       )
-       VALUES ($1, 'FRUITING_INITIATION', 0, CURRENT_DATE, $2::date, $3)`,
-      [sessionId, updated.rows[0].harvest_date, 'Cultivation activated'],
-    );
-
-    await client.query('COMMIT');
-    return updated.rows[0];
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function markHarvestReadyForAdmin(sessionId) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const session = await lockSession(client, sessionId);
-    if (!session) throw new AppError('Cultivation session not found', 404, 'SESSION_NOT_FOUND');
-    if (session.status !== 'CULTIVATING') {
-      throw new AppError('Only cultivating sessions can be marked harvest ready', 409, 'INVALID_SESSION_STATUS');
-    }
-    if (session.harvest_status === 'HARVEST_READY') {
-      throw new AppError('Cultivation session is already harvest ready', 409, 'ALREADY_HARVEST_READY');
-    }
-
-    const latest = await lockLatestProgress(client, sessionId);
-    if (!latest || latest.current_stage !== 'MATURATION') {
-      throw new AppError('Cultivation must reach MATURATION before harvest readiness', 409, 'HARVEST_NOT_READY');
-    }
-    const maturityInspection = await client.query(
-      `SELECT ci.inspection_id
-       FROM cultivation_inspections ci
-       INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
-       WHERE st.session_id = $1
-         AND st.status = 'ACTIVE'
-         AND ci.growth_stage = 'MATURATION'
-       ORDER BY ci.inspection_date DESC, ci.inspection_id DESC
-       LIMIT 1
-       FOR UPDATE OF ci`,
-      [sessionId],
-    );
-    if (!maturityInspection.rows[0]) {
-      throw new AppError('A MATURATION inspection is required before harvest readiness', 409, 'HARVEST_NOT_READY');
-    }
-    const updated = await client.query(
-      `UPDATE cultivation_sessions
-       SET harvest_status = 'HARVEST_READY'
-       WHERE session_id = $1
-       RETURNING session_id, status, harvest_status, start_at, harvest_date`,
-      [sessionId],
-    );
-    await client.query('COMMIT');
-    return updated.rows[0];
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 async function createIncidentForAdmin(sessionId, data, reportedBy) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const session = await lockSession(client, sessionId);
     if (!session) throw new AppError('Cultivation session not found', 404, 'SESSION_NOT_FOUND');
-    if (session.status !== 'CULTIVATING') {
+    if (!['CULTIVATING', 'HARVEST_READY'].includes(session.status)) {
       throw new AppError('Incidents can only be recorded for a cultivating session', 409, 'INVALID_SESSION_STATUS');
     }
 
@@ -549,36 +466,90 @@ async function createInspectionImage(inspectionId, imageUrl, caption) {
   return result.rows[0];
 }
 
-async function createProgressForAdmin(sessionId, data) {
+async function updateGrowthForAdmin(sessionId, data) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const session = await lockSession(client, sessionId);
     if (!session) throw new AppError('Cultivation session not found', 404);
     if (session.status !== 'CULTIVATING') {
-      throw new AppError('Only cultivating sessions can record progress', 409, 'INVALID_SESSION_STATUS');
+      throw new AppError('Only cultivating sessions can update growth', 409, 'INVALID_SESSION_STATUS');
     }
-
     const latest = await lockLatestProgress(client, sessionId);
-    assertProgressMovesForward(latest, data.currentStage, data.progressPercent);
+    if (latest && data.progressPercent < Number(latest.progress_percent)) {
+      throw new AppError('progressPercent cannot be lower than the latest progress', 409);
+    }
+    if (latest?.current_stage === 'MATURATION' && data.currentStage !== 'MATURATION') {
+      throw new AppError('Mature growth cannot move back to growing', 409);
+    }
     const result = await client.query(
       `INSERT INTO cultivation_progress (
          session_id, current_stage, progress_percent, start_date,
-         expected_harvest_date, description
-       )
-       VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6)
+         expected_harvest_date, condition, description
+       ) VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6, $7)
        RETURNING *`,
-      [
-        sessionId,
-        data.currentStage,
-        data.progressPercent,
-        session.start_at,
-        session.harvest_date,
-        data.description ?? null,
-      ],
+      [sessionId, data.currentStage, data.progressPercent, session.start_at,
+        session.harvest_date, data.condition, data.notes ?? null],
     );
     await client.query('COMMIT');
-    return result.rows[0];
+    return { ...result.rows[0], growth_status: { FRUITING_INITIATION: 'GROWING', PINNING: 'DEVELOPING',
+      YOUNG_FRUITING: 'NEAR_MATURE', MATURATION: 'MATURE' }[data.currentStage],
+      status: session.status, harvest_status: session.harvest_status, harvest_ready: false };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateHarvestReadinessForAdmin(sessionId, data) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const session = await lockSession(client, sessionId);
+    if (!session) throw new AppError('Cultivation session not found', 404);
+    if (session.status !== 'CULTIVATING') {
+      throw new AppError('Only cultivating sessions can confirm harvest readiness', 409, 'INVALID_SESSION_STATUS');
+    }
+    const assignments = await client.query(
+      `SELECT st.session_tray_id, t.status AS tray_status
+       FROM cultivation_session_trays st
+       INNER JOIN cultivation_trays t ON t.tray_id = st.tray_id
+       WHERE st.session_id = $1 AND st.status = 'ACTIVE'
+       FOR UPDATE OF st, t`,
+      [sessionId],
+    );
+    if (Number(session.tray_quantity) < 1 || assignments.rows.length !== Number(session.tray_quantity)
+      || assignments.rows.some(tray => tray.tray_status !== 'OCCUPIED')) {
+      throw new AppError('All required cultivation trays must be active and occupied', 409, 'TRAYS_NOT_ASSIGNED');
+    }
+    const latest = await lockLatestProgress(client, sessionId);
+    if (!latest || !['FRUITING_INITIATION', 'PINNING', 'YOUNG_FRUITING', 'MATURATION'].includes(latest.current_stage)
+      || !latest.condition?.trim()) {
+      throw new AppError('Record a valid growth condition before confirming readiness', 409, 'GROWTH_NOT_RECORDED');
+    }
+    // Maturity uses the existing MATURATION stage; percentage alone never confirms readiness.
+    if (data.harvestReady && latest.current_stage !== 'MATURATION') {
+      throw new AppError('Cultivation must reach MATURATION before harvest readiness', 409, 'HARVEST_NOT_READY');
+    }
+    const result = await client.query(
+      `UPDATE cultivation_sessions SET status = $2, harvest_status = $3
+       WHERE session_id = $1 RETURNING session_id, status, harvest_status, start_at, harvest_date`,
+      [sessionId, data.harvestReady ? 'HARVEST_READY' : 'CULTIVATING',
+        data.harvestReady ? 'HARVEST_READY' : 'NOT_READY'],
+    );
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date,
+         expected_harvest_date, condition, description
+       ) VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6, $7)`,
+      [sessionId, latest.current_stage, latest.progress_percent, session.start_at,
+        session.harvest_date, latest.condition,
+        data.notes ?? (data.harvestReady ? 'Harvest readiness confirmed' : 'Not ready for harvest')],
+    );
+    await client.query('COMMIT');
+    return { ...result.rows[0], harvest_ready: data.harvestReady };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -606,8 +577,6 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
       throw new AppError('Only active session trays can be inspected', 409);
     }
 
-    const latest = await lockLatestProgress(client, assignment.session_id);
-    assertProgressMovesForward(latest, data.growthStage, data.growthProgress);
     const inspectionResult = await client.query(
       `INSERT INTO cultivation_inspections (
          session_tray_id, inspected_by, growth_stage, tray_condition,
@@ -625,82 +594,10 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
         data.notes ?? null,
       ],
     );
-    const progressResult = await client.query(
-      `INSERT INTO cultivation_progress (
-         session_id, current_stage, progress_percent, start_date,
-         expected_harvest_date, description
-       )
-       VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6)
-       RETURNING *`,
-      [
-        assignment.session_id,
-        data.growthStage,
-        data.growthProgress,
-        assignment.start_at,
-        assignment.harvest_date,
-        data.notes ?? `Daily tray inspection ${inspectionResult.rows[0].inspection_id}`,
-      ],
-    );
-
     await client.query('COMMIT');
     return {
       inspection: inspectionResult.rows[0],
-      progress: progressResult.rows[0],
     };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function createHarvestForAdmin(sessionTrayId, data, harvestedBy) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const assignmentResult = await client.query(
-      `SELECT st.session_tray_id, st.session_id, st.status AS assignment_status,
-              s.status AS session_status, s.harvest_status
-       FROM cultivation_session_trays st
-       INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
-       WHERE st.session_tray_id = $1
-       FOR UPDATE OF st, s`,
-      [sessionTrayId],
-    );
-    const assignment = assignmentResult.rows[0];
-    if (!assignment) throw new AppError('Cultivation session tray not found', 404);
-    if (assignment.assignment_status !== 'ACTIVE'
-      || assignment.session_status !== 'HARVESTING'
-      || assignment.harvest_status !== 'HARVEST_READY') {
-      throw new AppError('Harvests can only be recorded for a harvesting session tray', 409);
-    }
-
-    const latest = await lockLatestProgress(client, assignment.session_id);
-    if (!latest || latest.current_stage !== 'MATURATION') {
-      throw new AppError('Cultivation progress must reach MATURATION before recording a harvest', 409);
-    }
-
-    const result = await client.query(
-      `INSERT INTO harvests (
-         session_tray_id, harvest_date, harvested_by, total_weight_kg,
-         usable_weight_kg, rejected_weight_kg, quality_grade, notes
-       )
-       VALUES ($1, COALESCE($2::date, CURRENT_DATE), $3, $4, $5, $6, $7, $8)
-       RETURNING *`,
-      [
-        sessionTrayId,
-        data.harvestDate ?? null,
-        harvestedBy,
-        data.totalWeightKg,
-        data.usableWeightKg,
-        data.rejectedWeightKg ?? 0,
-        data.qualityGrade ?? null,
-        data.notes ?? null,
-      ],
-    );
-    await client.query('COMMIT');
-    return result.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -761,7 +658,7 @@ async function completeForAdmin(sessionId, note) {
        )
          AND status IN (
           'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
-          'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING'
+          'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVEST_READY', 'HARVESTING'
          )`,
       [session.order_id],
     );
@@ -808,7 +705,7 @@ async function cancelForAdmin(sessionId, reason) {
     if (!session) throw new AppError('Cultivation session not found', 404);
     if (![
       'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
-      'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING',
+      'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVEST_READY', 'HARVESTING',
     ].includes(session.status)) {
       throw new AppError('Only unfinished cultivation sessions can be cancelled', 409);
     }
@@ -903,16 +800,13 @@ module.exports = {
   findAvailableTraysForAdmin,
   findProgressForAdmin,
   assignTraysForAdmin,
-  activateForAdmin,
-  markHarvestReadyForAdmin,
   createIncidentForAdmin,
   findIncidentsForAdmin,
   findInspectionForImage,
   createInspectionImage,
-  createProgressForAdmin,
+  updateGrowthForAdmin,
+  updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
-  createHarvestForAdmin,
-  completeForAdmin,
   cancelForAdmin,
   findSessionRecipient,
   createSessionNotification,

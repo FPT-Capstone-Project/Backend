@@ -9,6 +9,8 @@ const { manageAutomation } = require('../middlewares/autoMisting.middleware');
 router.get('/floors', auto.list);
 router.post('/floors', manageAutomation, auto.create);
 router.put('/floors/:floorId', manageAutomation, auto.map);
+router.post('/floors/:floorId/trays/generate', manageAutomation, auto.generateTrays);
+router.delete('/floors/:floorId/trays', manageAutomation, auto.deleteTrays);
 router.put('/floors/:floorId/trays/:trayId', manageAutomation, auto.tray);
 router.get('/floors/:floorId/environment', auto.environment);
 router.get('/floors/:floorId/auto-control', auto.configuration);

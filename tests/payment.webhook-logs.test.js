@@ -89,9 +89,8 @@ function loadPaymentModel({
       if (statement.startsWith('SELECT reservation_id, order_item_id, quantity, spawn_quantity')) {
         return { rows: [state.reservation] };
       }
-      if (statement.startsWith('SELECT t.tray_id')) return { rows: state.trays };
+      if (statement.startsWith('SELECT t.tray_id')) return { rows: state.trays.map(t => ({ ...t, floor_id: 1, compatible: true })) };
       if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity)')) return { rows: [{ quantity: 0 }] };
-      if (statement.startsWith('SELECT COALESCE(SUM(oi.quantity)')) return { rows: [{ quantity: 0 }] };
       if (statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity)')) return { rows: [{ quantity: 0 }] };
       if (statement.startsWith('SELECT inventory_id, mushroom_type_id, quantity')) {
         return { rows: state.inventory ? [state.inventory] : [] };

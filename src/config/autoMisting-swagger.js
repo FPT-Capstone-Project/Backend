@@ -50,6 +50,10 @@ function add(path,method,summary,schema,description='') {
 const base='/api/iot/floors',floor=base+'/{floorId}',auto=floor+'/auto-control';
 add(base,'get','List floor mappings');add(base,'post','Create floor mapping',mapping,'Master must already belong to this room. No inferred node/floor assignments.');
 add(floor,'put','Replace floor mapping',mapping,'Stop and resolve OFF first. Channels and nodes are unique per master.');
+add(floor+'/trays/generate','post','Generate trays from floor rows and columns',null,
+ 'No body required. Uses saved total_rows and total_columns (maximum 10000 trays). Coordinates start at 1. Creates ACTIVE positions and AVAILABLE trays with codes ROOM{roomId}-F{floorNumber}-R{row}-C{column}; the room prefix prevents conflicts between rooms. Existing trays are preserved; repeated calls fill missing positions only. Returns floor_id, total_rows, total_columns, created_count, total and trays ordered by row_number and column_number. Stop AUTO and resolve OFF first. Conflicting positions or trays without positions return 409. All writes are atomic.');
+add(floor+'/trays','delete','Delete all trays on a floor',null,
+ 'No body required. Returns floor_id and deleted_count. Keeps tray positions for reuse. Stop AUTO and resolve OFF first. Occupied trays or trays referenced by cultivation records return 409 and nothing is deleted. Requires iot.automation.manage permission.');
 add(floor+'/trays/{trayId}','put','Assign a same-room tray to a stopped floor',
  {type:'object',additionalProperties:false,properties:{position_id:{type:'integer',minimum:1,nullable:true}}},
  'Optional body: position_id selects an ACTIVE unoccupied position in this floor and room; null clears the position, omission preserves it. Stop AUTO before changing assignment.');

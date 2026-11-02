@@ -11,7 +11,7 @@ test('session management allows operator inspections and restricts cancellation 
   const routePath = require.resolve('../src/routes/cultivationSession.routes');
   let cancelCalls = 0;
   let inspectionCalls = 0;
-  let activationCalls = 0;
+  let progressCalls = 0;
   let assignmentCalls = 0;
   let harvestReadyCalls = 0;
   let incidentCalls = 0;
@@ -40,7 +40,7 @@ test('session management allows operator inspections and restricts cancellation 
         progressHistoryCalls += 1;
         res.sendStatus(204);
       },
-      adminCreateProgress: noop,
+      adminUpdateGrowth: (req, res) => { progressCalls += 1; res.sendStatus(204); },
       adminCreateInspection: (req, res) => {
         inspectionCalls += 1;
         res.sendStatus(204);
@@ -52,10 +52,10 @@ test('session management allows operator inspections and restricts cancellation 
         res.sendStatus(204);
       },
       adminActivate: (req, res) => {
-        activationCalls += 1;
+
         res.sendStatus(204);
       },
-      adminMarkHarvestReady: (req, res) => {
+      adminUpdateHarvestReadiness: (req, res) => {
         harvestReadyCalls += 1;
         res.sendStatus(204);
       },
@@ -67,8 +67,6 @@ test('session management allows operator inspections and restricts cancellation 
         incidentListCalls += 1;
         res.sendStatus(204);
       },
-      adminCreateHarvest: noop,
-      adminComplete: noop,
       adminCancel: (req, res) => {
         cancelCalls += 1;
         res.sendStatus(204);
@@ -136,19 +134,19 @@ test('session management allows operator inspections and restricts cancellation 
     assert.equal(assignmentCalls, 1);
     assert.deepEqual(assignmentBody, { floorId: 2, trayIds: [10, 11] });
 
-    const activationResponse = await fetch(
-      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/activate`,
-      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
-    );
-    assert.equal(activationResponse.status, 204);
-    assert.equal(activationCalls, 1);
-
-    const harvestReadyResponse = await fetch(
-      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/harvest-ready`,
-      { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } },
-    );
-    assert.equal(harvestReadyResponse.status, 204);
-    assert.equal(harvestReadyCalls, 1);
+    for (const [path, counter] of [['growth', () => progressCalls], ['harvest-readiness', () => harvestReadyCalls]]) {
+      const url = `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/${path}`;
+      assert.equal((await fetch(url, { method: 'PATCH' })).status, 401);
+      const customerToken = jwt.sign({ sub: '3' }, env.jwtSecret);
+      assert.equal((await fetch(url, { method: 'PATCH', headers: { authorization: `Bearer ${customerToken}` } })).status, 403);
+      assert.equal((await fetch(url, { method: 'PATCH', headers: { authorization: `Bearer ${operatorToken}` } })).status, 204);
+      assert.equal(counter(), 1);
+    }
+    for (const path of ['activate','progress','harvest-ready']) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/${path}`,
+        { method: 'POST', headers: { authorization: `Bearer ${operatorToken}` } });
+      assert.equal(response.status, 404);
+    }
 
     const incidentResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/incidents`,
@@ -193,11 +191,11 @@ test('session management allows operator inspections and restricts cancellation 
     assert.equal(adminCancelResponse.status, 204);
     assert.equal(cancelCalls, 1);
 
-    const unauthenticatedResponse = await fetch(
+    const removedHarvestCompletion = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/complete`,
       { method: 'POST' },
     );
-    assert.equal(unauthenticatedResponse.status, 401);
+    assert.equal(removedHarvestCompletion.status, 404);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

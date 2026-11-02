@@ -49,11 +49,22 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
       );
       CREATE TABLE cultivation_floors (
         floor_id SERIAL PRIMARY KEY,
+        room_id INTEGER NOT NULL DEFAULT 1,
         status VARCHAR NOT NULL
+      );
+      CREATE TABLE tray_positions (
+        position_id SERIAL PRIMARY KEY, floor_id INTEGER, room_id INTEGER,
+        status TEXT NOT NULL DEFAULT 'ACTIVE'
+      );
+      CREATE TABLE iot_auto_control_configs (
+        id SERIAL PRIMARY KEY, floor_id INTEGER, config_source TEXT,
+        mushroom_type_id INTEGER, profile_approved BOOLEAN, source_profiles JSONB
       );
       CREATE TABLE cultivation_trays (
         tray_id SERIAL PRIMARY KEY,
         floor_id INTEGER,
+        room_id INTEGER NOT NULL DEFAULT 1,
+        position_id INTEGER,
         status VARCHAR NOT NULL,
         updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
@@ -165,7 +176,10 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
       INSERT INTO mushroom_types (name, growing_days, price, status)
       VALUES ('Oyster', 12, 20, 'ACTIVE');
       INSERT INTO cultivation_floors (status) VALUES ('ACTIVE');
-      INSERT INTO cultivation_trays (floor_id, status) VALUES (1, 'AVAILABLE'), (1, 'AVAILABLE');
+      INSERT INTO tray_positions(floor_id,room_id) VALUES(1,1),(1,1);
+      INSERT INTO iot_auto_control_configs(floor_id,config_source,profile_approved,source_profiles)
+        VALUES(1,'FLOOR',true,'[{"mushroom_type_id":1}]');
+      INSERT INTO cultivation_trays (floor_id, position_id, status) VALUES (1, 1, 'AVAILABLE'), (1, 2, 'AVAILABLE');
       INSERT INTO spawn_inventory (mushroom_type_id, quantity) VALUES (1, 10);
     `);
 

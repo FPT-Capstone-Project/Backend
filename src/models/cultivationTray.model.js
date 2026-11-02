@@ -6,6 +6,9 @@ const trayColumns = `
   r.room_code,
   r.room_name,
   t.floor_id,
+  t.position_id,
+  p.row_number,
+  p.column_number,
   f.floor_number,
   f.floor_name,
   t.tray_code,
@@ -33,7 +36,8 @@ async function findAll({ roomId, floorId, status } = {}) {
   let query = `SELECT ${trayColumns}
     FROM cultivation_trays t
     INNER JOIN cultivation_rooms r ON r.room_id = t.room_id
-    LEFT JOIN cultivation_floors f ON f.floor_id = t.floor_id`;
+    LEFT JOIN cultivation_floors f ON f.floor_id = t.floor_id
+    LEFT JOIN tray_positions p ON p.position_id = t.position_id`;
   if (conditions.length > 0) query += ` WHERE ${conditions.join(' AND ')}`;
   query += ' ORDER BY t.created_at DESC';
   const result = await pool.query(query, params);
@@ -46,6 +50,7 @@ async function findById(trayId) {
      FROM cultivation_trays t
      INNER JOIN cultivation_rooms r ON r.room_id = t.room_id
      LEFT JOIN cultivation_floors f ON f.floor_id = t.floor_id
+     LEFT JOIN tray_positions p ON p.position_id = t.position_id
      WHERE t.tray_id = $1
      LIMIT 1`,
     [trayId],

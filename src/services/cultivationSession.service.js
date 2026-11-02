@@ -8,6 +8,7 @@ const SESSION_STATUSES = [
   'MYCELIAL_DEVELOPMENT',
   'READY_FOR_CULTIVATION',
   'CULTIVATING',
+  'HARVEST_READY',
   'HARVESTING',
   'COMPLETED',
   'CANCELLED',
@@ -96,21 +97,6 @@ function parseDecimal(value, fieldName, { min, max } = {}) {
   return parsed;
 }
 
-function parseDate(value, fieldName) {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new AppError(`${fieldName} must be a valid YYYY-MM-DD date`, 400);
-  }
-  const [year, month, day] = value.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (date.getUTCFullYear() !== year
-    || date.getUTCMonth() !== month - 1
-    || date.getUTCDate() !== day) {
-    throw new AppError(`${fieldName} must be a valid YYYY-MM-DD date`, 400);
-  }
-  return value;
-}
-
 function parsePagination(query = {}) {
   const page = query.page === undefined ? 1 : Number(query.page);
   const pageSize = query.pageSize === undefined ? DEFAULT_PAGE_SIZE : Number(query.pageSize);
@@ -189,6 +175,9 @@ async function getProgressForAdmin(sessionId) {
     status: session.status,
     harvest_status: session.harvest_status,
     expected_harvest_date: session.harvest_date,
+    growth_status: session.growth_status ?? null,
+    condition: latestProgress?.condition ?? null,
+    harvest_ready: session.harvest_ready ?? false,
     current_stage: latestProgress?.current_stage ?? null,
     progress_percent: latestProgress?.progress_percent ?? null,
     latest_progress: latestProgress,
@@ -214,26 +203,34 @@ async function assignTraysForAdmin(sessionId, payload = {}) {
   );
 }
 
-async function activateForAdmin(sessionId) {
-  return cultivationSessionModel.activateForAdmin(parseId(sessionId, 'sessionId'));
+async function updateGrowthForAdmin(sessionId, payload = {}) {
+  const progressPercent = parseDecimal(payload.progressPercent ?? payload.progress_percent,
+    'progressPercent', { min: 0, max: 100 });
+  const growthStatus = parseText(payload.growthStatus ?? payload.growth_status,
+    'growthStatus', { required: true, maxLength: 100 }).toUpperCase();
+  const stages = {
+    GROWING: 'FRUITING_INITIATION',
+    DEVELOPING: 'PINNING',
+    NEAR_MATURE: 'YOUNG_FRUITING',
+    MATURE: 'MATURATION',
+  };
+  const currentStage = Object.hasOwn(stages, growthStatus)
+    ? stages[growthStatus] : parseGrowthStage(growthStatus, 'growthStatus');
+  return cultivationSessionModel.updateGrowthForAdmin(parseId(sessionId, 'sessionId'), {
+    currentStage,
+    progressPercent,
+    condition: parseText(payload.condition, 'condition', { required: true, maxLength: 500 }),
+    notes: parseText(payload.notes, 'notes'),
+  });
 }
 
-async function markHarvestReadyForAdmin(sessionId) {
-  return cultivationSessionModel.markHarvestReadyForAdmin(parseId(sessionId, 'sessionId'));
-}
-
-async function createProgressForAdmin(sessionId, payload = {}) {
-  const currentStage = parseGrowthStage(payload.currentStage ?? payload.current_stage, 'currentStage');
-  const progressPercent = parseDecimal(
-    payload.progressPercent ?? payload.progress_percent,
-    'progressPercent',
-    { min: 0, max: 100 },
-  );
-  const description = parseText(payload.description, 'description');
-  return cultivationSessionModel.createProgressForAdmin(
-    parseId(sessionId, 'sessionId'),
-    { currentStage, progressPercent, description },
-  );
+async function updateHarvestReadinessForAdmin(sessionId, payload = {}) {
+  const harvestReady = payload.harvestReady ?? payload.harvest_ready;
+  if (typeof harvestReady !== 'boolean') throw new AppError('harvestReady must be a boolean', 400);
+  return cultivationSessionModel.updateHarvestReadinessForAdmin(parseId(sessionId, 'sessionId'), {
+    harvestReady,
+    notes: parseText(payload.notes, 'notes'),
+  });
 }
 
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
@@ -314,53 +311,6 @@ async function listIncidentsForAdmin(sessionId) {
   return cultivationSessionModel.findIncidentsForAdmin(id);
 }
 
-async function createHarvestForAdmin(sessionTrayId, payload = {}, harvestedBy) {
-  const totalWeightKg = parseDecimal(
-    payload.totalWeightKg ?? payload.total_weight_kg,
-    'totalWeightKg',
-    { min: 0 },
-  );
-  if (totalWeightKg === 0) {
-    throw new AppError('totalWeightKg must be greater than 0', 400);
-  }
-  const usableWeightKg = parseDecimal(
-    payload.usableWeightKg ?? payload.usable_weight_kg,
-    'usableWeightKg',
-    { min: 0, max: totalWeightKg },
-  );
-  const rejectedWeightKg = payload.rejectedWeightKg === undefined
-    && payload.rejected_weight_kg === undefined
-    ? 0
-    : parseDecimal(payload.rejectedWeightKg ?? payload.rejected_weight_kg, 'rejectedWeightKg', {
-      min: 0,
-      max: totalWeightKg,
-    });
-  if (usableWeightKg + rejectedWeightKg > totalWeightKg) {
-    throw new AppError('usableWeightKg and rejectedWeightKg cannot exceed totalWeightKg', 400);
-  }
-  const harvestDate = parseDate(payload.harvestDate ?? payload.harvest_date, 'harvestDate');
-  if (harvestDate && harvestDate > new Date().toISOString().slice(0, 10)) {
-    throw new AppError('harvestDate cannot be in the future', 400);
-  }
-  return cultivationSessionModel.createHarvestForAdmin(
-    parseId(sessionTrayId, 'sessionTrayId'),
-    {
-      totalWeightKg,
-      usableWeightKg,
-      rejectedWeightKg,
-      harvestDate,
-      qualityGrade: parseText(payload.qualityGrade ?? payload.quality_grade, 'qualityGrade', { maxLength: 20 }),
-      notes: parseText(payload.notes, 'notes'),
-    },
-    parseId(harvestedBy, 'harvestedBy'),
-  );
-}
-
-async function completeForAdmin(sessionId, payload = {}) {
-  const note = parseText(payload.note, 'note');
-  return cultivationSessionModel.completeForAdmin(parseId(sessionId, 'sessionId'), note);
-}
-
 async function cancelForAdmin(sessionId, payload = {}) {
   const reason = parseText(payload.reason, 'reason', { required: true, maxLength: 500 });
   if (reason.length < 3) throw new AppError('reason must be at least 3 characters', 400);
@@ -382,7 +332,7 @@ async function sendSessionNotification(sessionId, payload = {}, createdBy) {
   if (!recipient) throw new AppError('Cultivation session not found', 404);
   if (![
     'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
-    'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING',
+    'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVEST_READY', 'HARVESTING',
   ].includes(recipient.status)) {
     throw new AppError('Cannot send notifications for a completed or cancelled session', 409);
   }
@@ -405,15 +355,12 @@ module.exports = {
   getAvailableTraysForAdmin,
   getProgressForAdmin,
   assignTraysForAdmin,
-  activateForAdmin,
-  markHarvestReadyForAdmin,
-  createProgressForAdmin,
+  updateGrowthForAdmin,
+  updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
   addInspectionImageForAdmin,
   createIncidentForAdmin,
   listIncidentsForAdmin,
-  createHarvestForAdmin,
-  completeForAdmin,
   cancelForAdmin,
   sendSessionNotification,
 };

@@ -38,7 +38,7 @@ test('automation routes require JWT and a data-driven permission for every mutat
 });
 test('Swagger covers all floor APIs with JWT, validation and permission errors',()=>{
  const spec=require('../src/config/autoMisting-swagger');
- assert.equal(Object.keys(spec.paths).length,11);
+ assert.equal(Object.keys(spec.paths).length,13);
  for(const path of Object.values(spec.paths))for(const op of Object.values(path)){
   assert.deepEqual(op.security,[{bearerAuth:[]}]);for(const code of [400,401,403,409,503])assert.ok(op.responses[code]);
  }

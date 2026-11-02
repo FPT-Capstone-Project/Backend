@@ -106,12 +106,9 @@ function loadPaymentModel({
       if (statement.startsWith('SELECT oi.order_item_id, oi.quantity, oi.mushroom_type_id')) {
         return { rows: state.orderItems };
       }
-      if (statement.startsWith('SELECT t.tray_id')) return { rows: state.trays };
+      if (statement.startsWith('SELECT t.tray_id')) return { rows: state.trays.map(t => ({ ...t, floor_id: 1, compatible: true })) };
       if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity)')) {
         return { rows: [{ quantity: state.heldTrays }] };
-      }
-      if (statement.startsWith('SELECT COALESCE(SUM(oi.quantity)')) {
-        return { rows: [{ quantity: 0 }] };
       }
       if (statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity)')) {
         return { rows: [{ quantity: state.heldSpawn }] };

@@ -95,11 +95,18 @@ function loadWorkflowModel({
       if (statement.startsWith('SELECT session_tray_id FROM cultivation_session_trays')) {
         return { rows: activeAssignments };
       }
-      if (statement.startsWith('SELECT floor_id, floor_name, status FROM cultivation_floors')) {
-        return { rows: floor ? [floor] : [] };
+      if (statement.startsWith('SELECT floor_id, floor_name, status, room_id FROM cultivation_floors')) {
+        return { rows: floor ? [{ ...floor, room_id: 1 }] : [] };
+      }
+      if (statement.startsWith('SELECT c.id FROM iot_auto_control_configs')) return { rows: [{ id: 1 }] };
+      if (statement.startsWith('SELECT floor_id FROM cultivation_trays')) {
+        return { rows: selectedTrays.length ? [{ floor_id: selectedTrays[0].floor_id }] : [] };
+      }
+      if (statement.startsWith('SELECT position_id, floor_id, room_id')) {
+        return { rows: selectedTrays.map(t => ({ position_id: t.tray_id, floor_id: t.floor_id, room_id: 1, status: 'ACTIVE' })) };
       }
       if (statement.startsWith('SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status')) {
-        return { rows: selectedTrays };
+        return { rows: selectedTrays.map(t => ({ ...t, position_id: t.tray_id, room_id: 1 })) };
       }
       if (statement.startsWith('SELECT tray_id FROM cultivation_session_trays')) {
         return { rows: occupiedAssignments };
@@ -136,11 +143,11 @@ function loadWorkflowModel({
       if (statement.startsWith('SELECT ci.inspection_id')) {
         return { rows: maturityInspection ? [maturityInspection] : [] };
       }
-      if (statement.startsWith("UPDATE cultivation_sessions SET harvest_status = 'HARVEST_READY'")) {
+      if (statement.startsWith("UPDATE cultivation_sessions SET status = 'HARVEST_READY'")) {
         return {
           rows: [{
             session_id: 77,
-            status: 'CULTIVATING',
+            status: 'HARVEST_READY',
             harvest_status: 'HARVEST_READY',
           }],
         };
@@ -156,7 +163,7 @@ function loadWorkflowModel({
   return { model: require('../src/models/cultivationSession.model'), statements };
 }
 
-test('daily tray inspection records inspection and session progress transactionally', async () => {
+test('daily tray inspection records observations without updating session progress', async () => {
   const { model, statements } = loadInspectionModel();
   const result = await model.createInspectionForAdmin(14, {
     growthStage: 'PINNING',
@@ -169,10 +176,9 @@ test('daily tray inspection records inspection and session progress transactiona
   assert.equal(result.inspection.session_tray_id, 14);
   assert.equal(result.inspection.inspected_by, 3);
   assert.equal(result.inspection.growth_stage, 'PINNING');
-  assert.equal(result.progress.session_id, 77);
-  assert.equal(result.progress.progress_percent, 65);
+  assert.equal(result.progress, undefined);
   assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));
-  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_progress')));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_progress')));
   assert.equal(statements.at(-1).statement, 'COMMIT');
 });
 
@@ -190,7 +196,7 @@ test('allows the remaining forward cultivation growth-stage transitions', async 
       growthStage: nextStage,
       growthProgress: progress,
     }, 3);
-    assert.equal(result.progress.current_stage, nextStage);
+    assert.equal(result.inspection.growth_stage, nextStage);
   }
 });
 
@@ -215,25 +221,12 @@ test('does not record inspections for a released or completed tray assignment', 
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));
 });
 
-test('rejects a daily growth-stage regression', async () => {
-  const { model, statements } = loadInspectionModel({
-    latestProgress: { progress_id: 9, current_stage: 'MATURATION', progress_percent: '70' },
-  });
-  await assert.rejects(
-    () => model.createInspectionForAdmin(14, {
-      growthStage: 'PINNING',
-      growthProgress: 70,
-    }, 3),
-    { statusCode: 409, message: 'growthStage cannot be earlier than the latest stage' },
-  );
-  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
-});
-
 test('assigns only the Farm Operator selected trays on the selected floor transactionally', async () => {
   const { model, statements } = loadWorkflowModel();
   const result = await model.assignTraysForAdmin(77, { floorId: 2, trayIds: [10, 11] });
 
   assert.equal(result.session_id, 77);
+  assert.equal(result.status, 'CULTIVATING');
   assert.deepEqual(result.floor, { floor_id: 2, floor_name: 'Floor 2' });
   assert.equal(result.required_trays, 2);
   assert.equal(result.assigned_trays_count, 2);
@@ -320,56 +313,4 @@ test('rejects selected trays when the session is not ready for cultivation', asy
     { statusCode: 409, code: 'INVALID_SESSION_STATUS' },
   );
   assert.ok(!statements.some(({ statement }) => statement.startsWith('UPDATE cultivation_trays')));
-});
-
-test('activates only after all trays are assigned and creates FRUITING_INITIATION progress', async () => {
-  const { model, statements } = loadWorkflowModel({
-    activeAssignments: [{ session_tray_id: 1 }, { session_tray_id: 2 }],
-  });
-  const session = await model.activateForAdmin(77);
-
-  assert.equal(session.status, 'CULTIVATING');
-  assert.ok(statements.some(({ statement, values }) => statement.startsWith('INSERT INTO cultivation_progress')
-    && values[0] === 77 && values[2] === 'Cultivation activated'));
-
-  const missing = loadWorkflowModel({ activeAssignments: [{ session_tray_id: 1 }] });
-  await assert.rejects(
-    () => missing.model.activateForAdmin(77),
-    { statusCode: 409, code: 'TRAYS_NOT_ASSIGNED' },
-  );
-});
-
-test('marks only a mature, inspected cultivation session harvest ready without harvesting', async () => {
-  const { model, statements } = loadWorkflowModel({
-    session: {
-      session_id: 77,
-      status: 'CULTIVATING',
-      harvest_status: 'NOT_READY',
-      tray_quantity: 2,
-    },
-  });
-  const result = await model.markHarvestReadyForAdmin(77);
-  assert.deepEqual(result, {
-    session_id: 77,
-    status: 'CULTIVATING',
-    harvest_status: 'HARVEST_READY',
-  });
-  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO harvests')));
-
-  const premature = loadWorkflowModel({
-    session: { session_id: 77, status: 'CULTIVATING', harvest_status: 'NOT_READY', tray_quantity: 2 },
-    latestProgress: { progress_id: 9, current_stage: 'YOUNG_FRUITING', progress_percent: '80' },
-  });
-  await assert.rejects(
-    () => premature.model.markHarvestReadyForAdmin(77),
-    { statusCode: 409, code: 'HARVEST_NOT_READY' },
-  );
-
-  const repeated = loadWorkflowModel({
-    session: { session_id: 77, status: 'CULTIVATING', harvest_status: 'HARVEST_READY', tray_quantity: 2 },
-  });
-  await assert.rejects(
-    () => repeated.model.markHarvestReadyForAdmin(77),
-    { statusCode: 409, code: 'ALREADY_HARVEST_READY' },
-  );
 });

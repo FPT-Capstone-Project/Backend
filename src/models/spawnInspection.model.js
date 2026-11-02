@@ -23,7 +23,7 @@ async function findAllForFarm(status) {
   let filter = `WHERE o.payment_status = 'PAID'
     AND s.status IN (
       'PENDING', 'SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT',
-      'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVESTING'
+      'READY_FOR_CULTIVATION', 'CULTIVATING', 'HARVEST_READY', 'HARVESTING'
     )`;
   if (status) {
     values.push(status);
@@ -192,9 +192,8 @@ async function replaceAbnormalSpawn(inspectionId, quantity) {
     if (inspection.payment_status !== 'PAID') {
       throw new AppError('Only paid sessions can issue replacement spawn', 409);
     }
-    const matchingStage = inspection.stage === 'RESTING'
-      ? inspection.session_status === 'SPAWN_RESTING'
-      : inspection.session_status === 'MYCELIAL_DEVELOPMENT';
+    const matchingStage = ['RESTING', 'MYCELIAL_DEVELOPMENT'].includes(inspection.stage)
+      && ['SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT'].includes(inspection.session_status);
     if (!matchingStage) {
       throw new AppError('Replacement spawn can only be issued during the inspection stage', 409);
     }
@@ -276,13 +275,13 @@ async function changeStage(sessionId, nextStage) {
       throw new AppError('Only paid sessions can change stage', 409);
     }
 
+    // Resting and incubation are one phase; retain both existing DB values for compatibility.
     const transitions = {
-      PENDING: 'SPAWN_RESTING',
-      SPAWN_RESTING: 'MYCELIAL_DEVELOPMENT',
-      MYCELIAL_DEVELOPMENT: 'READY_FOR_CULTIVATION',
-      CULTIVATING: 'HARVESTING',
+      PENDING: ['SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT'],
+      SPAWN_RESTING: ['READY_FOR_CULTIVATION'],
+      MYCELIAL_DEVELOPMENT: ['READY_FOR_CULTIVATION'],
     };
-    if (transitions[session.status] !== nextStage) {
+    if (!transitions[session.status]?.includes(nextStage)) {
       throw new AppError(`Cannot change session from ${session.status} to ${nextStage}`, 409);
     }
 
@@ -299,26 +298,6 @@ async function changeStage(sessionId, nextStage) {
       }
     }
 
-    if (nextStage === 'MYCELIAL_DEVELOPMENT') {
-      const restingInspection = await client.query(
-        `SELECT condition
-         FROM spawn_inspections
-         WHERE session_id = $1 AND stage = 'RESTING'
-         ORDER BY inspected_at DESC, inspection_id DESC
-         LIMIT 1`,
-        [sessionId],
-      );
-      if (!restingInspection.rows[0] || restingInspection.rows[0].condition !== 'NORMAL') {
-        throw new AppError('A normal resting inspection is required before mycelial development', 409);
-      }
-    }
-
-    if (nextStage === 'HARVESTING') {
-      if (session.harvest_status !== 'HARVEST_READY') {
-        throw new AppError('Cultivation session must be harvest ready before entering harvesting', 409, 'HARVEST_NOT_READY');
-      }
-    }
-
     if (nextStage === 'READY_FOR_CULTIVATION') {
       const latestInspection = await client.query(
         `SELECT stage, condition, total_checked
@@ -329,7 +308,7 @@ async function changeStage(sessionId, nextStage) {
         [sessionId],
       );
       if (!latestInspection.rows[0]
-        || latestInspection.rows[0].stage !== 'MYCELIAL_DEVELOPMENT'
+        || !['RESTING', 'MYCELIAL_DEVELOPMENT'].includes(latestInspection.rows[0].stage)
         || latestInspection.rows[0].condition !== 'NORMAL'
         || Number(latestInspection.rows[0].total_checked) !== Number(session.spawn_quantity)) {
         throw new AppError('A normal inspection of all spawn units is required before cultivation', 409);
@@ -344,16 +323,14 @@ async function changeStage(sessionId, nextStage) {
        RETURNING session_id, status, harvest_status, start_at, harvest_date`,
       [sessionId, nextStage],
     );
-    if (nextStage !== 'HARVESTING') {
-      await client.query(
-        `INSERT INTO cultivation_progress (
-           session_id, current_stage, progress_percent, start_date,
-           expected_harvest_date, description
-         )
-         VALUES ($1, $2, 0, CURRENT_DATE, $3, $4)`,
-        [sessionId, nextStage, updated.rows[0].harvest_date, `Spawn stage changed to ${nextStage}`],
-      );
-    }
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date,
+         expected_harvest_date, description
+       )
+       VALUES ($1, $2, 0, CURRENT_DATE, $3, $4)`,
+      [sessionId, nextStage, updated.rows[0].harvest_date, `Spawn stage changed to ${nextStage}`],
+    );
     await client.query('COMMIT');
     return updated.rows[0];
   } catch (error) {

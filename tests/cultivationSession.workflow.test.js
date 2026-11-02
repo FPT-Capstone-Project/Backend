@@ -28,6 +28,7 @@ async function setupDatabase() {
     );
     CREATE TABLE cultivation_floors (
       floor_id SERIAL PRIMARY KEY,
+      room_id INTEGER NOT NULL DEFAULT 1,
       floor_number INTEGER NOT NULL DEFAULT 1,
       floor_name TEXT NOT NULL DEFAULT 'Floor 1',
       status TEXT NOT NULL
@@ -36,10 +37,19 @@ async function setupDatabase() {
       room_id SERIAL PRIMARY KEY,
       room_name TEXT NOT NULL
     );
+    CREATE TABLE tray_positions (
+      position_id INTEGER PRIMARY KEY, floor_id INTEGER, room_id INTEGER,
+      row_number INTEGER, column_number INTEGER, status TEXT DEFAULT 'ACTIVE'
+    );
+    CREATE TABLE iot_auto_control_configs (
+      id SERIAL PRIMARY KEY, floor_id INTEGER, config_source TEXT,
+      mushroom_type_id INTEGER, profile_approved BOOLEAN, source_profiles JSONB
+    );
     CREATE TABLE cultivation_trays (
       tray_id SERIAL PRIMARY KEY,
       room_id INTEGER NOT NULL,
       floor_id INTEGER NOT NULL,
+      position_id INTEGER,
       tray_code TEXT,
       tray_name TEXT,
       status TEXT NOT NULL,
@@ -108,23 +118,38 @@ async function setupDatabase() {
         (1, 1, 'F1-TRAY-03', 'AVAILABLE'),
         (1, 2, 'F2-TRAY-01', 'AVAILABLE'),
         (1, 3, 'F3-TRAY-01', 'AVAILABLE');
+    INSERT INTO tray_positions(position_id,floor_id,room_id,row_number,column_number)
+      SELECT tray_id,floor_id,room_id,1,tray_id FROM cultivation_trays;
+    UPDATE cultivation_trays SET position_id=tray_id;
+    INSERT INTO iot_auto_control_configs(floor_id,config_source,profile_approved,source_profiles)
+      SELECT floor_id,'FLOOR',true,'[{"mushroom_type_id":1}]'::jsonb FROM cultivation_floors;
+    CREATE UNIQUE INDEX uq_active_tray ON cultivation_session_trays(tray_id) WHERE status='ACTIVE';
     INSERT INTO cultivation_session_trays (session_id, tray_id, status)
       VALUES (999, 3, 'ACTIVE');
     INSERT INTO cultivation_sessions (
       order_item_id, mushroom_type_id, duration_days, status
     ) VALUES (2, 1, 20, 'SPAWN_RESTING');
   `);
+  await db.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '../migrations/018_wf03_growth_condition.sql'), 'utf8'));
   return db;
 }
 
 function loadModel(db) {
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/cultivationSession.model');
+  // PGlite has one connection. Queue transactions as a size-one PostgreSQL pool would.
+  let tail = Promise.resolve();
   const pool = {
-    connect: async () => ({
+    connect: async () => {
+      const previous = tail;
+      let release;
+      tail = new Promise(resolve => { release = resolve; });
+      await previous;
+      return {
       query: (query, values = []) => db.query(query, values),
-      release: () => {},
-    }),
+      release,
+      };
+    },
     query: (query, values = []) => db.query(query, values),
   };
   delete require.cache[dbPath];
@@ -136,6 +161,45 @@ function loadModel(db) {
 function isConflictOrInputError(error) {
   return [400, 404, 409].includes(error?.statusCode);
 }
+
+test('WF-03 rejects incompatible profiles and invalid positions atomically', async () => {
+  const db = await setupDatabase();
+  try {
+    const model = loadModel(db);
+    for (const change of [
+      "UPDATE iot_auto_control_configs SET profile_approved=false WHERE floor_id=1",
+      `UPDATE iot_auto_control_configs SET source_profiles='[{"mushroom_type_id":9}]' WHERE floor_id=1`,
+    ]) {
+      await db.exec(change);
+      await assert.rejects(() => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] }), { code: 'FLOOR_MUSHROOM_MISMATCH' });
+      await db.exec(`UPDATE iot_auto_control_configs SET profile_approved=true, source_profiles='[{"mushroom_type_id":1}]' WHERE floor_id=1`);
+    }
+    for (const change of [
+      'UPDATE cultivation_trays SET position_id=NULL WHERE tray_id=1',
+      "UPDATE tray_positions SET status='INACTIVE' WHERE position_id=1",
+      'UPDATE tray_positions SET room_id=2 WHERE position_id=1',
+      'UPDATE tray_positions SET floor_id=2 WHERE position_id=1',
+    ]) {
+      await db.exec(change);
+      await assert.rejects(() => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] }), { code: 'TRAY_POSITION_UNAVAILABLE' });
+      assert.equal((await model.findAvailableTraysForAdmin(1)).length, 1);
+      assert.equal((await db.query("SELECT count(*)::int AS n FROM cultivation_trays WHERE status='OCCUPIED'")).rows[0].n, 0);
+      await db.exec("UPDATE cultivation_trays SET position_id=1 WHERE tray_id=1; UPDATE tray_positions SET status='ACTIVE',room_id=1,floor_id=1 WHERE position_id=1");
+    }
+  } finally { await db.close(); }
+});
+
+test('WF-03 concurrent requests cannot assign the same trays twice with a single-session pool', async () => {
+  const db = await setupDatabase();
+  try {
+    await db.exec("UPDATE cultivation_sessions SET status='READY_FOR_CULTIVATION' WHERE session_id=2");
+    const model = loadModel(db);
+    const results = await Promise.allSettled([1,2].map(id => model.assignTraysForAdmin(id, { floorId: 1, trayIds: [1,2] })));
+    assert.equal(results.filter(result => result.status === 'fulfilled').length, 1);
+    assert.equal(results.find(result => result.status === 'rejected').reason.code, 'TRAY_UNAVAILABLE');
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM cultivation_session_trays WHERE tray_id IN (1,2) AND status='ACTIVE'")).rows[0].n, 2);
+  } finally { await db.close(); }
+});
 
 test('WF-03 assigns only Farm Operator selected trays, activates cultivation, records maturity, and ends harvest-ready', async () => {
   const db = await setupDatabase();
@@ -202,7 +266,7 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
       0,
     );
 
-    const activated = await model.activateForAdmin(1);
+    const activated = assignment;
     assert.equal(activated.status, 'CULTIVATING');
     assert.equal(activated.harvest_status, 'NOT_READY');
     assert.equal(
@@ -221,6 +285,7 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
         growthProgress,
         mushroomCondition: 'NORMAL',
       }, 1);
+      await model.updateGrowthForAdmin(1, { currentStage: growthStage, progressPercent: growthProgress, condition: 'NORMAL' });
     }
     const progressHistory = await model.findProgressForAdmin(1);
     assert.deepEqual(
@@ -228,15 +293,12 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
       ['FRUITING_INITIATION', 'PINNING', 'YOUNG_FRUITING', 'MATURATION'],
     );
     await assert.rejects(
-      () => model.createInspectionForAdmin(sessionTrayId, {
-        growthStage: 'PINNING',
-        growthProgress: 100,
-      }, 1),
-      { statusCode: 409, message: 'growthStage cannot be earlier than the latest stage' },
+      () => model.updateGrowthForAdmin(1, { currentStage: 'PINNING', progressPercent: 100, condition: 'NORMAL' }),
+      { statusCode: 409, message: 'Mature growth cannot move back to growing' },
     );
 
-    const harvestReady = await model.markHarvestReadyForAdmin(1);
-    assert.equal(harvestReady.status, 'CULTIVATING');
+    const harvestReady = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, notes: 'Ready after assessment' });
+    assert.equal(harvestReady.status, 'HARVEST_READY');
     assert.equal(harvestReady.harvest_status, 'HARVEST_READY');
     assert.equal((await db.query('SELECT COUNT(*)::int AS count FROM harvests')).rows[0].count, 0);
 
@@ -252,4 +314,64 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
   } finally {
     await db.close();
   }
+});
+
+test('growth history and separate readiness preserve lifecycle rules and atomicity', async () => {
+  const db = await setupDatabase();
+  try {
+    const model = loadModel(db);
+    const growing = { currentStage: 'YOUNG_FRUITING', progressPercent: 100, condition: 'NORMAL', notes: 'Growing' };
+    await assert.rejects(() => model.updateGrowthForAdmin(1, growing), { code: 'INVALID_SESSION_STATUS' });
+    await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: false }), { code: 'INVALID_SESSION_STATUS' });
+    const assignment = await model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] });
+    assert.equal(assignment.status, 'CULTIVATING');
+    await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: false }), { code: 'GROWTH_NOT_RECORDED' });
+    await model.updateGrowthForAdmin(1, growing);
+    assert.equal((await db.query('SELECT status FROM cultivation_sessions WHERE session_id=1')).rows[0].status, 'CULTIVATING');
+    await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: true }), { code: 'HARVEST_NOT_READY' });
+    const notReady = await model.updateHarvestReadinessForAdmin(1, { harvestReady: false, notes: 'Wait for size' });
+    assert.equal(notReady.status, 'CULTIVATING');
+    assert.equal(notReady.harvest_status, 'NOT_READY');
+    const history = await model.findProgressForAdmin(1);
+    assert.equal(history.at(-1).description, 'Wait for size');
+    assert.equal(history.at(-1).condition, 'NORMAL');
+    await assert.rejects(() => model.updateGrowthForAdmin(1, { ...growing, progressPercent: 99 }), { statusCode: 409 });
+    await model.updateGrowthForAdmin(1, { ...growing, currentStage: 'MATURATION', notes: 'Mature' });
+    const beforeInspection = (await model.findProgressForAdmin(1)).length;
+    await model.createInspectionForAdmin(assignment.assigned_trays[0].session_tray_id,
+      { growthStage: 'MATURATION', growthProgress: 100 }, 1);
+    assert.equal((await model.findProgressForAdmin(1)).length, beforeInspection);
+    for (const mutation of [
+      "UPDATE cultivation_session_trays SET status='RELEASED' WHERE tray_id=1",
+      "UPDATE cultivation_trays SET status='AVAILABLE' WHERE tray_id=1",
+    ]) {
+      await db.exec(mutation);
+      await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: true }), { code: 'TRAYS_NOT_ASSIGNED' });
+      assert.equal((await model.findProgressForAdmin(1)).length, beforeInspection);
+      await db.exec("UPDATE cultivation_session_trays SET status='ACTIVE' WHERE tray_id=1; UPDATE cultivation_trays SET status='OCCUPIED' WHERE tray_id=1");
+    }
+    const ready = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, notes: 'Quality confirmed' });
+    assert.equal(ready.status, 'HARVEST_READY');
+    assert.equal(ready.harvest_status, 'HARVEST_READY');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM harvests')).rows[0].n, 0);
+    assert.equal((await model.findProgressForAdmin(1)).at(-1).description, 'Quality confirmed');
+    for (const status of ['READY_FOR_CULTIVATION','HARVEST_READY','HARVESTING','COMPLETED','CANCELLED']) {
+      await db.query('UPDATE cultivation_sessions SET status=$1 WHERE session_id=1', [status]);
+      await assert.rejects(() => model.updateGrowthForAdmin(1, growing), { code: 'INVALID_SESSION_STATUS' });
+      await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: false }), { code: 'INVALID_SESSION_STATUS' });
+    }
+    await assert.rejects(() => model.updateGrowthForAdmin(999, growing), { statusCode: 404 });
+    await assert.rejects(() => model.updateHarvestReadinessForAdmin(999, { harvestReady: true }), { statusCode: 404 });
+  } finally { await db.close(); }
+});
+
+test('explicit floor is enforced and assignment failures leave lifecycle untouched', async () => {
+  const db = await setupDatabase();
+  try {
+    const model = loadModel(db);
+    await assert.rejects(() => model.assignTraysForAdmin(1, { floorId: 2, trayIds: [1,2] }), { code: 'TRAY_FLOOR_MISMATCH' });
+    assert.equal((await db.query('SELECT status FROM cultivation_sessions WHERE session_id=1')).rows[0].status, 'READY_FOR_CULTIVATION');
+    assert.equal((await model.findProgressForAdmin(1)).length, 0);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM cultivation_trays WHERE status='OCCUPIED'")).rows[0].n, 0);
+  } finally { await db.close(); }
 });
