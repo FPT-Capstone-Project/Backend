@@ -361,6 +361,7 @@ CREATE TABLE public.cultivation_progress (
   progress_id           SERIAL PRIMARY KEY,
   session_id            INTEGER NOT NULL,
   current_stage         VARCHAR NOT NULL,
+  condition             VARCHAR(500),
   progress_percent      NUMERIC NOT NULL DEFAULT 0
     CHECK (progress_percent >= 0 AND progress_percent <= 100),
   start_date            DATE,

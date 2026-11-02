@@ -21,6 +21,8 @@ rootRouter.use('/rental-packages', rentalPackageRoutes);
 rootRouter.use('/cultivation-rooms', cultivationRoomRoutes);
 rootRouter.use('/cultivation-trays', cultivationTrayRoutes);
 rootRouter.use('/orders', orderRoutes);
+rootRouter.use('/harvests', require('./harvest.routes'));
+rootRouter.use('/harvest-requests', require('./harvestRequest.routes'));
 rootRouter.use('/cultivation-sessions', cultivationSessionRoutes);
 rootRouter.use('/farm', require('./farm.routes'));
 rootRouter.use('/customer', require('./customerCultivation.routes'));

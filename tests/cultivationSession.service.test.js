@@ -12,15 +12,11 @@ function loadService() {
       calls.push(args);
       return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
     },
-    createHarvestForAdmin: async (...args) => {
-      calls.push(args);
-      return { harvest_id: 1 };
-    },
     assignTraysForAdmin: async (...args) => {
       calls.push(args);
       return {
         session_id: args[0],
-        floor: { floor_id: args[1].floorId, floor_name: 'Floor 2' },
+        floor: { floor_id: 2, floor_name: 'Floor 2' },
         assigned_trays: [{ session_tray_id: 1, tray_id: args[1].trayIds[0], status: 'ACTIVE' }],
         required_trays: args[1].trayIds.length,
         assigned_trays_count: args[1].trayIds.length,
@@ -38,13 +34,13 @@ function loadService() {
         progress_percent: 40,
       }];
     },
-    activateForAdmin: async (...args) => {
+    updateGrowthForAdmin: async (...args) => {
       calls.push(args);
       return { session_id: 1, status: 'CULTIVATING' };
     },
-    markHarvestReadyForAdmin: async (...args) => {
+    updateHarvestReadinessForAdmin: async (...args) => {
       calls.push(args);
-      return { session_id: 1, status: 'CULTIVATING', harvest_status: 'HARVEST_READY' };
+      return { session_id: 1, status: 'HARVEST_READY', harvest_status: 'HARVEST_READY' };
     },
     createIncidentForAdmin: async (...args) => {
       calls.push(args);
@@ -107,24 +103,15 @@ test('validates daily inspection input and passes the Farm Operator ID', async (
   );
 });
 
-test('validates and delegates the Farm Operator selected floor and trays', async () => {
+test('validates and delegates explicitly selected floor and trays', async () => {
   const { service, calls } = loadService();
 
   const assignment = await service.assignTraysForAdmin('7', {
-    floorId: '2',
-    trayIds: ['10', 11],
+    floorId: '2', trayIds: ['10', 11],
   });
-  await service.activateForAdmin('7');
-  const ready = await service.markHarvestReadyForAdmin('7');
 
   assert.equal(assignment.floor.floor_id, 2);
-  assert.deepEqual(calls, [[7, { floorId: 2, trayIds: [10, 11] }], [7], [7]]);
-  assert.deepEqual(ready, {
-    session_id: 1,
-    status: 'CULTIVATING',
-    harvest_status: 'HARVEST_READY',
-  });
-
+  assert.deepEqual(calls, [[7, { floorId: 2, trayIds: [10, 11] }]]);
   await assert.rejects(
     () => service.assignTraysForAdmin('7', { floorId: 2, trayIds: [10, 10] }),
     { statusCode: 400 },
@@ -134,7 +121,7 @@ test('validates and delegates the Farm Operator selected floor and trays', async
     { statusCode: 400 },
   );
   await assert.rejects(
-    () => service.assignTraysForAdmin('7', { trayIds: [10, 11] }),
+    () => service.assignTraysForAdmin('7', {}),
     { statusCode: 400 },
   );
 });
@@ -193,29 +180,36 @@ test('uploads cultivation inspection images through the existing image relation'
   ]);
 });
 
-test('validates harvest quantities against the new weight-based harvest schema', async () => {
+test('growth validates observations and maps public statuses to existing stages', async () => {
   const { service, calls } = loadService();
-  await service.createHarvestForAdmin('14', {
-    totalWeightKg: 4.5,
-    usableWeightKg: 4,
-    rejectedWeightKg: 0.5,
-    qualityGrade: 'A',
-  }, '3');
-  assert.equal(calls[0][0], 14);
-  assert.deepEqual(calls[0][1], {
-    totalWeightKg: 4.5,
-    usableWeightKg: 4,
-    rejectedWeightKg: 0.5,
-    harvestDate: undefined,
-    qualityGrade: 'A',
-    notes: undefined,
-  });
-  await assert.rejects(
-    () => service.createHarvestForAdmin('14', {
-      totalWeightKg: 1,
-      usableWeightKg: 1,
-      rejectedWeightKg: 0.5,
-    }, '3'),
-    { statusCode: 400, message: 'usableWeightKg and rejectedWeightKg cannot exceed totalWeightKg' },
-  );
+  for (const [growthStatus, progressPercent, currentStage] of [
+    ['GROWING',0,'FRUITING_INITIATION'], ['GROWING',25,'FRUITING_INITIATION'],
+    ['DEVELOPING',40,'PINNING'], ['NEAR_MATURE',75,'YOUNG_FRUITING'],
+    ['MATURE',85,'MATURATION'], ['MATURATION',100,'MATURATION'],
+  ]) {
+    await service.updateGrowthForAdmin('7', { growthStatus, progressPercent, condition: 'NORMAL', notes: 'Observed' });
+    assert.deepEqual(calls.at(-1), [7, { currentStage, progressPercent, condition: 'NORMAL', notes: 'Observed' }]);
+  }
+  const valid = { growthStatus: 'GROWING', progressPercent: 65, condition: 'NORMAL' };
+  for (const progressPercent of [undefined,null,'',true,-1,101,'bad',Infinity]) {
+    await assert.rejects(() => service.updateGrowthForAdmin('7', { ...valid, progressPercent }), { statusCode: 400 });
+  }
+  for (const payload of [{ growthStatus: 'INVALID' }, { growthStatus: null }, { condition: '' }, { condition: 3 }, { condition: 'x'.repeat(501) }, { notes: 'x'.repeat(1001) }]) {
+    await assert.rejects(() => service.updateGrowthForAdmin('7', { ...valid, ...payload }), { statusCode: 400 });
+  }
+  await assert.rejects(() => service.assignTraysForAdmin('7', { trayIds: [10,11] }), { statusCode: 400 });
+  assert.equal(calls.length, 6);
+});
+
+test('readiness requires an actual boolean and validates notes', async () => {
+  const { service, calls } = loadService();
+  for (const harvestReady of [true,false]) {
+    await service.updateHarvestReadinessForAdmin('7', { harvestReady, notes: 'Assessment' });
+    assert.deepEqual(calls.at(-1), [7, { harvestReady, notes: 'Assessment' }]);
+  }
+  for (const harvestReady of [undefined,null,'true',1]) {
+    await assert.rejects(() => service.updateHarvestReadinessForAdmin('7', { harvestReady }), { statusCode: 400 });
+  }
+  await assert.rejects(() => service.updateHarvestReadinessForAdmin('7', { harvestReady: true, notes: 3 }), { statusCode: 400 });
+  assert.equal(calls.length, 2);
 });

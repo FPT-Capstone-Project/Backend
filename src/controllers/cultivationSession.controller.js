@@ -28,22 +28,19 @@ async function adminAssignTrays(req, res) {
   res.status(201).json({ message: 'Cultivation trays assigned successfully', data: result });
 }
 
-async function adminActivate(req, res) {
-  const session = await cultivationSessionService.activateForAdmin(req.params.sessionId);
-  res.json({ message: 'Cultivation session activated successfully', data: session });
-}
-
-async function adminMarkHarvestReady(req, res) {
-  const session = await cultivationSessionService.markHarvestReadyForAdmin(req.params.sessionId);
-  res.json({ message: 'Cultivation session marked harvest ready', data: session });
-}
-
-async function adminCreateProgress(req, res) {
-  const progress = await cultivationSessionService.createProgressForAdmin(
+async function adminUpdateGrowth(req, res) {
+  const progress = await cultivationSessionService.updateGrowthForAdmin(
     req.params.sessionId,
     req.body || {},
   );
-  res.status(201).json({ message: 'Cultivation progress recorded successfully', data: progress });
+  res.json({ message: 'Cultivation growth updated successfully', data: progress });
+}
+
+async function adminUpdateHarvestReadiness(req, res) {
+  const session = await cultivationSessionService.updateHarvestReadinessForAdmin(
+    req.params.sessionId, req.body || {},
+  );
+  res.json({ message: 'Cultivation harvest readiness updated successfully', data: session });
 }
 
 async function adminCreateInspection(req, res) {
@@ -78,23 +75,6 @@ async function adminListIncidents(req, res) {
   res.json({ data: incidents });
 }
 
-async function adminCreateHarvest(req, res) {
-  const harvest = await cultivationSessionService.createHarvestForAdmin(
-    req.params.sessionTrayId,
-    req.body || {},
-    req.user.user_id,
-  );
-  res.status(201).json({ message: 'Harvest recorded successfully', data: harvest });
-}
-
-async function adminComplete(req, res) {
-  const result = await cultivationSessionService.completeForAdmin(
-    req.params.sessionId,
-    req.body || {},
-  );
-  res.json({ message: 'Cultivation session completed successfully', data: result });
-}
-
 async function adminCancel(req, res) {
   const result = await cultivationSessionService.cancelForAdmin(
     req.params.sessionId,
@@ -118,15 +98,12 @@ module.exports = {
   adminListAvailableTrays,
   adminGetProgress,
   adminAssignTrays,
-  adminActivate,
-  adminMarkHarvestReady,
-  adminCreateProgress,
+  adminUpdateGrowth,
+  adminUpdateHarvestReadiness,
   adminCreateInspection,
   adminAddInspectionImage,
   adminCreateIncident,
   adminListIncidents,
-  adminCreateHarvest,
-  adminComplete,
   adminCancel,
   adminCreateNotification,
 };

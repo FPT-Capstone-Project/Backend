@@ -1,4 +1,5 @@
 const orderService = require('../services/order.service');
+const harvestService = require('../services/harvest.service');
 
 async function create(req, res) {
   const order = await orderService.createCultivationOrder(req.user.user_id, req.body || {});
@@ -20,4 +21,9 @@ async function cancel(req, res) {
   res.json({ message: 'Order cancelled successfully', data: order });
 }
 
-module.exports = { create, list, getById, cancel };
+async function harvestHistory(req, res) {
+  const history = await harvestService.getOrderHarvestHistory(req.params.orderId);
+  res.json({ data: history });
+}
+
+module.exports = { create, list, getById, cancel, harvestHistory };

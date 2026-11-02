@@ -173,6 +173,58 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    if(!value)return write(null);
    const id=positive(value);return repo.lockFloor(id,async()=>{const f=await repo.floor(id);return repo.lockChannel(f.master_id,f.misting_ssr_channel,()=>write(id));});
   },
+  async generateTrays(value) {
+   const id=positive(value);
+   return repo.lockFloor(id,()=>repo.transaction(async()=>{
+    await editable(id);
+    const f=await repo.one('SELECT * FROM cultivation_floors WHERE floor_id=$1 FOR UPDATE',[id]);
+    if(!f)throw new AppError('Cultivation floor not found',404);
+    if(!Number.isInteger(f.total_rows) || f.total_rows<1 || !Number.isInteger(f.total_columns) || f.total_columns<1) {
+     throw new AppError('Set positive total_rows and total_columns on the floor first',400);
+    }
+    // ponytail: limit synchronous generation to 10000 trays; upgrade when larger floors are needed.
+    if(f.total_rows*f.total_columns>10000)throw new AppError('A floor may generate at most 10000 trays',400);
+    const invalid=await repo.one(`SELECT 1 FROM tray_positions WHERE floor_id=$1
+     AND (row_number>$2 OR column_number>$3 OR status<>'ACTIVE')
+     UNION ALL SELECT 1 FROM tray_positions WHERE floor_id=$1
+     GROUP BY row_number,column_number HAVING count(*)>1
+     UNION ALL SELECT 1 FROM cultivation_trays WHERE floor_id=$1 AND position_id IS NULL
+     LIMIT 1`,[id,f.total_rows,f.total_columns]);
+    if(invalid)throw new AppError('Resolve duplicate, inactive or out-of-bounds positions and trays without positions first',409);
+    await repo.rows(`INSERT INTO tray_positions(floor_id,room_id,row_number,column_number)
+     SELECT $1,$2,r,c FROM generate_series(1,$3::int) AS r CROSS JOIN generate_series(1,$4::int) AS c
+     WHERE NOT EXISTS(SELECT 1 FROM tray_positions p WHERE p.floor_id=$1 AND p.row_number=r AND p.column_number=c)`,
+    [id,f.room_id,f.total_rows,f.total_columns]);
+    const created=await repo.rows(`INSERT INTO cultivation_trays(room_id,floor_id,position_id,tray_code,tray_name)
+     SELECT p.room_id,p.floor_id,p.position_id,
+      'ROOM'||p.room_id||'-F'||$2::int||'-R'||p.row_number||'-C'||p.column_number,
+      'Tray F'||$2::int||'-R'||p.row_number||'-C'||p.column_number
+     FROM tray_positions p WHERE p.floor_id=$1
+      AND NOT EXISTS(SELECT 1 FROM cultivation_trays t WHERE t.position_id=p.position_id)
+     ORDER BY p.row_number,p.column_number RETURNING tray_id`,[id,f.floor_number]);
+    const trays=await repo.rows(`SELECT t.*,p.row_number,p.column_number
+     FROM cultivation_trays t JOIN tray_positions p ON p.position_id=t.position_id
+     WHERE t.floor_id=$1 ORDER BY p.row_number,p.column_number`,[id]);
+    return {floor_id:id,total_rows:f.total_rows,total_columns:f.total_columns,created_count:created.length,total:trays.length,trays};
+   }));
+  },
+  async deleteTrays(value) {
+   const id=positive(value);
+   try {
+    return await repo.lockFloor(id,()=>repo.transaction(async()=>{
+     const f=await repo.one('SELECT floor_id FROM cultivation_floors WHERE floor_id=$1 FOR UPDATE',[id]);
+     if(!f)throw new AppError('Cultivation floor not found',404);
+     await editable(id);
+     const trays=await repo.rows('SELECT tray_id,status FROM cultivation_trays WHERE floor_id=$1 FOR UPDATE',[id]);
+     if(trays.some(t=>t.status==='OCCUPIED'))throw new AppError('Cannot delete trays while they are occupied',409);
+     const deleted=await repo.rows('DELETE FROM cultivation_trays WHERE floor_id=$1 RETURNING tray_id',[id]);
+     return {floor_id:id,deleted_count:deleted.length};
+    }));
+   } catch(error) {
+    if(error.code==='23503')throw new AppError('Cannot delete trays referenced by cultivation records',409);
+    throw error;
+   }
+  },
   async assignTray(value,trayValue,body={}) {
    const id=positive(value),tray=positive(trayValue,'trayId');
    if(!body || typeof body!=='object' || Array.isArray(body) || Object.keys(body).some(k=>k!=='position_id'))throw new AppError('Chỉ hỗ trợ position_id khi gán vị trí khay',400);

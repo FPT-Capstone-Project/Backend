@@ -94,7 +94,7 @@ async function createIssue(data, reportedBy) {
       );
       context = result.rows[0];
       if (!context) throw new AppError('Active tray assignment not found for a paid session', 404);
-      if (!['CULTIVATING', 'HARVESTING'].includes(context.status)) {
+      if (!['CULTIVATING', 'HARVEST_READY', 'HARVESTING'].includes(context.status)) {
         throw new AppError('Tray issues can only be reported during cultivation', 409);
       }
       if (data.inspectionId !== undefined) {

@@ -1,8 +1,9 @@
 const express = require('express');
 const orderController = require('../controllers/order.controller');
-const { authenticate } = require('../middlewares/auth.middleware');
+const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
+const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
 
 /**
  * @openapi
@@ -49,6 +50,27 @@ router.patch('/:orderId/cancel', authenticate, orderController.cancel);
 
 /**
  * @openapi
+ * /api/orders/{orderId}/harvest-history:
+ *   get:
+ *     tags: [Harvests]
+ *     summary: Trace cultivation sessions, mushroom types, harvests, yield, and receiving method for an order
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: orderId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Order harvest history }
+ *       400: { description: Invalid order ID }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ *       404: { description: Order not found }
+ */
+router.get('/:orderId/harvest-history', adminOrFarmOperator, orderController.harvestHistory);
+
+/**
+ * @openapi
  * /api/orders/{orderId}:
  *   get:
  *     tags: [Orders]
@@ -77,7 +99,7 @@ router.get('/:orderId', authenticate, orderController.getById);
  *   post:
  *     tags: [Orders]
  *     summary: Create a cultivation order for a mushroom type, package, and tray quantity
- *     description: The selected active package must cover the selected mushroom's growing days. Each tray requires three spawn units. Both trays and spawn are held for the configured checkout period and allocated only after successful payment.
+ *     description: The selected active package must cover the selected active mushroom's growing days. One ACTIVE floor with an approved matching mushroom profile must have enough AVAILABLE trays with ACTIVE positions in the same floor and room, after unexpired HELD reservations. Capacity is never combined across floors. Each tray requires three spawn units. Reservations are consumed after successful payment; Farm Operator selects physical trays later in WF-03.
  *     security:
  *       - bearerAuth: []
  *     requestBody:

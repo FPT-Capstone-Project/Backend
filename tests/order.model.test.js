@@ -26,7 +26,7 @@ function loadOrderModel({
         return { rows: [{ mushroom_type_id: 9, name: 'Oyster', growing_days: growingDays, price: '30000', status: 'ACTIVE' }] };
       }
       if (statement.startsWith('SELECT t.tray_id')) {
-        return { rows: Array.from({ length: availableTrays }, (_, index) => ({ tray_id: index + 1 })) };
+        return { rows: Array.from({ length: availableTrays }, (_, index) => ({ tray_id: index + 1, floor_id: 1, compatible: true })) };
       }
       if (statement.startsWith('SELECT COALESCE(SUM(tr.quantity), 0)::int AS quantity')) {
         return { rows: [{ quantity: heldTrays }] };

@@ -8,6 +8,7 @@ const SESSION_STATUSES = [
   'MYCELIAL_DEVELOPMENT',
   'READY_FOR_CULTIVATION',
   'CULTIVATING',
+  'HARVEST_READY',
   'HARVESTING',
   'COMPLETED',
   'CANCELLED',
@@ -150,10 +151,9 @@ async function changeFarmStage(sessionId, payload = {}) {
     'SPAWN_RESTING',
     'MYCELIAL_DEVELOPMENT',
     'READY_FOR_CULTIVATION',
-    'HARVESTING',
   ].includes(nextStage)) {
     throw new AppError(
-      'stage must be SPAWN_RESTING, MYCELIAL_DEVELOPMENT, READY_FOR_CULTIVATION, or HARVESTING',
+      'stage must be SPAWN_RESTING, MYCELIAL_DEVELOPMENT, or READY_FOR_CULTIVATION',
       400,
     );
   }
