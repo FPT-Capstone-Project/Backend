@@ -21,7 +21,7 @@ const router = express.Router();
  *             required: [sessionId, harvestMethod]
  *             properties:
  *               sessionId: { type: integer, minimum: 1, description: Your harvest-ready cultivation session ID }
- *               harvestMethod: { type: string, enum: [PICKUP, DELIVERY], description: PICKUP for collection at the farm; DELIVERY for shipment }
+ *               harvestMethod: { type: string, enum: [PICKUP, DELIVERY], description: PICKUP for customer self-harvest at the farm; DELIVERY for external delivery arranged by staff }
  *               scheduledAt: { type: string, format: date-time, description: Required for PICKUP; optional for DELIVERY }
  *               customerNote: { type: string, maxLength: 2000, description: Optional receiving instructions }
  *           examples:
@@ -87,7 +87,7 @@ router.patch('/:id', authenticate, harvestRequestController.update);
  *   post:
  *     tags: [Harvest Requests]
  *     summary: Complete receiving or handover after harvest completion
- *     description: Pickup requires the customer confirmation; delivery requires the existing shipment to be DELIVERED.
+ *     description: Requires a completed harvest. PICKUP may be confirmed by the owning customer or farm staff; DELIVERY must be confirmed by farm staff after the external delivery is completed. No shipment record is required. Records confirmed_by and confirmation time, completes the session, and places its trays in MAINTENANCE awaiting WF-05 sanitation.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -100,7 +100,7 @@ router.patch('/:id', authenticate, harvestRequestController.update);
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Request does not belong to the customer }
  *       404: { description: Harvest request not found }
- *       409: { description: Harvest, delivery, or pickup confirmation is incomplete }
+ *       409: { description: Harvest or pickup schedule is incomplete, or session is not HARVESTING }
  */
 router.post('/:id/complete', authenticate, harvestRequestController.complete);
 

@@ -206,29 +206,30 @@ async function assignTraysForAdmin(sessionId, payload = {}) {
 async function updateGrowthForAdmin(sessionId, payload = {}) {
   const progressPercent = parseDecimal(payload.progressPercent ?? payload.progress_percent,
     'progressPercent', { min: 0, max: 100 });
-  const growthStatus = parseText(payload.growthStatus ?? payload.growth_status,
-    'growthStatus', { required: true, maxLength: 100 }).toUpperCase();
-  const stages = {
-    GROWING: 'FRUITING_INITIATION',
-    DEVELOPING: 'PINNING',
-    NEAR_MATURE: 'YOUNG_FRUITING',
-    MATURE: 'MATURATION',
-  };
-  const currentStage = Object.hasOwn(stages, growthStatus)
-    ? stages[growthStatus] : parseGrowthStage(growthStatus, 'growthStatus');
+  const currentStage = parseGrowthStage(payload.growthStatus ?? payload.growth_status, 'growthStatus');
+  const expectedHarvestDate = payload.expectedHarvestDate ?? payload.expected_harvest_date;
+  if (expectedHarvestDate !== undefined) {
+    if (typeof expectedHarvestDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(expectedHarvestDate)
+      || !Number.isFinite(Date.parse(expectedHarvestDate))
+      || new Date(expectedHarvestDate).toISOString().slice(0, 10) !== expectedHarvestDate) {
+      throw new AppError('expectedHarvestDate must be a valid YYYY-MM-DD date', 400);
+    }
+  }
   return cultivationSessionModel.updateGrowthForAdmin(parseId(sessionId, 'sessionId'), {
     currentStage,
     progressPercent,
+    expectedHarvestDate,
     condition: parseText(payload.condition, 'condition', { required: true, maxLength: 500 }),
     notes: parseText(payload.notes, 'notes'),
   });
 }
 
-async function updateHarvestReadinessForAdmin(sessionId, payload = {}) {
+async function updateHarvestReadinessForAdmin(sessionId, payload = {}, confirmedBy) {
   const harvestReady = payload.harvestReady ?? payload.harvest_ready;
   if (typeof harvestReady !== 'boolean') throw new AppError('harvestReady must be a boolean', 400);
   return cultivationSessionModel.updateHarvestReadinessForAdmin(parseId(sessionId, 'sessionId'), {
     harvestReady,
+    confirmedBy: parseId(confirmedBy, 'confirmedBy'),
     notes: parseText(payload.notes, 'notes'),
   });
 }

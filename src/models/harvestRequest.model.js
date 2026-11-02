@@ -159,32 +159,38 @@ async function complete(harvestRequestId, actor) {
       if (!request.scheduled_at) {
         throw new AppError('Pickup must be scheduled before receiving can be completed', 409);
       }
-      if (isStaff(actor) || Number(actor?.user_id) !== Number(request.customer_id)) {
-        throw new AppError('Customer pickup confirmation is required', 409);
-      }
+    } else if (request.harvest_method === 'DELIVERY') {
+      if (!isStaff(actor)) throw new AppError('Farm Operator must confirm external delivery', 403);
     } else {
-      const shipmentResult = await client.query(
-        `SELECT shipment_id, status
-         FROM shipments
-         WHERE order_id = $1
-         ORDER BY shipment_id DESC
-         LIMIT 1
-         FOR UPDATE`,
-        [request.order_id],
-      );
-      if (shipmentResult.rows[0]?.status !== 'DELIVERED') {
-        throw new AppError('Delivery must be completed before receiving can be completed', 409);
-      }
+      throw new AppError('Invalid receiving method', 409);
+    }
+    if (request.session_status !== 'HARVESTING') {
+      throw new AppError('Only a harvesting session can complete handover', 409);
     }
 
     const result = await client.query(
       `UPDATE harvest_requests
        SET status = 'COMPLETED',
            confirmed_at = COALESCE(confirmed_at, CURRENT_TIMESTAMP),
+           confirmed_by = $2,
            completed_at = CURRENT_TIMESTAMP
        WHERE harvest_request_id = $1
        RETURNING *`,
-      [harvestRequestId],
+      [harvestRequestId, actor.user_id],
+    );
+    await client.query(
+      `UPDATE cultivation_sessions SET status = 'COMPLETED', harvest_status = 'NOT_READY',
+         end_at = CURRENT_TIMESTAMP WHERE session_id = $1`, [request.session_id],
+    );
+    // Handover queues trays for WF-05; it never makes dirty trays AVAILABLE.
+    await client.query(
+      `UPDATE cultivation_trays SET status = 'MAINTENANCE'
+       WHERE tray_id IN (SELECT tray_id FROM cultivation_session_trays
+         WHERE session_id = $1 AND status = 'ACTIVE')`, [request.session_id],
+    );
+    await client.query(
+      `UPDATE cultivation_session_trays SET status = 'RELEASED', notes = 'Awaiting sanitation after harvest handover'
+       WHERE session_id = $1 AND status = 'ACTIVE'`, [request.session_id],
     );
     await client.query('COMMIT');
     return result.rows[0];

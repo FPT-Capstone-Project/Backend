@@ -183,29 +183,28 @@ test('uploads cultivation inspection images through the existing image relation'
 test('growth validates observations and maps public statuses to existing stages', async () => {
   const { service, calls } = loadService();
   for (const [growthStatus, progressPercent, currentStage] of [
-    ['GROWING',0,'FRUITING_INITIATION'], ['GROWING',25,'FRUITING_INITIATION'],
-    ['DEVELOPING',40,'PINNING'], ['NEAR_MATURE',75,'YOUNG_FRUITING'],
-    ['MATURE',85,'MATURATION'], ['MATURATION',100,'MATURATION'],
+    ['FRUITING_INITIATION',10,'FRUITING_INITIATION'], ['PINNING',30,'PINNING'],
+    ['YOUNG_FRUITING',60,'YOUNG_FRUITING'], ['MATURATION',90,'MATURATION'],
   ]) {
     await service.updateGrowthForAdmin('7', { growthStatus, progressPercent, condition: 'NORMAL', notes: 'Observed' });
-    assert.deepEqual(calls.at(-1), [7, { currentStage, progressPercent, condition: 'NORMAL', notes: 'Observed' }]);
+    assert.deepEqual(calls.at(-1), [7, { currentStage, progressPercent, expectedHarvestDate: undefined, condition: 'NORMAL', notes: 'Observed' }]);
   }
-  const valid = { growthStatus: 'GROWING', progressPercent: 65, condition: 'NORMAL' };
+  const valid = { growthStatus: 'PINNING', progressPercent: 65, condition: 'NORMAL' };
   for (const progressPercent of [undefined,null,'',true,-1,101,'bad',Infinity]) {
     await assert.rejects(() => service.updateGrowthForAdmin('7', { ...valid, progressPercent }), { statusCode: 400 });
   }
-  for (const payload of [{ growthStatus: 'INVALID' }, { growthStatus: null }, { condition: '' }, { condition: 3 }, { condition: 'x'.repeat(501) }, { notes: 'x'.repeat(1001) }]) {
+  for (const payload of [{ growthStatus: 'GROWING' }, { growthStatus: 'DEVELOPING' }, { growthStatus: 'NEAR_MATURE' }, { growthStatus: 'MATURE' }, { expectedHarvestDate: '2026-02-30' }, { expectedHarvestDate: 'bad' }, { growthStatus: 'INVALID' }, { growthStatus: null }, { condition: '' }, { condition: 3 }, { condition: 'x'.repeat(501) }, { notes: 'x'.repeat(1001) }]) {
     await assert.rejects(() => service.updateGrowthForAdmin('7', { ...valid, ...payload }), { statusCode: 400 });
   }
   await assert.rejects(() => service.assignTraysForAdmin('7', { trayIds: [10,11] }), { statusCode: 400 });
-  assert.equal(calls.length, 6);
+  assert.equal(calls.length, 4);
 });
 
 test('readiness requires an actual boolean and validates notes', async () => {
   const { service, calls } = loadService();
   for (const harvestReady of [true,false]) {
-    await service.updateHarvestReadinessForAdmin('7', { harvestReady, notes: 'Assessment' });
-    assert.deepEqual(calls.at(-1), [7, { harvestReady, notes: 'Assessment' }]);
+    await service.updateHarvestReadinessForAdmin('7', { harvestReady, notes: 'Assessment' }, '2');
+    assert.deepEqual(calls.at(-1), [7, { harvestReady, confirmedBy: 2, notes: 'Assessment' }]);
   }
   for (const harvestReady of [undefined,null,'true',1]) {
     await assert.rejects(() => service.updateHarvestReadinessForAdmin('7', { harvestReady }), { statusCode: 400 });

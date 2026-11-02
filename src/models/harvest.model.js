@@ -10,7 +10,8 @@ const harvestFields = `
   oi.order_id, CONCAT('ORD-', oi.order_id) AS order_code,
   u.full_name AS customer_name,
   s.mushroom_type_id, mt.name AS mushroom_type,
-  hr.harvest_method, hr.scheduled_at, hr.status AS harvest_request_status
+  hr.harvest_method, hr.scheduled_at, hr.customer_note, hr.confirmed_by,
+  hr.confirmed_at, hr.completed_at, hr.status AS harvest_request_status
 `;
 
 const harvestFrom = `
@@ -103,6 +104,23 @@ async function start(harvestId, harvestedBy) {
       throw new AppError('Cultivation session must be harvest ready before starting a harvest', 409);
     }
 
+    const receiving = await client.query(
+      `SELECT harvest_request_id, harvest_method, scheduled_at, status FROM harvest_requests
+       WHERE session_id = $1 FOR UPDATE`, [harvest.session_id],
+    );
+    const request = receiving.rows[0];
+    if (!request || !['PICKUP', 'DELIVERY'].includes(request.harvest_method)
+      || request.status === 'COMPLETED' || (request.harvest_method === 'PICKUP' && !request.scheduled_at)) {
+      throw new AppError('Choose a receiving method and schedule pickup before starting harvest', 409);
+    }
+    const issues = await client.query(
+      `SELECT ci.issue_id FROM cultivation_issues ci
+       INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+       WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
+         AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
+       FOR UPDATE OF ci`, [harvest.session_id],
+    );
+    if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvesting', 409);
     const result = await client.query(
       `UPDATE harvests
        SET status = 'IN_PROGRESS',
@@ -198,14 +216,6 @@ async function complete(harvestId, harvestedBy) {
        WHERE harvest_id = $1
        RETURNING *`,
       [harvestId, harvestedBy],
-    );
-    await client.query(
-      `UPDATE cultivation_sessions
-       SET status = 'COMPLETED',
-           harvest_status = 'NOT_READY',
-           end_at = CURRENT_TIMESTAMP
-       WHERE session_id = $1`,
-      [harvest.session_id],
     );
     await client.query('COMMIT');
     return result.rows[0];

@@ -38,8 +38,10 @@ async function setupDatabase() {
       session_tray_id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL REFERENCES cultivation_sessions(session_id),
       tray_id INTEGER NOT NULL REFERENCES cultivation_trays(tray_id),
+      notes TEXT,
       status TEXT NOT NULL
     );
+    CREATE TABLE cultivation_issues (issue_id SERIAL PRIMARY KEY, session_tray_id INTEGER, issue_type TEXT, severity TEXT, status TEXT);
     CREATE TABLE harvest_requests (
       harvest_request_id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL UNIQUE REFERENCES cultivation_sessions(session_id),
@@ -48,6 +50,7 @@ async function setupDatabase() {
       status TEXT NOT NULL DEFAULT 'PENDING',
       customer_note TEXT,
       confirmed_at TIMESTAMP,
+      confirmed_by INTEGER REFERENCES users(user_id),
       completed_at TIMESTAMP
     );
     CREATE TABLE harvests (
@@ -200,7 +203,7 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
         JOIN cultivation_trays t ON t.tray_id = st.tray_id
         WHERE s.session_id = 1
       `)).rows[0],
-      { session_status: 'COMPLETED', assignment_status: 'ACTIVE', tray_status: 'OCCUPIED' },
+      { session_status: 'HARVESTING', assignment_status: 'ACTIVE', tray_status: 'OCCUPIED' },
     );
     await assert.rejects(
       () => harvest.recordYield(planned.harvest_id, {
@@ -213,11 +216,18 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
 
     const pickupCompleted = await harvestRequest.complete(request.harvest_request_id, customer);
     assert.equal(pickupCompleted.status, 'COMPLETED');
+    assert.equal(pickupCompleted.confirmed_by, 3);
+    const after = (await db.query(`SELECT s.status, st.status AS assignment_status, t.status AS tray_status
+      FROM cultivation_sessions s JOIN cultivation_session_trays st USING(session_id)
+      JOIN cultivation_trays t USING(tray_id) WHERE s.session_id=1`)).rows[0];
+    assert.deepEqual(after, { status: 'COMPLETED', assignment_status: 'RELEASED', tray_status: 'MAINTENANCE' });
+    await assert.rejects(() => harvestRequest.complete(request.harvest_request_id, customer), { statusCode: 409 });
 
     const detail = await harvest.findById(planned.harvest_id);
     assert.equal(detail.order_code, 'ORD-1');
     assert.equal(detail.mushroom_type, 'Oyster Mushroom');
     assert.equal(detail.harvest_method, 'PICKUP');
+    assert.equal(detail.customer_note, 'Please prepare a basket.');
     assert.equal(Number(detail.total_weight_kg), 5.2);
     const list = await harvest.findAllForAdmin({ status: 'COMPLETED', orderId: 1 });
     assert.equal(list.total, 1);
@@ -231,7 +241,7 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
   }
 });
 
-test('WF-04 delivery receiving waits for the existing shipment to be delivered', async () => {
+test('WF-04 external delivery is confirmed by staff without any shipment', async () => {
   const db = await setupDatabase();
   try {
     const { harvest, harvestRequest } = loadModels(db);
@@ -243,16 +253,36 @@ test('WF-04 delivery receiving waits for the existing shipment to be delivered',
     const planned = await harvest.create(2);
     await completeHarvest(harvest, planned.harvest_id);
 
-    await db.exec("INSERT INTO shipments (order_id, status) VALUES (1, 'IN_TRANSIT')");
-    await assert.rejects(
-      () => harvestRequest.complete(request.harvest_request_id, operator),
-      { statusCode: 409, message: 'Delivery must be completed before receiving can be completed' },
-    );
-    await db.exec("UPDATE shipments SET status = 'DELIVERED' WHERE order_id = 1");
+    await assert.rejects(() => harvestRequest.complete(request.harvest_request_id, customer),
+      { statusCode: 403, message: 'Farm Operator must confirm external delivery' });
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM shipments')).rows[0].n, 0);
     const completed = await harvestRequest.complete(request.harvest_request_id, operator);
     assert.equal(completed.status, 'COMPLETED');
     assert.ok(completed.completed_at);
+    assert.equal(completed.confirmed_by, 1);
   } finally {
     await db.close();
   }
+});
+
+test('WF-04 start requires receiving choice, pickup schedule and resolved quality issues', async () => {
+  const db = await setupDatabase();
+  try {
+    const { harvest, harvestRequest } = loadModels(db);
+    const planned = await harvest.create(1);
+    await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
+    assert.equal((await db.query('SELECT status FROM harvests WHERE harvest_id=$1', [planned.harvest_id])).rows[0].status, 'PLANNED');
+    const request = await harvestRequest.create(1, { harvestMethod: 'PICKUP' }, { user_id: 3, role_id: 3 });
+    await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
+    await harvestRequest.update(request.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: '2026-12-15T09:00:00+07:00' }, { user_id: 3, role_id: 3 });
+    await db.exec("INSERT INTO cultivation_issues(session_tray_id, issue_type, severity, status) VALUES (1, 'DISEASE', 'LOW', 'OPEN')");
+    await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
+    await db.exec("UPDATE cultivation_issues SET status='RESOLVED'");
+    await completeHarvest(harvest, planned.harvest_id);
+    await assert.rejects(() => harvestRequest.complete(request.harvest_request_id, { user_id: 99, role_id: 3 }), { statusCode: 403 });
+    const completed = await harvestRequest.complete(request.harvest_request_id, { user_id: 1, role_id: 2 });
+    assert.equal(completed.confirmed_by, 1);
+    assert.ok(completed.confirmed_at);
+    assert.equal((await db.query('SELECT status FROM cultivation_trays WHERE tray_id=1')).rows[0].status, 'MAINTENANCE');
+  } finally { await db.close(); }
 });

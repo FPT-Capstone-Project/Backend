@@ -5,6 +5,7 @@ const { PGlite } = require('@electric-sql/pglite');
 async function setupDatabase() {
   const db = new PGlite();
   await db.exec(`
+    CREATE TABLE notifications (user_id INTEGER, notification_type TEXT, title TEXT, message TEXT, reference_type TEXT, reference_id INTEGER);
     CREATE TABLE orders (
       order_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -24,6 +25,7 @@ async function setupDatabase() {
       harvest_date DATE,
       duration_days INTEGER NOT NULL,
       status TEXT NOT NULL,
+      harvest_ready_at TIMESTAMP, harvest_ready_by INTEGER,
       harvest_status TEXT NOT NULL DEFAULT 'NOT_READY'
     );
     CREATE TABLE cultivation_floors (
@@ -298,7 +300,7 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
     );
 
     const harvestReady = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, notes: 'Ready after assessment' });
-    assert.equal(harvestReady.status, 'HARVEST_READY');
+    assert.equal(harvestReady.status, 'CULTIVATING');
     assert.equal(harvestReady.harvest_status, 'HARVEST_READY');
     assert.equal((await db.query('SELECT COUNT(*)::int AS count FROM harvests')).rows[0].count, 0);
 
@@ -350,9 +352,12 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
       assert.equal((await model.findProgressForAdmin(1)).length, beforeInspection);
       await db.exec("UPDATE cultivation_session_trays SET status='ACTIVE' WHERE tray_id=1; UPDATE cultivation_trays SET status='OCCUPIED' WHERE tray_id=1");
     }
-    const ready = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, notes: 'Quality confirmed' });
-    assert.equal(ready.status, 'HARVEST_READY');
+    const ready = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, confirmedBy: 2, notes: 'Quality confirmed' });
+    assert.equal(ready.status, 'CULTIVATING');
     assert.equal(ready.harvest_status, 'HARVEST_READY');
+    assert.equal(ready.harvest_ready_by, 2);
+    assert.ok(ready.harvest_ready_at);
+    assert.ok((await db.query('SELECT * FROM notifications')).rows.length > 0);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM harvests')).rows[0].n, 0);
     assert.equal((await model.findProgressForAdmin(1)).at(-1).description, 'Quality confirmed');
     for (const status of ['READY_FOR_CULTIVATION','HARVEST_READY','HARVESTING','COMPLETED','CANCELLED']) {
@@ -373,5 +378,37 @@ test('explicit floor is enforced and assignment failures leave lifecycle untouch
     assert.equal((await db.query('SELECT status FROM cultivation_sessions WHERE session_id=1')).rows[0].status, 'READY_FOR_CULTIVATION');
     assert.equal((await model.findProgressForAdmin(1)).length, 0);
     assert.equal((await db.query("SELECT count(*)::int AS n FROM cultivation_trays WHERE status='OCCUPIED'")).rows[0].n, 0);
+  } finally { await db.close(); }
+});
+
+test('WF-03 forecast history, quality blockers and readiness reassessment', async () => {
+  const db = await setupDatabase();
+  try {
+    const model = loadModel(db);
+    const assigned = await model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] });
+    const observation = { currentStage: 'MATURATION', progressPercent: 90, condition: 'NORMAL', expectedHarvestDate: '2026-12-15' };
+    const updated = await model.updateGrowthForAdmin(1, observation);
+    assert.equal(updated.growth_status, 'MATURATION');
+    assert.equal(new Date(updated.expected_harvest_date).toISOString().slice(0,10), '2026-12-15');
+    assert.equal((await db.query('SELECT harvest_date::text AS date FROM cultivation_sessions WHERE session_id=1')).rows[0].date, '2026-12-15');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 1);
+    for (const [issueType, severity] of [['DISEASE','LOW'],['CONTAMINATION','MEDIUM'],['QUALITY_FAILURE','LOW'],['DEVICE_FAILURE','HIGH']]) {
+      const issue = await model.createIncidentForAdmin(1, { sessionTrayId: assigned.assigned_trays[0].session_tray_id,
+        incidentType: issueType, title: 'Requires assessment', severity }, 2);
+      await assert.rejects(() => model.updateHarvestReadinessForAdmin(1, { harvestReady: true, confirmedBy: 2 }), { code: 'UNRESOLVED_QUALITY_ISSUES' });
+      assert.equal((await db.query('SELECT harvest_status FROM cultivation_sessions WHERE session_id=1')).rows[0].harvest_status, 'NOT_READY');
+      await db.query("UPDATE cultivation_issues SET status='RESOLVED' WHERE issue_id=$1", [issue.issue_id]);
+    }
+    const ready = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, confirmedBy: 2 });
+    assert.equal(ready.status, 'CULTIVATING');
+    assert.equal(ready.harvest_ready_by, 2);
+    assert.ok(ready.harvest_ready_at);
+    await model.updateGrowthForAdmin(1, observation);
+    const reassessment = (await db.query('SELECT harvest_status, harvest_ready_at, harvest_ready_by FROM cultivation_sessions WHERE session_id=1')).rows[0];
+    assert.deepEqual(reassessment, { harvest_status: 'NOT_READY', harvest_ready_at: null, harvest_ready_by: null });
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 2);
+    const history = await model.findProgressForAdmin(1);
+    assert.equal(history.length, 4);
+    assert.equal(Number(history.at(-1).progress_percent), 90);
   } finally { await db.close(); }
 });

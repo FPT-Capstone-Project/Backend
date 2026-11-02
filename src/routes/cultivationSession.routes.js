@@ -291,7 +291,7 @@ router.get('/admin/:sessionId/incidents', adminOrFarmOperator, cultivationSessio
  *       Example percentages are testing and operational guidelines, not validation constraints between growthStatus and progressPercent.
  *       progressPercent must be between 0 and 100 and cannot decrease from the previous update.
  *       growthStatus corresponds to the four WF-03 stages in order: FRUITING_INITIATION, PINNING, YOUNG_FRUITING, and MATURATION.
- *       condition describes the observed condition, for example NORMAL. notes is optional.
+ *       condition describes the observed condition, for example NORMAL. notes is optional. expectedHarvestDate optionally updates the forecast (YYYY-MM-DD), records it in history, and notifies the customer. New growth observations reset readiness and require a fresh assessment.
  *       MATURATION or 100% does not automatically set HARVEST_READY. Call PATCH /api/cultivation-sessions/admin/{sessionId}/harvest-readiness with harvestReady=true to confirm readiness separately.
  *     security:
  *       - bearerAuth: []
@@ -312,6 +312,7 @@ router.get('/admin/:sessionId/incidents', adminOrFarmOperator, cultivationSessio
  *               progressPercent: { type: number, minimum: 0, maximum: 100, example: 10 }
  *               condition: { type: string, minLength: 1, maxLength: 500, example: NORMAL }
  *               notes: { type: string, maxLength: 1000 }
+ *               expectedHarvestDate: { type: string, format: date, example: 2026-11-10 }
  *           examples:
  *             FRUITING_INITIATION:
  *               summary: FRUITING_INITIATION
@@ -341,7 +342,7 @@ router.patch('/admin/:sessionId/growth', adminOrFarmOperator, cultivationSession
  *   patch:
  *     tags: [Cultivation Sessions]
  *     summary: Confirm whether the cultivation session is ready for harvesting
- *     description: 'Only CULTIVATING sessions with all required trays ACTIVE and OCCUPIED and a recorded growth condition can be assessed. True requires the existing MATURATION stage and sets status and harvest_status to HARVEST_READY. False keeps CULTIVATING and NOT_READY. The assessment and optional notes are appended to history. This API never performs harvesting.'
+ *     description: 'Only CULTIVATING sessions with all required trays ACTIVE and OCCUPIED and a recorded growth condition can be assessed. True requires MATURATION and no unresolved quality or HIGH-severity incidents, and sets harvest_status to HARVEST_READY while status stays CULTIVATING. False sets NOT_READY. The confirming operator and time are recorded and the customer is notified when ready. The assessment and optional notes are appended to history. This API never performs harvesting.'
  *     security:
  *       - bearerAuth: []
  *     parameters:

@@ -68,6 +68,7 @@ router.get('/admin', adminOrFarmOperator, harvestController.adminList);
  *   post:
  *     tags: [Harvests]
  *     summary: Start a planned harvest and move its session into HARVESTING
+ *     description: Requires a customer receiving method, a schedule for PICKUP, and no unresolved quality or HIGH-severity incidents. PICKUP means customer self-harvest at the farm; DELIVERY means staff harvest followed by delivery arranged outside this system.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -125,7 +126,7 @@ router.post('/:id/yield', adminOrFarmOperator, harvestController.recordYield);
  *   post:
  *     tags: [Harvests]
  *     summary: Complete an in-progress harvest after yield is recorded
- *     description: Completes the cultivation session but does not release or clean its trays.
+ *     description: Completes only the harvest. The session stays HARVESTING until handover is confirmed through the harvest request complete API.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -133,7 +134,7 @@ router.post('/:id/yield', adminOrFarmOperator, harvestController.recordYield);
  *         required: true
  *         schema: { type: integer, minimum: 1 }
  *     responses:
- *       200: { description: Harvest and cultivation session completed }
+ *       200: { description: Harvest completed; customer handover is still required }
  *       400: { description: Invalid harvest ID }
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
@@ -148,6 +149,7 @@ router.post('/:id/complete', adminOrFarmOperator, harvestController.complete);
  *   get:
  *     tags: [Harvests]
  *     summary: Get harvest detail with order, session, mushroom, yield, and receiving data
+ *     description: Includes harvest_method (PICKUP for customer self-harvest at the farm or DELIVERY for external delivery), scheduled_at, customer_note, harvest_request_status, confirmed_by, confirmed_at, and completed_at.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path

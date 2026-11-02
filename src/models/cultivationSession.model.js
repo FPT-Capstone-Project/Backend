@@ -26,11 +26,8 @@ const sessionFields = `
   oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
   s.start_at, s.end_at, s.duration_days, s.harvest_date, s.status, s.harvest_status,
   s.protocol_id, progress.current_stage, progress.progress_percent,
-  CASE WHEN progress.current_stage = 'MATURATION' THEN 'MATURE'
-       WHEN progress.current_stage = 'YOUNG_FRUITING' THEN 'NEAR_MATURE'
-       WHEN progress.current_stage = 'PINNING' THEN 'DEVELOPING'
-       WHEN progress.current_stage = 'FRUITING_INITIATION' THEN 'GROWING'
-       ELSE NULL END AS growth_status,
+  progress.current_stage AS growth_status,
+  s.harvest_ready_at, s.harvest_ready_by,
   progress.condition, progress.description AS notes,
   (s.status = 'HARVEST_READY' OR s.harvest_status = 'HARVEST_READY') AS harvest_ready,
   progress.updated_at AS progress_updated_at
@@ -175,7 +172,7 @@ async function findProgressForAdmin(sessionId) {
 async function lockSession(client, sessionId) {
   const result = await client.query(
     `SELECT s.session_id, s.order_item_id, s.mushroom_type_id,
-            s.start_at, s.harvest_date, s.duration_days, s.status, s.harvest_status,
+            s.start_at, s.harvest_date::text AS harvest_date, s.duration_days, s.status, s.harvest_status,
             oi.order_id, oi.quantity AS tray_quantity, o.user_id, o.status AS order_status,
             o.payment_status
      FROM cultivation_sessions s
@@ -482,6 +479,22 @@ async function updateGrowthForAdmin(sessionId, data) {
     if (latest?.current_stage === 'MATURATION' && data.currentStage !== 'MATURATION') {
       throw new AppError('Mature growth cannot move back to growing', 409);
     }
+    if (data.expectedHarvestDate !== undefined
+      && String(session.harvest_date instanceof Date ? session.harvest_date.toISOString().slice(0, 10) : session.harvest_date) !== data.expectedHarvestDate) {
+      await client.query('UPDATE cultivation_sessions SET harvest_date = $2::date WHERE session_id = $1',
+        [sessionId, data.expectedHarvestDate]);
+      await client.query(
+        `INSERT INTO notifications (user_id, notification_type, title, message, reference_type, reference_id)
+         VALUES ($1, 'OPERATOR_MESSAGE', 'Expected harvest date updated', $2, 'CULTIVATION_SESSION', $3)`,
+        [session.user_id, 'Expected harvest date changed to ' + data.expectedHarvestDate, sessionId],
+      );
+      session.harvest_date = data.expectedHarvestDate;
+    }
+    // A new observation requires a fresh readiness assessment.
+    await client.query(
+      `UPDATE cultivation_sessions SET harvest_status = 'NOT_READY', harvest_ready_at = NULL,
+         harvest_ready_by = NULL WHERE session_id = $1`, [sessionId],
+    );
     const result = await client.query(
       `INSERT INTO cultivation_progress (
          session_id, current_stage, progress_percent, start_date,
@@ -492,9 +505,8 @@ async function updateGrowthForAdmin(sessionId, data) {
         session.harvest_date, data.condition, data.notes ?? null],
     );
     await client.query('COMMIT');
-    return { ...result.rows[0], growth_status: { FRUITING_INITIATION: 'GROWING', PINNING: 'DEVELOPING',
-      YOUNG_FRUITING: 'NEAR_MATURE', MATURATION: 'MATURE' }[data.currentStage],
-      status: session.status, harvest_status: session.harvest_status, harvest_ready: false };
+    return { ...result.rows[0], growth_status: data.currentStage,
+      status: session.status, harvest_status: 'NOT_READY', harvest_ready: false };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -533,11 +545,22 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
     if (data.harvestReady && latest.current_stage !== 'MATURATION') {
       throw new AppError('Cultivation must reach MATURATION before harvest readiness', 409, 'HARVEST_NOT_READY');
     }
+    if (data.harvestReady) {
+      const issues = await client.query(
+        `SELECT ci.issue_id FROM cultivation_issues ci
+         INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+         WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
+           AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
+         FOR UPDATE OF ci`, [sessionId],
+      );
+      if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvest readiness', 409, 'UNRESOLVED_QUALITY_ISSUES');
+    }
     const result = await client.query(
-      `UPDATE cultivation_sessions SET status = $2, harvest_status = $3
-       WHERE session_id = $1 RETURNING session_id, status, harvest_status, start_at, harvest_date`,
-      [sessionId, data.harvestReady ? 'HARVEST_READY' : 'CULTIVATING',
-        data.harvestReady ? 'HARVEST_READY' : 'NOT_READY'],
+      `UPDATE cultivation_sessions SET harvest_status = $2,
+         harvest_ready_at = CASE WHEN $2 = 'HARVEST_READY' THEN CURRENT_TIMESTAMP ELSE NULL END,
+         harvest_ready_by = CASE WHEN $2 = 'HARVEST_READY' THEN $3::integer ELSE NULL END
+       WHERE session_id = $1 RETURNING session_id, status, harvest_status, start_at, harvest_date, harvest_ready_at, harvest_ready_by`,
+      [sessionId, data.harvestReady ? 'HARVEST_READY' : 'NOT_READY', data.confirmedBy ?? null],
     );
     await client.query(
       `INSERT INTO cultivation_progress (
@@ -548,6 +571,14 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
         session.harvest_date, latest.condition,
         data.notes ?? (data.harvestReady ? 'Harvest readiness confirmed' : 'Not ready for harvest')],
     );
+    if (data.harvestReady) {
+      await client.query(
+        `INSERT INTO notifications (user_id, notification_type, title, message, reference_type, reference_id)
+         VALUES ($1, 'OPERATOR_MESSAGE', 'Mushrooms ready for harvest',
+           'Please choose pickup at the farm or external delivery.', 'CULTIVATION_SESSION', $2)`,
+        [session.user_id, sessionId],
+      );
+    }
     await client.query('COMMIT');
     return { ...result.rows[0], harvest_ready: data.harvestReady };
   } catch (error) {
