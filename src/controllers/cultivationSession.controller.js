@@ -38,7 +38,7 @@ async function adminUpdateGrowth(req, res) {
 
 async function adminUpdateHarvestReadiness(req, res) {
   const session = await cultivationSessionService.updateHarvestReadinessForAdmin(
-    req.params.sessionId, req.body || {},
+    req.params.sessionId, req.body || {}, req.user.user_id,
   );
   res.json({ message: 'Cultivation harvest readiness updated successfully', data: session });
 }
