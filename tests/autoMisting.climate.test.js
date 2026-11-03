@@ -16,8 +16,26 @@ test('shared profile uses intersections and provides an editable valid config',(
  assert.equal(validateConfig(config).cooling_enabled,true);
  assert.equal(config.mushroom_type_id,undefined);
  for(const bad of [[],[{...profiles[0],humidity_min:95}], [{...profiles[0],temperature_min:null}],
-  [{...profiles[0],humidity_min:94}], [...profiles,{...profiles[0],mushroom_type_id:3,temperature_min:30,temperature_max:35}]])
+  [...profiles,{...profiles[0],mushroom_type_id:3,temperature_min:40,temperature_max:45}]])
   assert.equal(suggest(bad).config,null);
+});
+
+test('floor compatibility allows five degrees and five humidity percentage points of tolerance',()=>{
+ const shared=summarize(profiles);
+ assert.deepEqual(shared.common,{temperature_min:20,temperature_max:33,humidity_min:83,humidity_max:100});
+ assert.doesNotThrow(()=>assertCompatible({...config,temperature_min:20,temperature_max:33,humidity_min:83,humidity_max:100,humidity_start_threshold:83},profiles));
+ for(const patch of [{temperature_min:19.9},{temperature_max:33.1},{humidity_min:82.9},{humidity_max:100.1}])
+  assert.throws(()=>assertCompatible({...config,...patch},profiles));
+ const nearby=[...profiles,{...profiles[0],mushroom_type_id:3,temperature_min:30,temperature_max:35}];
+ assert.ok(suggest(nearby).config);
+ assert.doesNotThrow(()=>validateConfig(suggest(nearby).config));
+ const actual=[
+  {mushroom_type_id:8,temperature_min:25,temperature_max:32,humidity_min:82,humidity_max:90},
+  {mushroom_type_id:9,temperature_min:20,temperature_max:32,humidity_min:80,humidity_max:87},
+  {mushroom_type_id:7,temperature_min:20,temperature_max:31,humidity_min:80,humidity_max:87},
+ ];
+ assert.deepEqual(summarize(actual).common,{temperature_min:20,temperature_max:36,humidity_min:77,humidity_max:92});
+ assert.deepEqual(suggest(actual).common,{temperature_min:25,temperature_max:31,humidity_min:82,humidity_max:87});
 });
 test('legacy CO2 snapshots do not block temperature and humidity automation',()=>{
  const legacy=profiles.map((p,i)=>({...p,co2_min:i?1000:350,co2_max:i?1500:500}));

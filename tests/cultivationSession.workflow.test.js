@@ -164,18 +164,27 @@ function isConflictOrInputError(error) {
   return [400, 404, 409].includes(error?.statusCode);
 }
 
-test('WF-03 rejects incompatible profiles and invalid positions atomically', async () => {
+test('WF-03 lets the Farm Operator assign trays without an approved matching profile', async () => {
+  for (const change of [
+    'DELETE FROM iot_auto_control_configs',
+    'UPDATE iot_auto_control_configs SET profile_approved=false',
+    `UPDATE iot_auto_control_configs SET source_profiles='[{"mushroom_type_id":9}]'`,
+  ]) {
+    const db = await setupDatabase();
+    try {
+      const model = loadModel(db);
+      await db.exec(change);
+      const result = await model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] });
+      assert.equal(result.status, 'CULTIVATING');
+      assert.equal(result.assigned_trays_count, 2);
+    } finally { await db.close(); }
+  }
+});
+
+test('WF-03 rejects invalid positions atomically', async () => {
   const db = await setupDatabase();
   try {
     const model = loadModel(db);
-    for (const change of [
-      "UPDATE iot_auto_control_configs SET profile_approved=false WHERE floor_id=1",
-      `UPDATE iot_auto_control_configs SET source_profiles='[{"mushroom_type_id":9}]' WHERE floor_id=1`,
-    ]) {
-      await db.exec(change);
-      await assert.rejects(() => model.assignTraysForAdmin(1, { floorId: 1, trayIds: [1,2] }), { code: 'FLOOR_MUSHROOM_MISMATCH' });
-      await db.exec(`UPDATE iot_auto_control_configs SET profile_approved=true, source_profiles='[{"mushroom_type_id":1}]' WHERE floor_id=1`);
-    }
     for (const change of [
       'UPDATE cultivation_trays SET position_id=NULL WHERE tray_id=1',
       "UPDATE tray_positions SET status='INACTIVE' WHERE position_id=1",
