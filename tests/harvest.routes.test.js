@@ -46,6 +46,7 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
     exports: {
       create: handler('createOrder'),
       list: handler('listOrders'),
+      adminList: handler('listAdminOrders'),
       getById: handler('getOrder'),
       cancel: handler('cancelOrder'),
       harvestHistory: handler('harvestHistory'),

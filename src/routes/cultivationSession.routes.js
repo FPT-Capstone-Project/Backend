@@ -13,7 +13,7 @@ const adminOnly = [authenticate, authorizeRoles(1)];
  *   get:
  *     tags: [Cultivation Sessions]
  *     summary: List cultivation sessions for Admin and Farm Operator
- *     description: Returns data and pagination using the existing session filters.
+ *     description: 'Roles: 1 = Admin, 2 = Farm Operator, 3 = Customer. Only roles 1 and 2 may access. Returns data and pagination using the existing session filters.'
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: query

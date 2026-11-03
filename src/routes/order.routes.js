@@ -47,6 +47,63 @@ router.get('/', authenticate, orderController.list);
 
 /**
  * @openapi
+ * /api/orders/admin:
+ *   get:
+ *     tags: [Orders]
+ *     summary: List orders from all customers for Admin and Farm Operator
+ *     description: 'Roles: 1 = Admin, 2 = Farm Operator, 3 = Customer. Only roles 1 and 2 may access. One record per order; names are comma-separated in item ID order, quantity and total_price sum all items. Item summaries are null without items. Payment status comes from orders.payment_status. No synthetic order_code is generated.'
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: pageSize
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *     responses:
+ *       200:
+ *         description: Customer orders with pagination, newest first with order ID as tie breaker
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       order_id: { type: integer }
+ *                       customer_id: { type: integer }
+ *                       customer_name: { type: string, nullable: true }
+ *                       customer_email: { type: string, nullable: true }
+ *                       package_name: { type: string, nullable: true }
+ *                       mushroom_name: { type: string, nullable: true }
+ *                       quantity: { type: integer, nullable: true, description: Sum of item quantities }
+ *                       total_price: { type: string, nullable: true }
+ *                       subtotal: { type: string }
+ *                       discount: { type: string }
+ *                       shipping_fee: { type: string }
+ *                       total_amount: { type: string }
+ *                       status: { type: string }
+ *                       payment_status: { type: string }
+ *                       created_at: { type: string, format: date-time }
+ *                       updated_at: { type: string, format: date-time }
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     page: { type: integer }
+ *                     pageSize: { type: integer }
+ *                     total: { type: integer }
+ *                     totalPages: { type: integer }
+ *       400: { description: Invalid pagination }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ */
+router.get('/admin', adminOrFarmOperator, orderController.adminList);
+
+/**
+ * @openapi
  * /api/orders/{orderId}/cancel:
  *   patch:
  *     tags: [Orders]
