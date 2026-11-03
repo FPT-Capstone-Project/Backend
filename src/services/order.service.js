@@ -43,6 +43,22 @@ async function getCustomerOrders(userId) {
   return orderModel.findAllByUserId(customerId);
 }
 
+async function getAllForAdmin(query = {}) {
+  const page = query.page === undefined ? 1 : Number(query.page);
+  const pageSize = query.pageSize === undefined ? 20 : Number(query.pageSize);
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger((page - 1) * pageSize)) {
+    throw new AppError('page must be a positive integer', 400);
+  }
+  if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) {
+    throw new AppError('pageSize must be between 1 and 100', 400);
+  }
+  const result = await orderModel.findAllForAdmin({ limit: pageSize, offset: (page - 1) * pageSize });
+  return {
+    orders: result.orders,
+    pagination: { page, pageSize, total: result.total, totalPages: Math.ceil(result.total / pageSize) },
+  };
+}
+
 async function getCustomerOrderDetails(userId, orderId) {
   const customerId = parseId(userId, 'userId');
   const id = parseId(orderId, 'orderId');
@@ -58,6 +74,7 @@ async function cancelCustomerOrder(userId, orderId) {
 }
 
 module.exports = {
+  getAllForAdmin,
   createCultivationOrder,
   getCustomerOrders,
   getCustomerOrderDetails,

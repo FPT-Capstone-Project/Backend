@@ -11,6 +11,11 @@ async function list(req, res) {
   res.json({ data: orders });
 }
 
+async function adminList(req, res) {
+  const result = await orderService.getAllForAdmin(req.query || {});
+  res.json({ data: result.orders, pagination: result.pagination });
+}
+
 async function getById(req, res) {
   const order = await orderService.getCustomerOrderDetails(req.user.user_id, req.params.orderId);
   res.json({ data: order });
@@ -26,4 +31,4 @@ async function harvestHistory(req, res) {
   res.json({ data: history });
 }
 
-module.exports = { create, list, getById, cancel, harvestHistory };
+module.exports = { create, list, adminList, getById, cancel, harvestHistory };

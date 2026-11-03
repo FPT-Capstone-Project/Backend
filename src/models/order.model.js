@@ -7,21 +7,45 @@ const {
   toHoldMinutes,
 } = require('./cultivationReservation.model');
 
+const itemSummaryJoin = `
+     LEFT JOIN LATERAL (
+       SELECT string_agg(rp.package_name, ', ' ORDER BY oi.order_item_id) AS package_name,
+              string_agg(mt.name, ', ' ORDER BY oi.order_item_id) AS mushroom_name,
+              SUM(oi.quantity)::int AS quantity,
+              SUM(oi.total_price) AS total_price
+       FROM order_items oi
+       LEFT JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
+       LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = oi.mushroom_type_id
+       WHERE oi.order_id = o.order_id
+     ) item_summary ON TRUE`;
+
+async function findAllForAdmin({ limit, offset }) {
+  const [result, count] = await Promise.all([
+    pool.query(
+      `SELECT o.order_id, o.user_id AS customer_id, u.full_name AS customer_name,
+              u.email AS customer_email, o.subtotal, o.discount, o.shipping_fee,
+              o.total_amount, o.status, o.payment_status, o.created_at, o.updated_at,
+              item_summary.package_name, item_summary.mushroom_name,
+              item_summary.quantity, item_summary.total_price
+       FROM orders o
+       LEFT JOIN users u ON u.user_id = o.user_id
+       ${itemSummaryJoin}
+       ORDER BY o.created_at DESC, o.order_id DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
+    ),
+    pool.query('SELECT COUNT(*)::int AS total FROM orders'),
+  ]);
+  return { orders: result.rows, total: count.rows[0].total };
+}
+
 async function findAllByUserId(userId) {
   const result = await pool.query(
     `SELECT o.order_id, o.user_id, o.subtotal, o.discount, o.shipping_fee, o.total_amount,
             o.status, o.payment_status, o.created_at, o.updated_at,
             item_summary.package_name, item_summary.mushroom_name, item_summary.total_price
      FROM orders o
-     LEFT JOIN LATERAL (
-       SELECT string_agg(rp.package_name, ', ' ORDER BY oi.order_item_id) AS package_name,
-              string_agg(mt.name, ', ' ORDER BY oi.order_item_id) AS mushroom_name,
-              SUM(oi.total_price) AS total_price
-       FROM order_items oi
-       LEFT JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
-       LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = oi.mushroom_type_id
-       WHERE oi.order_id = o.order_id
-     ) item_summary ON TRUE
+     ${itemSummaryJoin}
      WHERE o.user_id = $1
      ORDER BY o.created_at DESC, o.order_id DESC`,
     [userId],
@@ -257,6 +281,7 @@ async function createCultivationOrder({
 }
 
 module.exports = {
+  findAllForAdmin,
   findAllByUserId,
   findByIdForUser,
   cancelOrderForUser,
