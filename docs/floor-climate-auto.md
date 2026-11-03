@@ -111,7 +111,12 @@ và không nhận snapshot loại nấm do client gửi.
 Nhu cầu bù ẩm (`runtime.demand`) và làm mát (`runtime.cooling_demand`) giữ riêng
 theo ngưỡng bật/tắt. Có một nhu cầu thì có thể phun nếu chưa chạm trần độ ẩm,
 hết cooldown, còn ngân sách và dữ liệu hợp lệ. Khi bật cooling, trần
-`cooling_humidity_limit` được áp dụng cho mọi nhịp vì dùng chung một van.
+`cooling_humidity_limit` được kiểm tra trước khi bắt đầu mọi nhịp vì dùng chung một van.
+Khi đã bật, van phun hết `misting_pulse_ms`, không cắt xung do độ ẩm hoặc
+chênh lệch cảm biến tăng tức thời. Sau khi xác nhận OFF, chờ `cooldown_ms`
+để cảm biến ổn định rồi mới đánh giá nhu cầu cho nhịp tiếp theo. Đây là thời
+gian chờ cấu hình, không phải phép kiểm chứng cảm biến đã ổn định. Stop, mất
+kết nối hoặc dữ liệu cảm biến lỗi/thiếu/quá cũ vẫn có thể ngắt xung.
 Trần phải lớn hơn ngưỡng ngừng bù ẩm và không vượt humidity_max.
 
 Nhiệt độ cao nhưng chạm trần ẩm: không phun thêm; `runtime.last_reason` ghi

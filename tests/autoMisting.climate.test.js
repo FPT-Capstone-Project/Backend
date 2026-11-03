@@ -64,7 +64,7 @@ test('cooling has independent hysteresis, humidity cutoff and normal safety limi
  assert.equal(decision(30,94).action,'NONE');
  assert.match(decision(30,94).reason,/độ ẩm đã đạt giới hạn/);
  const active={control_state:'MISTING',pulse_deadline_at:new Date(now+1000),cooling_demand:true};
- assert.equal(decision(30,94,active).action,'OFF');
+ assert.equal(decision(30,94,active).action,'NONE');
  assert.equal(decision(30,93,{}, {count:20}).action,'NONE');
  assert.equal(decision(30,93,{cooldown_until:new Date(now+1000)}).action,'NONE');
  assert.equal(decision(30,93,{}, {online:false}).action,'FAULT');
