@@ -223,6 +223,11 @@ reserved pulse time; OFF uses the
 existing bounded command timeout. OFF remains pending and is retried on reconnect.
 
 One dedicated database session elects the worker. Other instances stay on standby.
+After recovery succeeds, the elected session refreshes its heartbeat every second,
+independently of floor evaluations and MQTT waits. Start still requires a heartbeat
+less than three seconds old. Heartbeat queries never overlap; recovery and shutdown
+pause the heartbeat, and heartbeat failure closes the ON gate. A slow floor therefore
+does not by itself make the worker appear unavailable when starting another floor.
 Every new leader first reconciles all RUNNING floors, including idle floors, and
 incomplete OFF cycles. Interrupted RUNNING runs become FAULT; their original
 configuration snapshot remains available for audit. Pulse deadlines, cycle IDs

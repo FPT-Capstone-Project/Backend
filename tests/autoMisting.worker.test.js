@@ -4,6 +4,50 @@ const {EventEmitter}=require('node:events');
 const {createWorker}=require('../src/services/autoMisting.worker');
 const {createRepository}=require('../src/models/autoMisting.model');
 
+test('heartbeat stays fresh while a floor evaluation exceeds the Start readiness window',async()=>{
+ let finish,entered,guard,lastHeartbeat=0,heartbeats=0;
+ const blocked=new Promise(resolve=>finish=resolve);
+ const evaluating=new Promise(resolve=>entered=resolve);
+ const client=new EventEmitter();client.release=()=>{};
+ client.query=async sql=>{
+  if(sql.startsWith('INSERT')){lastHeartbeat=Date.now();heartbeats++;}
+  return {rows:[]};
+ };
+ const w=createWorker({acquireLeader:async()=>client,candidates:async()=>[{floor_id:1}]},
+  {recover:async()=>{},evaluate:async(id,preview,canActuate)=>{guard=canActuate;entered();await blocked;}},{error(){}});
+ const running=w.tick();
+ try {
+  await evaluating;
+  await new Promise(resolve=>setTimeout(resolve,3300));
+  assert.ok(heartbeats>=3);
+  assert.ok(Date.now()-lastHeartbeat<3000,'another floor can pass workerReady while evaluation is blocked');
+  assert.equal(guard(),true);
+ } finally {finish();await running;await w.stop();}
+});
+
+test('background heartbeat failure closes the ON gate during blocked evaluation and requires recovery',async()=>{
+ let finish,entered,guard,fail=false,recoveries=0,releases=0;
+ const blocked=new Promise(resolve=>finish=resolve);
+ const evaluating=new Promise(resolve=>entered=resolve);
+ const w=createWorker({acquireLeader:async()=>{
+  const client=new EventEmitter();client.release=()=>releases++;
+  client.query=async sql=>{
+   if(fail && sql.startsWith('INSERT'))throw Object.assign(new Error('heartbeat failed'),{code:'57014'});
+   return {rows:[]};
+  };return client;
+ },candidates:async()=>[{floor_id:1}]},
+ {recover:async()=>recoveries++,evaluate:async(id,preview,canActuate)=>{guard=canActuate;entered();await blocked;}},{error(){}});
+ const running=w.tick();
+ try {
+  await evaluating;fail=true;
+  await new Promise(resolve=>setTimeout(resolve,1200));
+  assert.equal(guard(),false);
+  finish();await running;
+  assert.equal(releases,1);
+  fail=false;await w.tick();assert.equal(recoveries,2);
+ } finally {finish();await running;await w.stop();}
+});
+
 test('only elected worker evaluates; takeover recovers before evaluations; no overlapping ticks',async()=>{
  let owner=null,recoveries=0,evaluations=0,releaseEvaluation;
  const gate=new Promise(resolve=>releaseEvaluation=resolve);

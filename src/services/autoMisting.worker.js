@@ -6,13 +6,37 @@ const {randomUUID}=require('node:crypto');
 // A dedicated session elects one worker. Losing that session closes the local
 // actuation gate; a replacement ends interrupted runs and reconciles OFF.
 function createWorker(repo=repository,control=service,logger=console,transport=mqtt) {
- let timer,leader,busy=false,stopping=false,healthy=false;
+ let timer,heartbeatTimer,heartbeatPending,leader,busy=false,stopping=false,healthy=false;
  const transportVersion=()=>transport.getDisconnectVersion?.() ?? 0;
  let observedTransportVersion=transportVersion();
  const workerId=randomUUID();
  let recoveryReason='Tiến trình lần đầu nhận quyền điều khiển chính (khởi động hoặc tiếp quản)';
  let sessionFailure;
  const diagnostics=stage=>({workerId,pid:process.pid,uptimeSeconds:Math.floor(process.uptime()),stage,at:new Date().toISOString()});
+ function stopHeartbeat() {clearInterval(heartbeatTimer);heartbeatTimer=null;}
+ function heartbeat() {
+  if(heartbeatPending)return heartbeatPending;
+  const session=leader;
+  if(!session || !healthy || stopping || observedTransportVersion!==transportVersion())return Promise.resolve();
+  heartbeatPending=(async()=>{
+   await session.query(`INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())
+    ON CONFLICT(id) DO UPDATE SET heartbeat_at=now()`);
+  })().finally(()=>{heartbeatPending=null;});
+  return heartbeatPending;
+ }
+ function startHeartbeat() {
+  if(heartbeatTimer)return;
+  // The elected session is independent of floor locks and MQTT publication.
+  // Never overlap heartbeat queries or publish readiness during recovery.
+  heartbeatTimer=setInterval(()=>{
+   void heartbeat().catch(error=>{
+    healthy=false;stopHeartbeat();
+    sessionFailure=sessionFailure || failureReason('cập nhật tín hiệu hoạt động',error);
+    logger.error('Không thể cập nhật tín hiệu hoạt động của worker AUTO',error,diagnostics('cập nhật tín hiệu hoạt động'));
+   });
+  },1000);
+  heartbeatTimer.unref();
+ }
  function failureReason(stage,error) {
   // Persist a bounded error code, not arbitrary database error text in the API.
   const code=/^[A-Z0-9_]{1,40}$/.test(error?.code || '')?` (${error.code})`:'';
@@ -46,6 +70,8 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
     await control.recover(recoveryReason);
    }
    if(observedTransportVersion!==transportVersion()) {
+    stopHeartbeat();
+    if(heartbeatPending)await heartbeatPending;
     const version=transportVersion();
     stage='dừng AUTO sau mất kết nối MQTT';
     await control.recover('Mất kết nối MQTT; AUTO đã dừng, cần bấm Start lại');
@@ -55,8 +81,10 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
    await leader.query('SELECT 1');
    if(!healthy)throw new Error('Tiến trình đã mất quyền điều khiển chính');
    stage='cập nhật tín hiệu hoạt động';
-   await leader.query(`INSERT INTO iot_auto_control_worker(id,heartbeat_at) VALUES(1,now())
-    ON CONFLICT(id) DO UPDATE SET heartbeat_at=now()`);
+   await heartbeat();
+   if(!healthy)throw new Error('Tiến trình đã mất quyền điều khiển chính');
+   if(stopping)return;
+   startHeartbeat();
    stage='truy vấn các tầng cần điều khiển';
    const floors=await repo.candidates();
    // Bounded parallelism keeps one delayed device from blocking every floor.
@@ -72,6 +100,8 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
    }
   } catch(error) {
    healthy=false;
+   stopHeartbeat();
+   if(heartbeatPending)await heartbeatPending.catch(()=>{});
    if(leader){
     recoveryReason=sessionFailure || failureReason(stage,error);
     const session=leader;leader=null;session.release(true);
@@ -84,7 +114,9 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
   tick,
   async stop(){
    stopping=true;healthy=false;clearInterval(timer);timer=null;
+   stopHeartbeat();
    while(busy)await new Promise(resolve=>setTimeout(resolve,25));
+   if(heartbeatPending)await heartbeatPending.catch(()=>{});
    if(leader) {
     try {await leader.query('DELETE FROM iot_auto_control_worker');await control.recover('Tắt máy chủ');await leader.query('SELECT pg_advisory_unlock(62003,1)');}
     // Destroy the session even if recovery/unlock fails, releasing its lock.
