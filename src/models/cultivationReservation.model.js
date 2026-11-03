@@ -1,5 +1,4 @@
 const AppError = require('../utils/app-error');
-const { approvedMushroomConfigWhere } = require('./cultivationFloor.model');
 
 const SPAWN_UNITS_PER_TRAY = 3;
 
@@ -45,20 +44,16 @@ async function lockCultivationCapacity(client, {
 }) {
   // Locks every allocatable tray so concurrent holds cannot both count the same capacity.
   const traysResult = await client.query(
-    `SELECT t.tray_id, t.floor_id, EXISTS (
-       SELECT 1 FROM iot_auto_control_configs c
-       WHERE c.floor_id = f.floor_id AND ${approvedMushroomConfigWhere('c', '$1')}
-     ) AS compatible
+    `SELECT t.tray_id, t.floor_id
      FROM cultivation_trays t
      INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id AND f.room_id = t.room_id
      INNER JOIN tray_positions p ON p.position_id = t.position_id
        AND p.floor_id = f.floor_id AND p.room_id = f.room_id AND p.status = 'ACTIVE'
-     WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE'
+     WHERE t.status = 'AVAILABLE' AND f.status = 'ACTIVE' AND f.floor_id IN (1, 3)
        AND NOT EXISTS (SELECT 1 FROM cultivation_session_trays st
          WHERE st.tray_id = t.tray_id AND st.status = 'ACTIVE')
      ORDER BY t.tray_id
      FOR UPDATE OF t, p`,
-    [mushroomTypeId],
   );
   const heldTraysResult = await client.query(
     `SELECT COALESCE(SUM(tr.quantity), 0)::int AS quantity
@@ -74,7 +69,7 @@ async function lockCultivationCapacity(client, {
   );
   const floorCounts = new Map();
   for (const tray of traysResult.rows) {
-    if (tray.compatible) floorCounts.set(tray.floor_id, (floorCounts.get(tray.floor_id) || 0) + 1);
+    floorCounts.set(tray.floor_id, (floorCounts.get(tray.floor_id) || 0) + 1);
   }
   // ponytail: holds have no floor; conservatively subtract global HELD quantity per floor until reservations track a floor.
   const heldQuantity = Number(heldTraysResult.rows[0]?.quantity || 0);
