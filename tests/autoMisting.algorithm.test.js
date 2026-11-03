@@ -46,3 +46,35 @@ test('cooldown, activation cap, duration cap, disconnection and pending OFF bloc
  assert.equal(evaluate({runtime:{control_state:'OFF_PENDING'}}).action,'OFF');
 });
 module.exports={config};
+
+test('spread pauses pulses without faulting; invalid data still faults',()=>{
+ const rows=readings();rows[0].humidity=60;
+ const environment=aggregate(rows,config,now);
+ assert.equal(environment.spreadBlocked,true);
+ assert.equal(evaluate({environment}).action,'NONE');
+ assert.equal(evaluate({environment}).state,'IDLE');
+ assert.equal(evaluate({environment,runtime:{control_state:'MISTING',pulse_deadline_at:new Date(now+1000)}}).action,'NONE');
+ rows[1].is_valid=false;
+ const invalid=aggregate(rows,config,now);
+ assert.equal(invalid.spreadBlocked,false);
+ assert.equal(evaluate({environment:invalid}).state,'SENSOR_FAULT');
+ const cooling={...config,cooling_enabled:true,max_temperature_spread_c:2};
+ const temperatures=readings();temperatures[0].temperature=30;
+ assert.equal(aggregate(temperatures,cooling,now).spreadBlocked,true);
+ temperatures[1].temperature=null;temperatures[0].humidity=60;
+ assert.equal(aggregate(temperatures,cooling,now).spreadBlocked,false);
+});
+
+test('full pulse and settling period preserve demand despite transient humidity; fresh evaluation follows cooldown',()=>{
+ const runtime={control_state:'MISTING',pulse_deadline_at:new Date(now+5000),demand:true};
+ const environment={healthy:true,averageHumidity:100};
+ const during=evaluate({runtime,environment,now:now+4999});
+ assert.equal(during.action,'NONE');assert.equal(during.demand,true);
+ assert.equal(evaluate({runtime,environment,now:now+5000}).action,'OFF');
+ const resting={control_state:'COOLDOWN',cooldown_until:new Date(now+65000),demand:true};
+ assert.equal(evaluate({runtime:resting,environment,now:now+64999}).demand,true);
+ assert.equal(evaluate({runtime:resting,environment,now:now+65000}).demand,false);
+ assert.equal(evaluate({runtime:resting,environment:{healthy:true,averageHumidity:85},now:now+65000}).action,'ON');
+ assert.equal(evaluate({runtime,online:false}).action,'OFF');
+ assert.equal(evaluate({runtime,environment:{healthy:false,reason:'stale'}}).action,'OFF');
+});

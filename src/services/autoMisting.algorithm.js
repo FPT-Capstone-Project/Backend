@@ -64,10 +64,13 @@ function aggregate(rows, c, now = Date.now()) {
  const averageTemperature=temperatures.length?temperatures.reduce((a,s)=>a+s.temperature,0)/temperatures.length:null;
  const spread=good.length?Math.max(...good.map(s=>s.humidity))-Math.min(...good.map(s=>s.humidity)):null;
  const temperatureSpread=temperatures.length?Math.max(...temperatures.map(s=>s.temperature))-Math.min(...temperatures.map(s=>s.temperature)):null;
- const reason=good.length<c.required_valid_sensors?'Dữ liệu cảm biến bị thiếu, không hợp lệ, là bản tin lưu giữ hoặc đã quá cũ':spread>c.max_sensor_spread_percent?'Chênh lệch độ ẩm giữa các cảm biến vượt ngưỡng cho phép':
-  c.cooling_enabled && temperatures.length<c.required_valid_sensors?'Dữ liệu cảm biến nhiệt độ bị thiếu hoặc không hợp lệ':
+ const dataReason=good.length<c.required_valid_sensors?'Dữ liệu cảm biến bị thiếu, không hợp lệ, là bản tin lưu giữ hoặc đã quá cũ':
+  c.cooling_enabled && temperatures.length<c.required_valid_sensors?'Dữ liệu cảm biến nhiệt độ bị thiếu hoặc không hợp lệ':null;
+ const spreadReason=spread>c.max_sensor_spread_percent?'Chênh lệch độ ẩm giữa các cảm biến vượt ngưỡng cho phép':
   c.cooling_enabled && temperatureSpread>c.max_temperature_spread_c?'Chênh lệch nhiệt độ giữa các cảm biến vượt ngưỡng cho phép':null;
- return { sensors, averageHumidity, averageTemperature, spread, temperatureSpread, healthy:!reason, reason };
+ const reason=dataReason || spreadReason;
+ return { sensors, averageHumidity, averageTemperature, spread, temperatureSpread,
+  healthy:!reason, spreadBlocked:!dataReason && !!spreadReason, reason };
 }
 // Demand latches below start; clears at/above stop. While latched, repeat bounded
 // pulses after cooldown, including inside the hysteresis band. No continuous ON.
@@ -76,7 +79,15 @@ function decide({ running, config:c, runtime:r={}, environment:e, online=true, c
  const active=['ON_REQUESTED','MISTING'].includes(r.control_state);
  if (r.control_state==='OFF_PENDING') return {action:'OFF',state:'OFF_PENDING',reason:'Đang chờ xác nhận trạng thái tắt (OFF)'};
  if (active && now>=new Date(r.pulse_deadline_at).getTime()) return {action:'OFF',state:'OFF_PENDING',reason:'Đã hết thời gian của đợt phun sương'};
- if (!online || !e.healthy) return {action:active?'OFF':'FAULT',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT hoặc bộ điều khiển trung tâm mất kết nối'};
+ if (!online || (!e.healthy && !e.spreadBlocked)) return {action:active?'OFF':'FAULT',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT hoặc bộ điều khiển trung tâm mất kết nối'};
+ // Hold demand through the pulse and settling time; transient readings from
+ // mist must not shorten a pulse or change the next cycle's demand latch.
+ const heldFlags={demand:!!r.demand,coolingDemand:!!r.cooling_demand};
+ if (active) return {action:'NONE',state:r.control_state,...heldFlags,reason:'Đang phun đủ thời gian xung đã cấu hình'};
+ if (r.cooldown_until && now<new Date(r.cooldown_until).getTime()) return {action:'NONE',state:'COOLDOWN',...heldFlags,
+  reason:'Đang nghỉ giữa các đợt phun, chờ cảm biến ổn định'};
+ if (e.spreadBlocked) return {action:'NONE',state:'IDLE',
+  demand:!!r.demand,coolingDemand:!!r.cooling_demand,reason:e.reason};
  const demand=e.averageHumidity>=c.humidity_stop_threshold?false:e.averageHumidity<c.humidity_start_threshold?true:!!r.demand;
  const coolingDemand=!!c.cooling_enabled && (e.averageTemperature>=c.temperature_start_threshold?true:
   e.averageTemperature<=c.temperature_stop_threshold?false:!!r.cooling_demand);
@@ -84,9 +95,6 @@ function decide({ running, config:c, runtime:r={}, environment:e, online=true, c
  const flags={demand,coolingDemand};
  const reason=coolingDemand && blocked?'Không thể làm mát do độ ẩm đã đạt giới hạn; cần thông gió hoặc dùng phương pháp làm mát khác':
   demand?'Cần phun sương do độ ẩm thấp':coolingDemand?'Cần làm mát do nhiệt độ cao':'Không còn nhu cầu điều chỉnh nhiệt độ và độ ẩm';
- if (active) return {action:e.averageHumidity>=c.humidity_max || blocked?'OFF':'NONE',state:r.control_state,...flags,
-  reason:blocked?reason:'Đang thực hiện đợt phun sương'};
- if (r.cooldown_until && now<new Date(r.cooldown_until).getTime()) return {action:'NONE',state:'COOLDOWN',...flags,reason:'Đang chờ giữa các đợt phun sương'};
  if ((!demand && !coolingDemand) || blocked || e.averageHumidity>=c.humidity_max) return {action:'NONE',state:'IDLE',...flags,reason};
  if (count>=c.max_activations_per_hour || duration+c.misting_pulse_ms>c.max_cumulative_on_ms_per_hour) return {action:'NONE',state:'IDLE',...flags,reason:'Đã đạt giới hạn phun sương an toàn trong giờ'};
  return {action:'ON',state:'ON_REQUESTED',...flags,reason};

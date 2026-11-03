@@ -277,6 +277,46 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await db.exec('UPDATE iot_sensor_latest SET retained=false,is_valid=false WHERE node_address=1 AND sensor_address=1');
    await assert.rejects(()=>service.start(id,{},null),/không hợp lệ/);
   });
+  await t.test('spread permits Start and pauses new pulses; active pulses finish before settling and reevaluation',async()=>{
+   await db.exec('UPDATE iot_sensor_latest SET is_valid=true,retained=false,humidity=81');await fresh();
+   await db.exec('UPDATE iot_sensor_latest SET humidity=60 WHERE node_address=1 AND sensor_address=1');
+   const started=await service.start(id,{},null);
+   assert.equal(started.mode,'AUTO');
+   const paused=await service.evaluate(id);
+   assert.equal(paused.action,'NONE');assert.match(paused.reason,/Chênh lệch/);
+   assert.equal((await service.status(id)).lastDecision.reason,paused.reason);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   await db.exec('UPDATE iot_sensor_latest SET humidity=81');
+   now+=config.cooldown_ms+config.evaluation_interval_ms;await fresh();
+   assert.equal((await service.evaluate(id)).action,'ON');
+   await db.exec('UPDATE iot_sensor_latest SET humidity=60 WHERE node_address=1 AND sensor_address=1');
+   now+=config.misting_pulse_ms-1;await fresh();
+   assert.equal((await service.evaluate(id)).action,'NONE');
+   assert.equal((await repo.runtime(id)).control_state,'MISTING');
+   now+=1;await fresh();
+   assert.equal((await service.evaluate(id)).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   await db.exec('UPDATE iot_sensor_latest SET humidity=100');
+   now+=config.cooldown_ms-config.evaluation_interval_ms;await fresh();
+   assert.equal((await service.evaluate(id)).state,'COOLDOWN');
+   assert.equal((await repo.runtime(id)).demand,true);
+   now+=config.evaluation_interval_ms;await fresh();
+   assert.equal((await service.evaluate(id)).action,'NONE');
+   assert.equal((await repo.runtime(id)).demand,false);
+   await service.stop(id,null);
+   await db.exec('UPDATE iot_sensor_latest SET humidity=81');
+  });
+  await t.test('spread appearing immediately before real ON keeps AUTO running without publication',async()=>{
+   now+=config.cooldown_ms+config.evaluation_interval_ms;await fresh();
+   await service.start(id,{dryRun:false},1);
+   beforeOn=()=>db.exec('UPDATE iot_sensor_latest SET humidity=60 WHERE node_address=1 AND sensor_address=1');
+   const before=calls.filter(c=>c.action==='ON').length;
+   try {assert.equal((await service.evaluate(id)).action,'NONE');} finally {beforeOn=null;}
+   assert.equal(calls.filter(c=>c.action==='ON').length,before);
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   await service.stop(id,null);
+   await db.exec('UPDATE iot_sensor_latest SET humidity=81');
+  });
   await t.test('authorized manual OFF wins a race immediately before ON reservation',async()=>{
    await db.exec('UPDATE iot_sensor_latest SET is_valid=true,retained=false');await fresh();
    await db.query("UPDATE iot_ssr_states SET reported_state='OFF',state_reported_at=$1",[new Date(now)]);
@@ -369,6 +409,9 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal(entry.average_temperature,30);
     await db.exec('UPDATE iot_sensor_latest SET humidity=94');
     now+=250;await service.evaluate(id);
+    assert.equal(calls.at(-1).action,'ON');
+    now=new Date((await repo.runtime(id)).pulse_deadline_at).getTime();await fresh();
+    await service.evaluate(id);
     assert.equal(calls.at(-1).action,'OFF');
     now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);
     await service.evaluate(id);await service.stop(id,1);
