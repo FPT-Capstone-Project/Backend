@@ -387,8 +387,10 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     assert.equal((await repo.run(id)).status,'FAULT');
     assert.equal((await repo.runtime(id)).control_state,'DISABLED');
     await db.exec('UPDATE mushroom_conditions SET humidity_min=96,humidity_max=99 WHERE mushroom_type_id=2');
+    assert.ok((await service.suggestions(id)).config);
+    await db.exec('UPDATE mushroom_conditions SET temperature_min=40,temperature_max=45 WHERE mushroom_type_id=2');
     assert.equal((await service.suggestions(id)).config,null);
-    await db.exec('UPDATE mushroom_conditions SET humidity_min=88,humidity_max=96 WHERE mushroom_type_id=2');
+    await db.exec('UPDATE mushroom_conditions SET humidity_min=88,humidity_max=96,temperature_min=25,temperature_max=27 WHERE mushroom_type_id=2');
     const currentSuggestion=await service.suggestions(id);
     await service.save(id,{...currentSuggestion.config,profile_approved:true},1);
     await fresh();await service.start(id,{},1);await service.evaluate(id);

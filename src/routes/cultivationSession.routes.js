@@ -13,7 +13,7 @@ const adminOnly = [authenticate, authorizeRoles(1)];
  *   get:
  *     tags: [Cultivation Sessions]
  *     summary: List trays currently assignable to a qualified cultivation session
- *     description: Returns AVAILABLE trays with ACTIVE positions in the same floor and room, on ACTIVE floors with no active cultivation-session assignment. Optionally filter by floorId. Read-only preview; assignment rechecks positions and mushroom compatibility under row locks.
+ *     description: Returns AVAILABLE trays with ACTIVE positions in the same floor and room, on ACTIVE floors with no active cultivation-session assignment. Optionally filter by floorId. Read-only preview; assignment rechecks positions and availability under row locks.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -76,7 +76,7 @@ router.get('/admin/:sessionId', adminOrFarmOperator, cultivationSessionControlle
  *   post:
  *     tags: [Cultivation Sessions]
  *     summary: Assign selected floor and trays to a ready cultivation session
- *     description: Submit floorId and trayIds explicitly. All selected trays must belong to the ACTIVE floor, with an approved matching mushroom profile and ACTIVE positions in the same room. Atomic assignment requires READY_FOR_CULTIVATION and exactly tray_quantity trays. Success starts CULTIVATING with initial progress at 0 percent.
+ *     description: Submit floorId and trayIds explicitly. The Farm Operator determines cultivation suitability. All selected trays must belong to the ACTIVE floor with ACTIVE positions in the same room. Atomic assignment requires READY_FOR_CULTIVATION and exactly tray_quantity trays. Success starts CULTIVATING with initial progress at 0 percent.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -133,7 +133,7 @@ router.get('/admin/:sessionId', adminOrFarmOperator, cultivationSessionControlle
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
  *       404: { description: Session, floor, or selected tray not found }
- *       409: { description: 'INVALID_SESSION_STATUS, INVALID_TRAY_QUANTITY, FLOOR_NOT_ACTIVE, FLOOR_MUSHROOM_MISMATCH, TRAY_FLOOR_MISMATCH, TRAY_UNAVAILABLE, TRAY_POSITION_UNAVAILABLE, or TRAYS_ALREADY_ASSIGNED' }
+ *       409: { description: 'INVALID_SESSION_STATUS, INVALID_TRAY_QUANTITY, FLOOR_NOT_ACTIVE, TRAY_FLOOR_MISMATCH, TRAY_UNAVAILABLE, TRAY_POSITION_UNAVAILABLE, or TRAYS_ALREADY_ASSIGNED' }
  */
 router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionController.adminAssignTrays);
 

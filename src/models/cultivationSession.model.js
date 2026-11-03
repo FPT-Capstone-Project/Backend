@@ -1,6 +1,5 @@
 const pool = require('../config/db');
 const AppError = require('../utils/app-error');
-const { approvedMushroomConfigWhere } = require('./cultivationFloor.model');
 
 const sessionFrom = `
   FROM cultivation_sessions s
@@ -247,16 +246,6 @@ async function assignTraysForAdmin(sessionId, data) {
     if (floor.status !== 'ACTIVE') {
       throw new AppError('Cultivation floor is not active', 409, 'FLOOR_NOT_ACTIVE');
     }
-    const config = await client.query(
-      `SELECT c.id FROM iot_auto_control_configs c
-       WHERE c.floor_id = $1 AND ${approvedMushroomConfigWhere('c', '$2')}
-       FOR SHARE OF c`,
-      [floorId, session.mushroom_type_id],
-    );
-    if (!config.rows.length) {
-      throw new AppError('Selected floor has no approved profile for the session mushroom type', 409, 'FLOOR_MUSHROOM_MISMATCH');
-    }
-
     const selectedTrays = await client.query(
       `SELECT t.tray_id, t.tray_code, t.tray_name, t.floor_id, t.status, t.room_id, t.position_id
        FROM cultivation_trays t

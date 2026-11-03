@@ -7,7 +7,7 @@ const preset = {
  max_temperature_spread_c: 3, max_activations_per_hour: 20,
  max_cumulative_on_ms_per_hour: 200000,
 };
-function summarize(profiles) {
+function summarize(profiles,tolerance=5) {
  const sourceProfiles=profiles.map(p=>Object.fromEntries(
   ['mushroom_type_id','temperature_min','temperature_max','humidity_min','humidity_max']
    .map(k=>[k,p[k]==null?null:Number(p[k])])))
@@ -25,8 +25,8 @@ function summarize(profiles) {
    issues.push(`Điều kiện ${label} bị thiếu hoặc không hợp lệ`);
    continue;
   }
-  const min=Math.max(...sourceProfiles.map(p=>p[`${metric}_min`]));
-  const max=Math.min(...sourceProfiles.map(p=>p[`${metric}_max`]));
+  const min=Math.max(metric==='temperature'?-40:0,...sourceProfiles.map(p=>p[`${metric}_min`]-tolerance));
+  const max=Math.min(metric==='temperature'?80:100,...sourceProfiles.map(p=>p[`${metric}_max`]+tolerance));
   common[`${metric}_min`]=min;common[`${metric}_max`]=max;
   if(min>=max)issues.push(`Không có khoảng ${label} chung`);
   else if((metric==='humidity' && max-min<=2) || (metric==='temperature' && max-min<1))
@@ -35,7 +35,9 @@ function summarize(profiles) {
  return {sourceProfiles,common,issues,warnings};
 }
 function suggest(profiles) {
- const result=summarize(profiles);
+ // Prefer the original shared range; allow +/-5 C or humidity percentage points when needed.
+ const preferred=summarize(profiles,0);
+ const result=preferred.issues.length?summarize(profiles):preferred;
  const {common:c,issues}=result;
  const config=issues.length?null:{
   config_source:'FLOOR',profile_name:'Cấu hình chung cho tầng',profile_approved:false,
