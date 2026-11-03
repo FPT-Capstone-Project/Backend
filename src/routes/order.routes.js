@@ -16,6 +16,30 @@ const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
  *     responses:
  *       200:
  *         description: Customer order list
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     description: One record per order, retaining all existing order fields. Names are joined with commas in item ID order; total_price sums item totals. Item summary fields are null for orders without items.
+ *                     properties:
+ *                       order_id: { type: integer }
+ *                       user_id: { type: integer }
+ *                       subtotal: { type: string }
+ *                       discount: { type: string }
+ *                       shipping_fee: { type: string }
+ *                       total_amount: { type: string }
+ *                       status: { type: string }
+ *                       payment_status: { type: string, description: Current orders.payment_status }
+ *                       created_at: { type: string, format: date-time }
+ *                       updated_at: { type: string, format: date-time }
+ *                       package_name: { type: string, nullable: true }
+ *                       mushroom_name: { type: string, nullable: true }
+ *                       total_price: { type: string, nullable: true }
  *       401:
  *         description: Missing or invalid JWT token
  */

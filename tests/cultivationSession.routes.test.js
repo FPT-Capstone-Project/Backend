@@ -29,8 +29,8 @@ test('session management allows operator inspections and restricts cancellation 
   };
   require.cache[controllerPath] = {
     exports: {
-      adminList: noop,
-      adminGetById: noop,
+      adminList: (req, res) => res.json({ data: [], pagination: { page: 1 } }),
+      adminGetById: (req, res) => res.json({ data: { session_id: req.params.sessionId } }),
       adminListAvailableTrays: (req, res) => {
         availableTrayCalls += 1;
         availableFloorId = req.query.floorId;
@@ -89,6 +89,19 @@ test('session management allows operator inspections and restricts cancellation 
   await new Promise((resolve) => server.once('listening', resolve));
 
   try {
+    for (const role of [1, 2, 3]) {
+      const headers = { authorization: `Bearer ${jwt.sign({ sub: String(role) }, env.jwtSecret)}` };
+      const baseUrl = `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin`;
+      const list = await fetch(baseUrl, { headers });
+      const detail = await fetch(`${baseUrl}/77`, { headers });
+      assert.equal(list.status, role === 3 ? 403 : 200);
+      assert.equal(detail.status, role === 3 ? 403 : 200);
+      if (role !== 3) {
+        assert.deepEqual(await list.json(), { data: [], pagination: { page: 1 } });
+        assert.deepEqual(await detail.json(), { data: { session_id: '77' } });
+      }
+    }
+    assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin`)).status, 401);
     const operatorToken = jwt.sign({ sub: '2' }, env.jwtSecret);
     const inspectionResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/session-trays/14/inspections`,

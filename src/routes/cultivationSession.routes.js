@@ -9,6 +9,29 @@ const adminOnly = [authenticate, authorizeRoles(1)];
 
 /**
  * @openapi
+ * /api/cultivation-sessions/admin:
+ *   get:
+ *     tags: [Cultivation Sessions]
+ *     summary: List cultivation sessions for Admin and Farm Operator
+ *     description: Returns data and pagination using the existing session filters.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: pageSize
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *     responses:
+ *       200: { description: Cultivation session list with pagination }
+ *       400: { description: Invalid filters or pagination }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ */
+router.get('/admin', adminOrFarmOperator, cultivationSessionController.adminList);
+
+/**
+ * @openapi
  * /api/cultivation-sessions/admin/available-trays:
  *   get:
  *     tags: [Cultivation Sessions]

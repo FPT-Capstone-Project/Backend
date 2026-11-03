@@ -9,11 +9,21 @@ const {
 
 async function findAllByUserId(userId) {
   const result = await pool.query(
-    `SELECT order_id, user_id, subtotal, discount, shipping_fee, total_amount,
-            status, payment_status, created_at, updated_at
-     FROM orders
-     WHERE user_id = $1
-     ORDER BY created_at DESC, order_id DESC`,
+    `SELECT o.order_id, o.user_id, o.subtotal, o.discount, o.shipping_fee, o.total_amount,
+            o.status, o.payment_status, o.created_at, o.updated_at,
+            item_summary.package_name, item_summary.mushroom_name, item_summary.total_price
+     FROM orders o
+     LEFT JOIN LATERAL (
+       SELECT string_agg(rp.package_name, ', ' ORDER BY oi.order_item_id) AS package_name,
+              string_agg(mt.name, ', ' ORDER BY oi.order_item_id) AS mushroom_name,
+              SUM(oi.total_price) AS total_price
+       FROM order_items oi
+       LEFT JOIN rental_packages rp ON rp.package_id = oi.rental_package_id
+       LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = oi.mushroom_type_id
+       WHERE oi.order_id = o.order_id
+     ) item_summary ON TRUE
+     WHERE o.user_id = $1
+     ORDER BY o.created_at DESC, o.order_id DESC`,
     [userId],
   );
   return result.rows;
