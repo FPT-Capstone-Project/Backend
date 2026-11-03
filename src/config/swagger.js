@@ -55,7 +55,7 @@ const options = {
               type: 'integer',
               minimum: 1,
               example: 3,
-              description: 'Optional; role IDs in the current seed: 1 = Farm Operator, 2 = Admin, 3 = Customer. Without roleId, Customer (3) is assigned.',
+              description: 'Optional; role IDs: 1 = Admin, 2 = Farm Operator, 3 = Customer. Without roleId, Customer (3) is assigned.',
             },
             phone: { type: 'string', example: '0900000000' },
             address: { type: 'string', example: 'Ho Chi Minh City' },
