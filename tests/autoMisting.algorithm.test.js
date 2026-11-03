@@ -47,7 +47,7 @@ test('cooldown, activation cap, duration cap, disconnection and pending OFF bloc
 });
 module.exports={config};
 
-test('spread pauses pulses without faulting; invalid data still faults',()=>{
+test('spread pauses new pulses; invalid data waits without ending AUTO',()=>{
  const rows=readings();rows[0].humidity=60;
  const environment=aggregate(rows,config,now);
  assert.equal(environment.spreadBlocked,true);
@@ -58,6 +58,7 @@ test('spread pauses pulses without faulting; invalid data still faults',()=>{
  const invalid=aggregate(rows,config,now);
  assert.equal(invalid.spreadBlocked,false);
  assert.equal(evaluate({environment:invalid}).state,'SENSOR_FAULT');
+ assert.equal(evaluate({environment:invalid}).action,'NONE');
  const cooling={...config,cooling_enabled:true,max_temperature_spread_c:2};
  const temperatures=readings();temperatures[0].temperature=30;
  assert.equal(aggregate(temperatures,cooling,now).spreadBlocked,true);

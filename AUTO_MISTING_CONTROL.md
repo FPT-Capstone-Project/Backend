@@ -4,6 +4,13 @@ Automatic control is disabled until an operator explicitly starts a floor. Savin
 configuration never creates a run. Start defaults to **dry run**. Real publication
 also requires deployment-level enablement and an attested ESP32 watchdog.
 
+Once started, AUTO is persistent operator intent: restart/deploy, temporary
+DB/MQTT loss and missing/stale sensor data pause execution instead of disabling
+AUTO. Recovery discards the interrupted pulse, confirms fresh OFF, waits the
+configured cooldown and rechecks all prerequisites before a new pulse. Explicit
+Stop/manual OFF and terminal mapping/profile/watchdog faults still end the run.
+Existing historical STOPPED/FAULT runs are never restarted by this change.
+
 ## Installation and data migration
 
 Apply `migrations/005_add_auto_misting_control.sql` once, after migration 004,
@@ -162,7 +169,9 @@ operator configuration. Excessive max-minus-min humidity spread (or temperature
 spread when cooling is enabled) pauses misting and records the reason without
 ending AUTO. An active pulse finishes its configured duration. Once spread returns within limits,
 evaluation resumes automatically, respecting cooldown and hourly budgets.
-Missing, invalid or stale sensor data still blocks Start and faults a running session.
+Missing, invalid or stale sensor data still blocks Start and pauses a running
+session in SENSOR_FAULT (or OFF_PENDING if a pulse must be stopped). Valid data
+allows evaluation to resume without Start; the run ID and hourly budgets remain.
 Temperature is averaged from valid finite readings for display.
 
 The demand latch is set when humidity is strictly below start. It stays set
@@ -178,16 +187,16 @@ faults can still interrupt a pulse. Humidity and cooling humidity limits gate
 the next pulse rather than cutting the current one short.
 
 `DISABLED → IDLE → ON_REQUESTED → MISTING → OFF_PENDING → COOLDOWN → IDLE` is the
-normal progression. SENSOR_FAULT and DEVICE_OFFLINE end the run with FAULT;
-connection recovery never resumes AUTO. A failure during a pulse requests OFF;
-a timed-out/failed MQTT ON also ends the run and requires new live OFF confirmation.
-The operator must explicitly Start again. Reservations still count toward hourly
-limits. Stale/retained OFF feedback is refreshed before ON; missing feedback ends
-the run, keeps OFF_PENDING and blocks ON. Publication has up to five
+normal progression. SENSOR_FAULT and transport interruptions preserve RUNNING
+and mode AUTO, but prohibit ON. A failure during a pulse requests OFF. MQTT
+publication failures/timeouts require fresh live OFF confirmation and cooldown
+before retry; reservations still count toward hourly limits. Stale/retained OFF
+feedback is refreshed before ON; missing feedback keeps OFF_PENDING and blocks ON.
+Publication has up to five
 seconds, capped by the remaining reserved pulse time, rather than a fixed one-second
 budget. Profile changes, missing device safety verification, unexpected failures,
-and operator Stop also end the run and require a new Start. Worker recovery and
-backend shutdown end interrupted runs and reconcile OFF without resuming ON.
+and operator Stop end the run and require a new Start. Worker recovery and
+backend shutdown preserve running intent and reconcile OFF before resuming.
 OFF reconciliation remains eligible for
 the worker even after a run is STOPPED/FAULT. MANUAL floors do not run misting
 decisions or send automatic commands, except completing an already-owned OFF.
@@ -229,14 +238,15 @@ less than three seconds old. Heartbeat queries never overlap; recovery and shutd
 pause the heartbeat, and heartbeat failure closes the ON gate. A slow floor therefore
 does not by itself make the worker appear unavailable when starting another floor.
 Every new leader first reconciles all RUNNING floors, including idle floors, and
-incomplete OFF cycles. Interrupted RUNNING runs become FAULT; their original
-configuration snapshot remains available for audit. Pulse deadlines, cycle IDs
+incomplete OFF cycles. Interrupted RUNNING runs stay RUNNING, with their original
+operator, run ID and immutable configuration snapshot. Pulse deadlines, cycle IDs
 and demand latches are cleared; hourly reservations are retained. Real floors enter OFF_PENDING and send
 OFF even if stored feedback already says OFF. New, non-retained OFF feedback must
 be at or after the recovery OFF request, within sensor_max_age_ms, and not paired
-with a desired ON state. Confirmation moves the stopped runtime to DISABLED.
-Explicit Start rechecks mapping, crop profile, watchdog, MQTT and sensors before
-creating a new run. Missing feedback keeps OFF_PENDING even though mode is MANUAL;
+with a desired ON state. Confirmation moves a running runtime to COOLDOWN and
+a stopped runtime to DISABLED. Subsequent evaluation checks mapping, crop profile,
+watchdog, MQTT, current sensor readings and hourly budgets before any new ON.
+Missing feedback keeps OFF_PENDING; mode remains AUTO for a running session.
 STOPPED/FAULT runs are never reactivated. Dry runs simulate OFF without publishing.
 Per-floor locks,
 rechecking run state before ON, a leadership gate before publication, and durable
@@ -246,9 +256,9 @@ its own sweeps. Database sessions must be stable: use a direct connection or
 session-mode pooler, **not transaction-mode pooling**, for advisory locks.
 
 A failed candidate-list query or unhandled evaluation error closes the ON gate
-and releases the dedicated leader session. Reacquisition ends interrupted runs
-before any further evaluation. A disconnect counter also detects brief MQTT
-outages that reconnect between worker ticks. INTERRUPTION_STOP log reasons distinguish initial
+and releases the dedicated leader session. Reacquisition reconciles interrupted
+runs before further evaluation. A disconnect counter also detects brief MQTT
+outages that reconnect between worker ticks. AUTO_PAUSED log reasons distinguish initial
 leadership acquisition (startup or takeover) from reacquisition after a database
 session error, session closure, health-check failure, heartbeat failure or failed
 recovery. Reacquisition reasons include the database error code when available.
@@ -260,21 +270,32 @@ Use `npm start` for
 unattended AUTO operation: `npm run dev` uses nodemon and can restart on file edits.
 
 Shutdown closes the ON gate and requests OFF while MQTT is still available,
-ending RUNNING runs, then closes MQTT/database connections. Leadership loss during
-an ON attempt also ends the run and requires OFF reconciliation.
-A crash leaves durable state for the next leader to stop and reconcile.
+preserving RUNNING intent, then closes MQTT/database connections. Leadership loss
+during an ON attempt cancels further ON and requires OFF reconciliation.
+A crash leaves durable state for the next leader to reconcile before resuming.
 If OFF cannot be
 confirmed, mapping/configuration changes and new Start remain blocked. Pending
 OFF is a visible unresolved condition, not silently reset to MANUAL-safe.
 
-No new migration is required for this stop-on-disconnection behavior. Historical
+No new migration is required for this pause-and-recover behavior. Historical
 STOPPED/FAULT runs remain stopped. Deploy this version to every backend instance
-before testing; an older instance may still implement automatic resumption.
+before testing; an older instance can still permanently end interrupted runs.
 This does not keep the hosting process awake: automation cannot evaluate or
 publish while the host is asleep or offline.
 While the database is unreachable, run status cannot be persisted immediately:
-the worker blocks ON locally and stops old runs once database access returns.
+the worker blocks ON locally and reconciles OFF once database access returns.
 Physical OFF during backend/DB/MQTT failure depends on the verified device watchdog.
+
+The status API adds `autoStatus` (`RUNNING`, `PAUSED`, `STOPPED`) and `pauseReason`.
+`PAUSED` means a RUNNING session is waiting in OFF_PENDING, SENSOR_FAULT or
+DEVICE_OFFLINE. OFF_PENDING also covers normal end-of-pulse confirmation.
+`RUNNING` does not mean the valve is ON: IDLE and COOLDOWN are normal AUTO states.
+Use runtime.control_state, cooldownRemainingMs and reported SSR state for detail.
+The UI should keep the AUTO toggle enabled when mode=AUTO, display pauseReason,
+and keep Stop available. Do not treat SENSOR_FAULT as an ended run; use run.status.
+Sensor wait logs are emitted on reason/state changes, not every polling tick.
+OFF reconciliation is evaluated before sensor/profile/budget reads so those reads
+cannot prevent a pending OFF from being processed.
 
 Errors: 400 invalid input, 401 missing/invalid JWT, 403 missing permission, 404
 unknown floor, 409 incompatible state/mapping/sensors/safety gate, 503 unavailable
@@ -307,8 +328,8 @@ AUTO_MISTING_VERIFIED_WATCHDOGS={"master01":10000}
 This is a deployment attestation, not a backend firmware capability probe. The
 attested limit must be at least the requested pulse and at most 60 seconds. Then
 restart, wait for live sensors and OFF feedback, and explicitly Start with
-`{"dryRun":false}` for a new run. Restart ends existing RUNNING runs and reconciles
-OFF; previously STOPPED/FAULT runs remain stopped.
+`{"dryRun":false}` for a new run. Restart preserves existing RUNNING intent but
+requires OFF reconciliation, cooldown and fresh checks; STOPPED/FAULT stay stopped.
 
 Backend deadlines are **not a guarantee of physical valve safety**. Event-loop,
 database, network, sweep backlog, broker and device delays can delay OFF. The
@@ -338,7 +359,10 @@ it does not bypass the explicit Start workflow.
 
 ## Change inventory and verification
 
-Final local verification: `npm test` passed **85 tests, 0 failures**.
+The recovery change is verified with isolated PostgreSQL and mocked MQTT,
+including restart from IDLE/MISTING, outage and sensor recovery, stale/retained OFF,
+cooldown and hourly budgets, two independent floors, Stop races and terminal faults.
+Final local verification: `npm test` passed **254 tests, 0 failures**.
 `git diff --check` found no whitespace errors. No physical-device test was run.
 
 | File | Change |
