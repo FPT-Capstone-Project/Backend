@@ -83,7 +83,7 @@ test('lost leader session prevents activation and forces recovery on next acquis
  await w.tick();assert.equal(canActivate,false);
  await w.tick();await w.tick();assert.equal(recoveries,3);await w.stop();
 });
-test('candidate query failure closes leadership and requires stopping interrupted AUTO before evaluation',async()=>{
+test('candidate query failure closes leadership and requires reconciling interrupted AUTO before evaluation',async()=>{
  let acquisitions=0,recoveries=0,evaluations=0,releases=0,queries=0;
  const failure=new Error('temporary candidate query failure'),logs=[];
  const client=new EventEmitter();
@@ -113,7 +113,7 @@ test('connection error during recovery cannot reopen the actuation gate',async()
  await w.stop();
 });
 
-test('evaluation DB failure closes sibling ON gates and stops old runs before retry',async()=>{
+test('evaluation DB failure closes sibling ON gates and recovers before retry',async()=>{
  let recoveries=0,releases=0,fail=true;
  const repo={acquireLeader:async()=>{
   const client=new EventEmitter();client.query=async()=>({rows:[]});client.release=()=>releases++;return client;
@@ -130,7 +130,7 @@ test('evaluation DB failure closes sibling ON gates and stops old runs before re
  assert.deepEqual(seen,[1,2,1,2,3]);await w.stop();
 });
 
-test('brief MQTT disconnect between ticks still ends runs before any new evaluation',async()=>{
+test('brief MQTT disconnect between ticks still reconciles OFF before any new evaluation',async()=>{
  let version=0,guard;
  const events=[];
  const client=new EventEmitter();client.query=async()=>({rows:[]});client.release=()=>{};

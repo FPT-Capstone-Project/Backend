@@ -106,16 +106,17 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    await log(id,run,'OFF_FAILED',error.message);
   }
  }
- // Caller holds both locks. An interrupted run must never resume automatically.
+ // Caller holds both locks. Preserve explicit AUTO intent across transport/process
+ // interruptions, but discard the old pulse and require a new OFF + cooldown.
+ // STOPPED/FAULT runs retain their terminal status and can only reconcile OFF.
  async function reconcileInterruption(f,run,reason) {
   const id=f.floor_id;
   await repo.transaction(async()=>{
-   if(run.status==='RUNNING')await repo.endRun(id,null,reason,'FAULT');
    await repo.runtimeSet(id,{run_id:run.id,control_state:'OFF_PENDING',
     cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,off_requested_at:null,
     demand:false,cooling_demand:false,last_evaluated_at:null,last_reason:reason,
     last_error:'Đang chờ phản hồi trực tiếp xác nhận tắt (OFF) sau khi tiến trình bị gián đoạn'});
-   await log(id,run,'INTERRUPTION_STOP',reason);
+   await log(id,run,run.status==='RUNNING'?'AUTO_PAUSED':'INTERRUPTION_STOP',reason);
   });
   await requestOffLocked(f,run,reason);
  }
@@ -322,7 +323,10 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   },
   async status(value) {
    const id=positive(value),f=await repo.floor(id),run=await repo.run(id),runtime=await repo.runtime(id);
+   const paused=run?.status==='RUNNING' && ['OFF_PENDING','SENSOR_FAULT','DEVICE_OFFLINE'].includes(runtime.control_state);
    return {mode:run?.status==='RUNNING'?'AUTO':'MANUAL',run:run || null,runtime,
+    autoStatus:run?.status!=='RUNNING'?'STOPPED':paused?'PAUSED':'RUNNING',
+    pauseReason:paused?(runtime.last_error || runtime.last_reason):null,
     environment:await api.environment(id),ssr:await repo.ssr(f) || null,
     cooldownRemainingMs:Math.max(0,new Date(runtime.cooldown_until || 0).getTime()-now()),
     lastDecision:await repo.one('SELECT * FROM iot_auto_control_logs WHERE floor_id=$1 ORDER BY id DESC LIMIT 1',[id]) || null};
@@ -340,9 +344,20 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     if(!c)throw new AppError('Hãy lưu cấu hình trước',409);
     // Connection failures bypass the normal evaluation interval and pulse deadline.
     if(!preview && run?.status==='RUNNING' && (!canActuate() || (!run.dry_run && !online(f)))) {
-     const reason='Mất kết nối hoặc quyền điều khiển; AUTO đã dừng, cần bấm Start lại';
-     await repo.lockChannel(f.master_id,f.misting_ssr_channel,()=>reconcileInterruption(f,run,reason));
+     const reason='AUTO tạm chờ kết nối và quyền điều khiển; sẽ tiếp tục sau xác nhận OFF và kiểm tra điều kiện';
+     await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+      const current=await repo.run(id);
+      if(current?.id!==run.id || current.status!=='RUNNING')return;
+      // Do not erase the OFF request timestamp on every disconnected tick.
+      if(rt.control_state==='OFF_PENDING')await requestOffLocked(f,current,reason);
+      else await reconcileInterruption(f,current,reason);
+     });
      return {action:'OFF',state:(await repo.runtime(id)).control_state,reason};
+    }
+    // OFF reconciliation must not depend on sensor/profile/budget queries.
+    if(!preview && rt.control_state==='OFF_PENDING' && run) {
+     await requestOff(f,run,'Xác nhận lại lệnh tắt (OFF) đang chờ');
+     return {action:'OFF',state:(await repo.runtime(id)).control_state,reason:'Đang xác nhận tắt (OFF) trước khi tiếp tục'};
     }
     if(!preview && run?.status==='RUNNING' && !['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)
      && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)
@@ -355,13 +370,15 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      if(run?.status==='RUNNING')await verifyProfile(id,c);
      return {dryRun:true,decision,environment:e};
     }
-    if(rt.control_state==='OFF_PENDING' && run) {await requestOff(f,run,'Xác nhận lại lệnh tắt (OFF) đang chờ');return decision;}
     if(run?.status!=='RUNNING')return decision;
     const active=['ON_REQUESTED','MISTING'].includes(rt.control_state);
     try {
      if(f.status!=='ACTIVE' || f.room_id!==f.cultivation_room_id)throw new AppError('Thông tin gán thiết bị cho tầng không hợp lệ hoặc tầng không hoạt động',409);
      await verifyProfile(id,c);
     } catch(error) {
+     // A failed DB read is not evidence that the crop profile is incompatible.
+     // Let the worker recover its session instead of permanently ending AUTO.
+     if(!(error instanceof AppError))throw error;
      await stopRecord(id,null,error.message,'FAULT');
      await log(id,run,'FAULT',error.message,e);
      if(active)await requestOff(f,run,error.message);
@@ -370,12 +387,15 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     if(!active && rt.last_evaluated_at && now()-new Date(rt.last_evaluated_at)<c.evaluation_interval_ms)return decision;
     if(!run.dry_run && !hardware(f,c)) {await stopRecord(id,null,'Thiết bị chưa được xác minh an toàn','FAULT');if(active)await requestOff(f,run,'Đã chặn điều khiển thiết bị để bảo đảm an toàn');return;}
     if(['SENSOR_FAULT','DEVICE_OFFLINE'].includes(decision.state)) {
-     await stopRecord(id,null,decision.reason,'FAULT');
-     await log(id,run,'FAULT',decision.reason,e);
-     await repo.runtimeSet(id,{control_state:active?'OFF_PENDING':decision.state,last_error:decision.reason,
-      last_reason:decision.reason,last_evaluated_at:new Date(now())});
-     if(active)await requestOff(f,run,decision.reason);
-     return {...decision,action:active?'OFF':'FAULT',state:active?'OFF_PENDING':decision.state};
+     await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
+      if((await repo.run(id))?.status!=='RUNNING')return;
+      if(rt.control_state!==decision.state || rt.last_reason!==decision.reason)
+       await log(id,run,'AUTO_PAUSED',decision.reason,e);
+      await repo.runtimeSet(id,{control_state:active?'OFF_PENDING':decision.state,last_error:decision.reason,
+       demand:false,cooling_demand:false,last_reason:decision.reason,last_evaluated_at:new Date(now())});
+      if(active)await requestOffLocked(f,run,decision.reason);
+     });
+     return {...decision,action:active?'OFF':'NONE',state:active?'OFF_PENDING':decision.state};
     }
     if(decision.action==='OFF') {
      if(decision.demand!==undefined)await repo.runtimeSet(id,{demand:decision.demand,cooling_demand:decision.coolingDemand??false,last_reason:decision.reason});
@@ -440,7 +460,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      } catch(error) {
       if(!canActuate()) {
        // Shutdown or loss of leadership can interrupt ON preparation/publication.
-       // End interrupted runs; manual Stop/FAULT still wins.
+       // Pause interrupted runs; manual Stop/FAULT still wins.
        await repo.lockChannel(f.master_id,f.misting_ssr_channel,async()=>{
         const current=await repo.run(id);
         if(current?.id===run.id && current.status==='RUNNING')
@@ -450,7 +470,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       }
       const current=await repo.run(id),latest=await repo.runtime(id);
       if(current?.id===run.id && current.status==='RUNNING'
-       && (error.retryState==='DEVICE_OFFLINE' || [503,504].includes(error.statusCode))) {
+       && (['DEVICE_OFFLINE','SENSOR_FAULT','OFF_PENDING'].includes(error.retryState) || [503,504].includes(error.statusCode))) {
        await repo.lockChannel(f.master_id,f.misting_ssr_channel,()=>reconcileInterruption(f,current,error.message));
        return {action:'OFF',state:(await repo.runtime(id)).control_state,reason:error.message};
       }
@@ -467,6 +487,9 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
        if(needsOff)await requestOff(f,run,error.message);
        return {action:needsOff?'OFF':'NONE',state,reason:error.message};
       }
+      // Database/session failures during ON preparation or persistence go through
+      // worker recovery too; they do not revoke the operator's AUTO intent.
+      if(error.code && !(error instanceof AppError))throw error;
       const needsOff=await stopRecord(id,null,error.message,'FAULT');
       await log(id,run,'FAULT',error.message);
       if(needsOff)await requestOff(f,run,'Thực hiện lệnh bật (ON) thất bại hoặc các điều kiện cần thiết đã thay đổi');

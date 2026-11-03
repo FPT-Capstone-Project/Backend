@@ -79,7 +79,7 @@ function decide({ running, config:c, runtime:r={}, environment:e, online=true, c
  const active=['ON_REQUESTED','MISTING'].includes(r.control_state);
  if (r.control_state==='OFF_PENDING') return {action:'OFF',state:'OFF_PENDING',reason:'Đang chờ xác nhận trạng thái tắt (OFF)'};
  if (active && now>=new Date(r.pulse_deadline_at).getTime()) return {action:'OFF',state:'OFF_PENDING',reason:'Đã hết thời gian của đợt phun sương'};
- if (!online || (!e.healthy && !e.spreadBlocked)) return {action:active?'OFF':'FAULT',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT hoặc bộ điều khiển trung tâm mất kết nối'};
+ if (!online || (!e.healthy && !e.spreadBlocked)) return {action:active?'OFF':'NONE',state:online?'SENSOR_FAULT':'DEVICE_OFFLINE',reason:online?e.reason:'MQTT hoặc bộ điều khiển trung tâm mất kết nối'};
  // Hold demand through the pulse and settling time; transient readings from
  // mist must not shorten a pulse or change the next cycle's demand latch.
  const heldFlags={demand:!!r.demand,coolingDemand:!!r.cooling_demand};

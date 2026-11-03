@@ -144,12 +144,12 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    await service.stop(other,null);assert.equal((await repo.run(other)).status,'STOPPED');
    assert.equal((await repo.run(id)).status,'RUNNING');
   });
-  await t.test('restart ends AUTO and discards the old pulse without replaying ON',async()=>{
+  await t.test('restart preserves AUTO and discards the old pulse before cooldown',async()=>{
    now+=61000;await fresh();await service.evaluate(id);assert.equal((await repo.runtime(id)).control_state,'MISTING');
    const run=await repo.run(id),budget=await repo.budget(id);
-   await service.recover();assert.equal((await repo.run(id)).status,'FAULT');
+   await service.recover();assert.equal((await repo.run(id)).status,'RUNNING');
    assert.equal((await repo.run(id)).id,run.id);
-   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
    assert.equal((await repo.runtime(id)).pulse_deadline_at,null);
    assert.deepEqual(await repo.budget(id),budget);
    assert.equal((await repo.run(other)).status,'STOPPED');
@@ -206,7 +206,7 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
     await service.evaluate(id);
     assert.ok(calls.slice(before).length>0);
     assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
-    assert.equal((await repo.run(id)).status,'FAULT');
+    assert.equal((await repo.run(id)).status,'RUNNING');
     assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
     now+=5001;await service.evaluate(id);
     assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
@@ -224,45 +224,46 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=config.sensor_max_age_ms;
    const before=calls.length;
    await service.evaluate(id);
-   assert.deepEqual(calls.slice(before).map(c=>c.action),['OFF']);
-   assert.equal((await repo.run(id)).status,'FAULT');
-   assert.match((await repo.run(id)).stop_reason,/quá cũ/);
+   assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
+   assert.equal((await repo.run(id)).status,'RUNNING');
+   assert.match((await repo.runtime(id)).last_reason,/quá cũ/);
    await service.stop(id,null);
+   now++;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
   });
-  await t.test('sensor and connection failures both end AUTO until explicit Start',async()=>{
+  await t.test('sensor and connection failures pause AUTO and retain explicit run intent',async()=>{
    await fresh();const started=await service.start(id,{dryRun:false},null);
    now+=20001;const before=calls.length;
-   assert.equal((await service.evaluate(id)).action,'FAULT');
+   assert.equal((await service.evaluate(id)).action,'NONE');
    assert.equal((await repo.runtime(id)).control_state,'SENSOR_FAULT');
-   assert.equal((await service.status(id)).mode,'MANUAL');
-   await fresh();await service.evaluate(id);assert.equal((await repo.run(id)).status,'FAULT');
-   const restarted=await service.start(id,{dryRun:false},null);
-   assert.notEqual(restarted.run.id,started.run.id);
+   assert.equal((await service.status(id)).mode,'AUTO');
+   assert.equal((await service.status(id)).autoStatus,'PAUSED');
+   assert.equal((await repo.run(id)).id,started.run.id);
    connected=false;
    await service.evaluate(id);
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
-   assert.equal((await repo.run(id)).status,'FAULT');
+   assert.equal((await repo.run(id)).status,'RUNNING');
    assert.ok(calls.slice(before).every(c=>c.action==='OFF'));
    connected=true;now+=5001;await fresh();await service.evaluate(id);
-   assert.equal((await repo.run(id)).id,restarted.run.id);
-   assert.equal((await service.status(id)).mode,'MANUAL');
+   assert.equal((await repo.run(id)).id,started.run.id);
+   assert.equal((await service.status(id)).mode,'AUTO');
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
-   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
+   await service.stop(id,null);
   });
-  await t.test('ON timeout ends AUTO and never retries ON after feedback recovers',async()=>{
+  await t.test('ON timeout pauses AUTO and only retries after fresh OFF and cooldown',async()=>{
    await fresh();const started=await service.start(id,{dryRun:false},null);
    failOn=504;await service.evaluate(id);failOn=false;
-   assert.equal((await repo.run(id)).status,'FAULT');
+   assert.equal((await repo.run(id)).status,'RUNNING');
    assert.equal((await repo.runtime(id)).control_state,'OFF_PENDING');
    const onCount=calls.filter(c=>c.action==='ON').length;
    now+=5001;await fresh();await service.evaluate(id);
    assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
-   assert.equal((await repo.runtime(id)).control_state,'DISABLED');
+   assert.equal((await repo.runtime(id)).control_state,'COOLDOWN');
    now+=5001;await fresh();await service.evaluate(id);
    assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
    now+=60001;await fresh();await service.evaluate(id);
-   assert.equal(calls.filter(c=>c.action==='ON').length,onCount);
+   assert.equal(calls.filter(c=>c.action==='ON').length,onCount+1);
    assert.equal((await repo.run(id)).id,started.run.id);
    await service.stop(id,null);
    now+=1;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
@@ -341,11 +342,11 @@ test('automation migrations and service against isolated PostgreSQL; MQTT is moc
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await repo.runtime(id)).control_state,'DISABLED');
   });
-  await t.test('sensor fault during pulse ends AUTO and requests OFF',async()=>{
+  await t.test('sensor fault during pulse pauses AUTO and requests OFF',async()=>{
    await fresh();await service.start(id,{dryRun:false},1);await service.evaluate(id);
    await db.exec('UPDATE iot_sensor_latest SET is_valid=false WHERE node_address=1 AND sensor_address=1');
    now+=1000;await service.evaluate(id);
-   assert.equal((await repo.run(id)).status,'FAULT');assert.equal(calls.at(-1).action,'OFF');
+   assert.equal((await repo.run(id)).status,'RUNNING');assert.equal(calls.at(-1).action,'OFF');
    now+=3000;await db.query("UPDATE iot_ssr_states SET state_reported_at=$1",[new Date(now)]);await service.evaluate(id);
    assert.equal((await service.evaluate(id)).action,'NONE');
    await service.stop(id,null);

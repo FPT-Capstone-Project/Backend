@@ -4,7 +4,7 @@ const mqtt=require('./iotMqtt.service');
 const {randomUUID}=require('node:crypto');
 
 // A dedicated session elects one worker. Losing that session closes the local
-// actuation gate; a replacement ends interrupted runs and reconciles OFF.
+// actuation gate; a replacement pauses interrupted runs and reconciles OFF.
 function createWorker(repo=repository,control=service,logger=console,transport=mqtt) {
  let timer,heartbeatTimer,heartbeatPending,leader,busy=false,stopping=false,healthy=false;
  const transportVersion=()=>transport.getDisconnectVersion?.() ?? 0;
@@ -66,15 +66,15 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
      logger.error('Kết nối của tiến trình điều khiển phun sương chính đã đóng',diagnostics('phiên kết nối cơ sở dữ liệu đã đóng'));
     });
     stage='khôi phục';
-    logger.info?.('Đã nhận quyền điều khiển phun sương chính; đang dừng AUTO bị gián đoạn và xác nhận tắt (OFF)',{...diagnostics(stage),reason:recoveryReason});
+    logger.info?.('Đã nhận quyền điều khiển phun sương chính; đang xác nhận OFF trước khi tiếp tục AUTO bị gián đoạn',{...diagnostics(stage),reason:recoveryReason});
     await control.recover(recoveryReason);
    }
    if(observedTransportVersion!==transportVersion()) {
     stopHeartbeat();
     if(heartbeatPending)await heartbeatPending;
     const version=transportVersion();
-    stage='dừng AUTO sau mất kết nối MQTT';
-    await control.recover('Mất kết nối MQTT; AUTO đã dừng, cần bấm Start lại');
+    stage='tạm chờ AUTO sau mất kết nối MQTT';
+    await control.recover('Mất kết nối MQTT; AUTO tạm chờ xác nhận OFF và kiểm tra điều kiện để tiếp tục');
     observedTransportVersion=version;
    }
    stage='kiểm tra hoạt động của tiến trình điều khiển chính';
