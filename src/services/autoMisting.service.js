@@ -275,7 +275,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       assertCompatible(c,cultivation.profiles,true);
       if(!c.profile_approved || !c.profile_name)throw new AppError('Cần có cấu hình tầng đã đặt tên và được phê duyệt',409);
      } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Các khay có cấu hình khác nhau hoặc chưa được gán cần có cấu hình tầng đã đặt tên và được phê duyệt rõ ràng',409);
-     const e=await env(id,c);if(!e.healthy)throw new AppError(e.reason,409);
+     const e=await env(id,c);if(!e.healthy && !e.spreadBlocked)throw new AppError(e.reason,409);
      await verifyProfile(id,c);
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Chưa cho phép điều khiển tự động thiết bị thực: cần xác minh bộ giám sát an toàn (watchdog) của thiết bị',409);
@@ -285,7 +285,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       // creating a running session.
       if(!await repo.workerReady())throw new AppError('Tiến trình điều khiển tự động chưa sẵn sàng',503);
       if(!online(await repo.floor(id)))throw new AppError('MQTT hoặc bộ điều khiển trung tâm mất kết nối',503);
-      const fresh=await env(id,c);if(!fresh.healthy)throw new AppError(fresh.reason,409);
+      const fresh=await env(id,c);if(!fresh.healthy && !fresh.spreadBlocked)throw new AppError(fresh.reason,409);
       await verifyProfile(id,c);
      }
      return repo.transaction(async()=>{
@@ -379,6 +379,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
     }
     if(decision.action==='OFF') {
      if(decision.demand!==undefined)await repo.runtimeSet(id,{demand:decision.demand,cooling_demand:decision.coolingDemand??false,last_reason:decision.reason});
+     if(e.spreadBlocked)await log(id,run,'DECISION',decision.reason,e);
      await requestOff(f,run,decision.reason);return decision;
     }
     if(decision.action==='FAULT')return decision;
@@ -388,7 +389,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
       const current=await repo.run(id);
       if(current?.id!==run.id || current.status!=='RUNNING')throw new AppError('Phiên chạy đã dừng trước khi gửi lệnh bật (ON)',409);
       const fresh=await env(id,c);
-      if(!fresh.healthy)throw retryable(fresh.reason,'SENSOR_FAULT',fresh);
+      if(!fresh.healthy && !fresh.spreadBlocked)throw retryable(fresh.reason,'SENSOR_FAULT',fresh);
       if(!run.dry_run && !online(await repo.floor(id)))throw retryable('MQTT hoặc bộ điều khiển trung tâm mất kết nối trước khi gửi lệnh','DEVICE_OFFLINE',fresh);
       await verifyProfile(id,c);
       const latestDecision=decide({running:true,config:c,runtime:rt,environment:fresh,

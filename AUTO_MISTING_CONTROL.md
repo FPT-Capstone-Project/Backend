@@ -96,7 +96,8 @@ Swagger UI is at `/api-docs`, under **Automatic misting**. Bearer JWT is require
    approval of a floor-level profile, not an automatically selected mushroom.
    Stop and review configuration when the cultivation plan changes.
 5. **Start Automatic Control**. The elected worker must be ready. Sensors must be
-   healthy even for dry runs. Real starts additionally require MQTT readiness,
+   valid and fresh even for dry runs. Excessive sensor spread permits Start but
+   pauses misting while AUTO remains running. Real starts additionally require MQTT readiness,
    master not reported offline, fresh live SSR OFF, correct mapping and verified
    firmware safety settings. Start records the user and a configuration snapshot.
 6. **Stop Automatic Control**. The run is ended before any further ON can pass the
@@ -157,14 +158,24 @@ this protocol alone.
 
 The mean is the sum of valid readings divided by their count; with the default
 three required sensors, 82, 84 and 86 yield 84%. Reduced quorum is an explicit
-operator configuration. Excessive max-minus-min spread rejects the aggregate.
+operator configuration. Excessive max-minus-min humidity spread (or temperature
+spread when cooling is enabled) pauses misting and records the reason without
+ending AUTO. An active pulse finishes its configured duration. Once spread returns within limits,
+evaluation resumes automatically, respecting cooldown and hourly budgets.
+Missing, invalid or stale sensor data still blocks Start and faults a running session.
 Temperature is averaged from valid finite readings for display.
 
 The demand latch is set when humidity is strictly below start. It stays set
 through the hysteresis band and clears at or above stop. While demand remains
 set, each cooldown may be followed by another bounded pulse. Equality at start
 does not set a cleared latch. Humidity at/above the hard maximum never starts a
-pulse and ends an active one early.
+pulse. Once started, a pulse runs for its configured duration even if humidity,
+temperature or sensor spread changes. Demand latches are held during the pulse
+and cooldown; fresh readings determine demand only after cooldown expires.
+Cooldown is the configured sensor-settling wait, not a measured stability test.
+Stop, invalid/stale/missing sensor data, connection failures and other safety
+faults can still interrupt a pulse. Humidity and cooling humidity limits gate
+the next pulse rather than cutting the current one short.
 
 `DISABLED → IDLE → ON_REQUESTED → MISTING → OFF_PENDING → COOLDOWN → IDLE` is the
 normal progression. SENSOR_FAULT and DEVICE_OFFLINE end the run with FAULT;
