@@ -25,11 +25,11 @@ const sentNotificationColumns = `
 
 async function findSessionRecipient(sessionId) {
   const result = await pool.query(
-    `SELECT s.session_id, s.status, o.user_id, u.status AS user_status
+    `SELECT s.session_id, s.status, u.user_id, u.role_id, u.status AS user_status
      FROM cultivation_sessions s
-     JOIN order_items oi ON oi.order_item_id = s.order_item_id
-     JOIN orders o ON o.order_id = oi.order_id
-     JOIN users u ON u.user_id = o.user_id
+     LEFT JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     LEFT JOIN orders o ON o.order_id = oi.order_id
+     LEFT JOIN users u ON u.user_id = o.user_id
      WHERE s.session_id = $1
      LIMIT 1`,
     [sessionId],
