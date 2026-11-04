@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 function loadService({
-  recipient = { session_id: 4, user_id: 8, status: 'CULTIVATING', user_status: 'ACTIVE' },
+  recipient = { session_id: 4, user_id: 8, role_id: 3, status: 'CULTIVATING', user_status: 'ACTIVE' },
   notification = { notification_id: 10 },
 } = {}) {
   const modelPath = require.resolve('../src/models/notification.model');
@@ -65,38 +65,74 @@ test('validates and sends a cultivation session notification with the operator I
   ]);
 
   await assert.rejects(
-    () => service.sendCultivationSessionNotification(4, { message: '   ' }, 2),
+    () => service.sendCultivationSessionNotification(4, { title: 'Update', message: '   ' }, 2),
     { statusCode: 400, message: 'message is required' },
   );
   await assert.rejects(
-    () => service.sendCultivationSessionNotification(4, { message: 'x'.repeat(1001) }, 2),
+    () => service.sendCultivationSessionNotification(4, { title: 'Update', message: 'x'.repeat(1001) }, 2),
     { statusCode: 400 },
   );
   await assert.rejects(
-    () => service.sendCultivationSessionNotification(4, { message: 'Update', type: 'UNKNOWN' }, 2),
+    () => service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update', type: 'UNKNOWN' }, 2),
     { statusCode: 400 },
   );
   await assert.rejects(
-    () => service.sendCultivationSessionNotification(0, { message: 'Update' }, 2),
+    () => service.sendCultivationSessionNotification(0, { title: 'Update', message: 'Update' }, 2),
     { statusCode: 400 },
   );
 });
 
 test('rejects missing, closed, and inactive session recipients', async () => {
   await assert.rejects(
-    () => loadService({ recipient: null }).service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
+    () => loadService({ recipient: null }).service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update' }, 2),
     { statusCode: 404, message: 'Cultivation session not found' },
   );
   await assert.rejects(
-    () => loadService({ recipient: { user_id: 8, status: 'COMPLETED', user_status: 'ACTIVE' } })
-      .service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
+    () => loadService({ recipient: { user_id: 8, role_id: 3, status: 'COMPLETED', user_status: 'ACTIVE' } })
+      .service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update' }, 2),
     { statusCode: 409, message: 'Cannot send notifications for a completed or cancelled session' },
   );
   await assert.rejects(
-    () => loadService({ recipient: { user_id: 8, status: 'CULTIVATING', user_status: 'BLOCKED' } })
-      .service.sendCultivationSessionNotification(4, { message: 'Update' }, 2),
+    () => loadService({ recipient: { user_id: 8, role_id: 3, status: 'CULTIVATING', user_status: 'BLOCKED' } })
+      .service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update' }, 2),
     { statusCode: 409, message: 'Recipient account is not active' },
   );
+});
+
+test('requires valid title, message, type, and session ID before looking up a recipient', async () => {
+  const { service, calls } = loadService();
+  for (const payload of [null, [], {}, { message: 'Update' },
+    { title: '', message: 'Update' }, { title: '   ', message: 'Update' },
+    { title: 123, message: 'Update' }, { title: 'x'.repeat(101), message: 'Update' },
+    { title: 'Update' }, { title: 'Update', message: 123 },
+    { title: 'Update', message: 'Update', type: null }]) {
+    await assert.rejects(() => service.sendCultivationSessionNotification(4, payload, 2), { statusCode: 400 });
+  }
+  for (const id of ['abc', -1, 1.5, '9007199254740992']) {
+    await assert.rejects(() => service.sendCultivationSessionNotification(id, { title: 'Update', message: 'Update' }, 2), { statusCode: 400 });
+  }
+  assert.deepEqual(calls, []);
+});
+
+test('rejects absent or non-Customer owners and cancelled sessions', async () => {
+  for (const owner of [{ user_id: null, role_id: null }, { user_id: 8, role_id: 2 }]) {
+    const { service, calls } = loadService({ recipient: { ...owner, status: 'CULTIVATING', user_status: 'ACTIVE' } });
+    await assert.rejects(() => service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update' }, 2), { statusCode: 404 });
+    assert.equal(calls.length, 1);
+  }
+  const { service } = loadService({ recipient: { user_id: 8, role_id: 3, status: 'CANCELLED', user_status: 'ACTIVE' } });
+  await assert.rejects(() => service.sendCultivationSessionNotification(4, { title: 'Update', message: 'Update' }, 2), { statusCode: 409 });
+});
+
+test('defaults the type and ignores caller-supplied recipient, creator, and reference fields', async () => {
+  const { service, calls } = loadService();
+  await service.sendCultivationSessionNotification(4, {
+    title: 'Update', message: 'Update', userId: 999, createdBy: 999,
+    referenceType: 'OTHER', referenceId: 999,
+  }, 2);
+  assert.deepEqual(calls[1].args[0], {
+    sessionId: 4, userId: 8, createdBy: 2, title: 'Update', message: 'Update', type: 'OPERATOR_MESSAGE',
+  });
 });
 
 test('filters and paginates only the authenticated user notifications', async () => {

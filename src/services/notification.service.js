@@ -12,7 +12,6 @@ const NOTIFIABLE_SESSION_STATUSES = [
   'HARVEST_READY',
   'HARVESTING',
 ];
-const DEFAULT_NOTIFICATION_TITLE = 'Thông báo từ SmartMush Farm';
 
 function parseId(value, fieldName) {
   const id = Number(value);
@@ -30,7 +29,6 @@ function normalizeMessage(value) {
 }
 
 function normalizeTitle(value) {
-  if (value === undefined) return DEFAULT_NOTIFICATION_TITLE;
   const title = typeof value === 'string' ? value.trim() : '';
   if (!title || title.length > 100) {
     throw new AppError('title must be between 1 and 100 characters', 400);
@@ -63,6 +61,9 @@ async function sendCultivationSessionNotification(sessionId, payload = {}, creat
   const operatorId = parseId(createdBy, 'createdBy');
   const recipient = await notificationModel.findSessionRecipient(id);
   if (!recipient) throw new AppError('Cultivation session not found', 404);
+  if (!recipient.user_id || Number(recipient.role_id) !== 3) {
+    throw new AppError('Customer recipient not found', 404);
+  }
   if (!NOTIFIABLE_SESSION_STATUSES.includes(recipient.status)) {
     throw new AppError('Cannot send notifications for a completed or cancelled session', 409);
   }

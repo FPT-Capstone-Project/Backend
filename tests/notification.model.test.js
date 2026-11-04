@@ -13,12 +13,12 @@ test('stores cultivation-session references and scopes notification reads to the
   try {
     await db.exec(fs.readFileSync(path.join(__dirname, '../database.sql'), 'utf8'));
     await db.exec(`
-      INSERT INTO roles(role_name) VALUES ('Customer');
+      INSERT INTO roles(role_name) VALUES ('Admin'), ('Farm Operator'), ('Customer');
       INSERT INTO users(role_id, email, password_hash, full_name)
       VALUES
-        (1, 'customer@example.test', 'hash', 'Customer'),
-        (1, 'operator@example.test', 'hash', 'Operator'),
-        (1, 'other@example.test', 'hash', 'Other Customer');
+        (3, 'customer@example.test', 'hash', 'Customer'),
+        (2, 'operator@example.test', 'hash', 'Operator'),
+        (3, 'other@example.test', 'hash', 'Other Customer');
       INSERT INTO orders(user_id) VALUES (1);
       INSERT INTO mushroom_types(name, growing_days) VALUES ('Oyster', 25);
       INSERT INTO order_items(order_id, mushroom_type_id, unit_price, total_price)
@@ -69,7 +69,7 @@ test('stores cultivation-session references and scopes notification reads to the
       userId: 3, isRead: false, limit: 20, offset: 0,
     });
 
-    assert.deepEqual(recipient, { session_id: 1, status: 'CULTIVATING', user_id: 1, user_status: 'ACTIVE' });
+    assert.deepEqual(recipient, { session_id: 1, status: 'CULTIVATING', user_id: 1, role_id: 3, user_status: 'ACTIVE' });
     assert.equal(created.user_id, 1);
     assert.equal(created.reference_type, 'CULTIVATION_SESSION');
     assert.equal(created.reference_id, 1);

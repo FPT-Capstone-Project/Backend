@@ -22,4 +22,14 @@ async function markAllRead(req, res) {
   res.json({ message: 'All notifications marked as read', data: result });
 }
 
-module.exports = { list, markRead, markAllRead };
+async function sendCultivationSessionNotification(req, res) {
+  const { title, message, type } = req.body || {};
+  const notification = await notificationService.sendCultivationSessionNotification(
+    req.params.sessionId,
+    { title, message, type },
+    req.user.user_id,
+  );
+  res.status(201).json({ message: 'Notification sent successfully', data: notification });
+}
+
+module.exports = { list, markRead, markAllRead, sendCultivationSessionNotification };
