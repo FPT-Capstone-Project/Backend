@@ -99,6 +99,18 @@ async function updateStatusById(userId, status) {
   return result.rows[0] || null;
 }
 
+async function updateProfileById(userId, profile) {
+  const columns = { fullName: 'full_name', phone: 'phone', address: 'address' };
+  const fields = Object.keys(columns).filter((field) => Object.hasOwn(profile, field));
+  const assignments = fields.map((field, index) => `${columns[field]} = $${index + 2}`);
+  const result = await pool.query(
+    `UPDATE users SET ${assignments.join(', ')}, updated_at = NOW()
+     WHERE user_id = $1 RETURNING ${publicUserColumns}`,
+    [userId, ...fields.map((field) => profile[field])],
+  );
+  return result.rows[0] || null;
+}
+
 module.exports = {
   findByEmail,
   findById,
@@ -106,6 +118,7 @@ module.exports = {
   findAllWithRole,
   findDetailById,
   updateStatusById,
+  updateProfileById,
 };
 
 async function findOtpUserByEmail(email) {

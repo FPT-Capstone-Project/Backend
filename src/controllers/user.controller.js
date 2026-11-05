@@ -20,4 +20,9 @@ async function updateStatus(req, res) {
   res.json({ message: 'User status updated successfully', data: user });
 }
 
-module.exports = { list, getById, create, updateStatus };
+async function updateProfile(req, res) {
+  const user = await userService.updateProfile(req.user.user_id, req.body || {});
+  res.json({ message: 'Profile updated successfully', data: user });
+}
+
+module.exports = { list, getById, create, updateStatus, updateProfile };

@@ -28,6 +28,7 @@ test('user management routes require the Admin role', async () => {
       getById: noop,
       create: noop,
       updateStatus: noop,
+      updateProfile: (req, res) => res.json({ userId: req.user.user_id }),
     },
   };
   require.cache[authServicePath] = { exports: { sanitizeUser: (user) => user } };
@@ -55,6 +56,16 @@ test('user management routes require the Admin role', async () => {
 
     assert.equal(adminResponse.status, 204);
     assert.equal(operatorResponse.status, 403);
+
+    const profileUrl = `http://127.0.0.1:${server.address().port}/api/users/me`;
+    const anonymousProfile = await fetch(profileUrl, { method: 'PATCH' });
+    const ownProfile = await fetch(profileUrl, {
+      method: 'PATCH',
+      headers: { authorization: `Bearer ${operatorToken}` },
+    });
+    assert.equal(anonymousProfile.status, 401);
+    assert.equal(ownProfile.status, 200);
+    assert.deepEqual(await ownProfile.json(), { userId: 2 });
   } finally {
     await new Promise((resolve) => server.close(resolve));
     for (const [path, cachedModule] of originalCache) {
