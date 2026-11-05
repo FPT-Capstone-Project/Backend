@@ -90,6 +90,14 @@ async function getNotifications(userId, query = {}) {
     limit: pagination.limit,
     offset: pagination.offset,
   });
+  const incidentIds = result.notifications.filter(n => n.reference_type === 'DEVICE_INCIDENT')
+    .map(n => n.reference_id);
+  if (incidentIds.length) {
+    const incidents = await require('../models/deviceIncident.model').details(Number(userId), incidentIds);
+    const byId = new Map(incidents.map(i => [Number(i.incident_id), i]));
+    result.notifications = result.notifications.map(n => n.reference_type === 'DEVICE_INCIDENT'
+      ? { ...n, device_incident: byId.get(Number(n.reference_id)) || null } : n);
+  }
   return {
     notifications: result.notifications,
     pagination: {
@@ -116,7 +124,18 @@ async function markAllNotificationsAsRead(userId) {
   return { updated };
 }
 
+async function confirmDeviceRepair(userId, notificationId, payload = {}) {
+  const note = payload?.repairNote;
+  if (note !== undefined && (typeof note !== 'string' || note.trim().length > 1000)) {
+    throw new AppError('repairNote must be a string of at most 1000 characters', 400);
+  }
+  return require('../models/deviceIncident.model').resolve(
+    parseId(userId, 'userId'), parseId(notificationId, 'notificationId'), note?.trim() || null,
+  );
+}
+
 module.exports = {
+  confirmDeviceRepair,
   sendCultivationSessionNotification,
   getNotifications,
   markNotificationAsRead,

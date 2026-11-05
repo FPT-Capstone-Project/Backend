@@ -32,4 +32,11 @@ async function sendCultivationSessionNotification(req, res) {
   res.status(201).json({ message: 'Notification sent successfully', data: notification });
 }
 
-module.exports = { list, markRead, markAllRead, sendCultivationSessionNotification };
+async function confirmDeviceRepair(req, res) {
+  const incident = await notificationService.confirmDeviceRepair(
+    req.user.user_id, req.params.notificationId, req.body,
+  );
+  res.json({ message: 'Đã xác nhận sửa xong thiết bị', data: incident });
+}
+
+module.exports = { list, markRead, markAllRead, sendCultivationSessionNotification, confirmDeviceRepair };

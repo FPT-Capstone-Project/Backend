@@ -1,5 +1,9 @@
 # Automatic misting control
 
+Sensor, floor node and master fault notifications and operator repair confirmation run independently of
+AUTO mode. See [device incident workflow](docs/sensor-incidents.md) for migration,
+recipient rules, detection thresholds, and the notification UI API contract.
+
 Automatic control is disabled until an operator explicitly starts a floor. Saving
 configuration never creates a run. Start defaults to **dry run**. Real publication
 also requires deployment-level enablement and an attested ESP32 watchdog.

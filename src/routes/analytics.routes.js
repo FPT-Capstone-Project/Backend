@@ -43,4 +43,67 @@ const router = express.Router();
  */
 router.get('/dashboard', authenticate, authorizeRoles(1, 2), analyticsController.dashboard);
 
+/**
+ * @openapi
+ * /api/analytics/dashboard/environment-history:
+ *   get:
+ *     tags: [Analytics]
+ *     summary: Chart-ready temperature and humidity history for every active floor
+ *     description: 'One request replaces per-floor/per-sensor history pagination. Default window is 24h ending at the latest 5-minute boundary, with 96 15-minute buckets. Custom from/to must be supplied together, with a positive range at most 24h. Buckets start at from; range is [from,to). Only valid non-retained readings from sensors 1-3 are included. Each metric is averaged per sensor then equally across sensors. Missing values are null. Thresholds are the current configured floor thresholds, not historical thresholds. History uses the current master/node mapping of each floor.'
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema: { type: string, format: date-time }
+ *       - in: query
+ *         name: to
+ *         schema: { type: string, format: date-time }
+ *     responses:
+ *       200:
+ *         description: Chart points ordered by time; floors ordered by room and floor number
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     from: { type: number, description: Epoch milliseconds }
+ *                     to: { type: number, description: Exclusive end in epoch milliseconds }
+ *                     bucketMs: { type: integer, example: 900000 }
+ *                     refreshAfterMs: { type: integer, example: 300000 }
+ *                     floors:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           floorId: { type: integer }
+ *                           floorName: { type: string }
+ *                           floorNumber: { type: integer }
+ *                           roomId: { type: integer }
+ *                           masterDbId: { type: integer }
+ *                           masterId: { type: string }
+ *                           nodeId: { type: integer }
+ *                           thresholds:
+ *                             type: object
+ *                             properties:
+ *                               temperature_min: { type: number, nullable: true }
+ *                               temperature_max: { type: number, nullable: true }
+ *                               humidity_min: { type: number, nullable: true }
+ *                               humidity_max: { type: number, nullable: true }
+ *                           points:
+ *                             type: array
+ *                             items:
+ *                               type: object
+ *                               properties:
+ *                                 timestamp: { type: number, description: Bucket start in epoch milliseconds }
+ *                                 temperature: { type: number, nullable: true, description: Degrees Celsius }
+ *                                 humidity: { type: number, nullable: true, description: Relative humidity percent }
+ *       400: { description: Invalid time range }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Admin or Farm Operator only }
+ */
+router.get('/dashboard/environment-history', authenticate, authorizeRoles(1, 2), analyticsController.environmentHistory);
+
 module.exports = router;
