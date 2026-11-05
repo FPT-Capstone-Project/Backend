@@ -58,9 +58,35 @@ async function updateUserStatus(userId, payload = {}) {
   return user;
 }
 
+async function updateProfile(userId, payload = {}) {
+  const fields = ['fullName', 'phone', 'address'];
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)
+      || !Object.keys(payload).length || Object.keys(payload).some((key) => !fields.includes(key))) {
+    throw new AppError('Provide at least one of fullName, phone, address; other fields are not allowed', 400);
+  }
+
+  const profile = {};
+  for (const field of Object.keys(payload)) {
+    const value = payload[field];
+    if (field !== 'fullName' && value === null) {
+      profile[field] = null;
+    } else {
+      if (typeof value !== 'string' || (field === 'fullName' && !value.trim())) {
+        throw new AppError(`${field} must be ${field === 'fullName' ? 'a non-empty string' : 'a string or null'}`, 400);
+      }
+      profile[field] = value.trim();
+    }
+  }
+
+  const user = await userModel.updateProfileById(parseId(userId, 'userId'), profile);
+  if (!user) throw new AppError('User not found', 404);
+  return user;
+}
+
 module.exports = {
   getUsers,
   getUserDetail,
   createUser,
   updateUserStatus,
+  updateProfile,
 };

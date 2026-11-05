@@ -31,6 +31,41 @@ router.get('/me', authenticate, authController.me);
 
 /**
  * @openapi
+ * /api/users/me:
+ *   patch:
+ *     tags: [Users]
+ *     summary: Update the current authenticated user's profile
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/UpdateUserProfileRequest'
+ *     responses:
+ *       200:
+ *         description: Profile updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/User'
+ *       400:
+ *         description: Empty profile, unsupported fields, or invalid field values
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: User not found
+ */
+router.patch('/me', authenticate, userController.updateProfile);
+
+/**
+ * @openapi
  * /api/users:
  *   get:
  *     tags: [Users]

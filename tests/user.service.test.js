@@ -24,6 +24,10 @@ function loadService({ detail = { user_id: 7, role_name: 'Customer' } } = {}) {
         calls.push({ method: 'updateStatusById', userId, status });
         return { user_id: userId, status };
       },
+      updateProfileById: async (userId, profile) => {
+        calls.push({ method: 'updateProfileById', userId, profile });
+        return detail ? { user_id: userId, ...profile } : null;
+      },
     },
   };
   require.cache[authServicePath] = {
@@ -47,6 +51,23 @@ test('lists users filtered by role ID', async () => {
     method: 'findAllWithRole',
     filters: { roleId: 2 },
   });
+});
+
+test('updates only supplied profile fields and validates profile input', async () => {
+  const { service, calls } = loadService();
+  await service.updateProfile(7, { fullName: ' Updated Name ', phone: null });
+  assert.deepEqual(calls[0], {
+    method: 'updateProfileById', userId: 7,
+    profile: { fullName: 'Updated Name', phone: null },
+  });
+  for (const payload of [{}, [], { fullName: ' ' }, { fullName: null },
+    { phone: 123 }, { address: {} }, { roleId: 1 }, { email: 'new@example.com' },
+    { status: 'ACTIVE' }, { fullName: 'Valid', password: 'changed' }]) {
+    await assert.rejects(() => service.updateProfile(7, payload), { statusCode: 400 });
+  }
+  assert.equal(calls.length, 1);
+  const missing = loadService({ detail: null });
+  await assert.rejects(() => missing.service.updateProfile(7, { address: null }), { statusCode: 404 });
 });
 
 test('creates an account with a required role and does not return a JWT', async () => {

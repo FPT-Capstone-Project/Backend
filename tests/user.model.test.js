@@ -37,6 +37,18 @@ test('returns user role and independent order and cultivation session counts', a
     assert.equal(detail.order_count, 2);
     assert.equal(detail.cultivation_session_count, 1);
     assert.equal(updated.status, 'BLOCKED');
+    const profile = await userModel.updateProfileById(1, { fullName: "O'Brien", phone: '0901234567' });
+    assert.equal(profile.full_name, "O'Brien");
+    assert.equal(profile.email, 'customer@example.test');
+    assert.equal(profile.role_id, 2);
+    assert.equal(profile.status, 'BLOCKED');
+    assert.equal(profile.phone, '0901234567');
+    assert.equal(Object.hasOwn(profile, 'password_hash'), false);
+    const cleared = await userModel.updateProfileById(1, { phone: null, address: 'New address' });
+    assert.equal(cleared.full_name, "O'Brien");
+    assert.equal(cleared.phone, null);
+    assert.equal(cleared.address, 'New address');
+    assert.equal(await userModel.updateProfileById(999, { fullName: 'Missing' }), null);
   } finally {
     delete require.cache[modelPath];
     if (originalDbModule) require.cache[dbPath] = originalDbModule;

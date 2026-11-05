@@ -159,6 +159,16 @@ const options = {
             address: { type: 'string', example: 'Ho Chi Minh City' },
           },
         },
+        UpdateUserProfileRequest: {
+          type: 'object',
+          minProperties: 1,
+          additionalProperties: false,
+          properties: {
+            fullName: { type: 'string', minLength: 1, example: 'Nguyen Van A' },
+            phone: { type: 'string', nullable: true, example: '0900000000' },
+            address: { type: 'string', nullable: true, example: 'Ho Chi Minh City' },
+          },
+        },
         UpdateUserStatusRequest: {
           type: 'object',
           required: ['status'],
