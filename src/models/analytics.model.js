@@ -33,4 +33,46 @@ async function getDashboardHarvestQuality() {
   return result.rows[0];
 }
 
-module.exports = { getDashboardRevenue, getDashboardTraysUsed, getDashboardHarvestQuality };
+async function getEnvironmentHistory({ from, to, bucketMs }) {
+  // Aggregate in PostgreSQL: one average per sensor before averaging the floor.
+  // The time filter can use the existing master/time history index.
+  const result = await pool.query(`
+    SELECT f.floor_id AS "floorId", f.floor_name AS "floorName",
+      f.floor_number AS "floorNumber", f.room_id AS "roomId",
+      f.master_id AS "masterDbId", m.master_identifier AS "masterId",
+      f.node_address AS "nodeId",
+      json_build_object('temperature_min', c.temperature_min, 'temperature_max', c.temperature_max,
+        'humidity_min', c.humidity_min, 'humidity_max', c.humidity_max) AS thresholds,
+      history.points
+    FROM cultivation_floors f
+    JOIN iot_masters m ON m.id=f.master_id
+    LEFT JOIN iot_auto_control_configs c ON c.floor_id=f.floor_id
+    CROSS JOIN LATERAL (
+      WITH sensor_buckets AS (
+        SELECT floor(extract(epoch FROM (r.received_at-$1::timestamptz))*1000/$3)::integer AS bucket,
+          r.sensor_address,
+          avg(r.temperature) FILTER (WHERE r.temperature BETWEEN -40 AND 125) AS temperature,
+          avg(r.humidity) FILTER (WHERE r.humidity BETWEEN 0 AND 100) AS humidity
+        FROM iot_sensor_readings r
+        WHERE r.master_id=f.master_id AND r.node_address=f.node_address
+          AND r.sensor_address BETWEEN 1 AND 3
+          AND r.received_at >= $1::timestamptz AND r.received_at < $2::timestamptz
+          AND r.is_valid AND NOT r.retained
+        GROUP BY bucket,r.sensor_address
+      ), floor_buckets AS (
+        SELECT bucket, avg(temperature) AS temperature, avg(humidity) AS humidity
+        FROM sensor_buckets GROUP BY bucket
+      )
+      SELECT json_agg(json_build_object(
+        'timestamp', (extract(epoch FROM $1::timestamptz)*1000 + b.bucket*$3)::double precision,
+        'temperature', v.temperature, 'humidity', v.humidity
+      ) ORDER BY b.bucket) AS points
+      FROM generate_series(0, ceil(extract(epoch FROM ($2::timestamptz-$1::timestamptz))*1000/$3)::integer-1) b(bucket)
+      LEFT JOIN floor_buckets v ON v.bucket=b.bucket
+    ) history
+    WHERE f.status='ACTIVE'
+    ORDER BY f.room_id, f.floor_number, f.floor_id`, [from, to, bucketMs]);
+  return result.rows;
+}
+
+module.exports = { getDashboardRevenue, getDashboardTraysUsed, getDashboardHarvestQuality, getEnvironmentHistory };

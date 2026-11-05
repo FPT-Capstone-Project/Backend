@@ -6,6 +6,37 @@ const router = express.Router();
 
 /**
  * @openapi
+ * /api/notifications/{notificationId}/confirm-repair:
+ *   patch:
+ *     tags: [Notifications]
+ *     summary: Farm Operator confirms a sensor, node or master repair from their notification
+ *     description: Requires fresh recovery evidence for the device type. Repeated confirmation is idempotent. GET notifications includes device_incident with device_type (SENSOR, NODE, MASTER), status, resolved_by, resolved_at and can_confirm_repair.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: notificationId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               repairNote: { type: string, maxLength: 1000 }
+ *     responses:
+ *       200: { description: Repair confirmed; Admin and original Customer recipients notified }
+ *       400: { description: Invalid ID or repair note }
+ *       401: { description: Authentication required }
+ *       403: { description: Farm Operator only }
+ *       404: { description: Device notification not owned by current operator }
+ *       409: { description: Device has not recovered }
+ */
+router.patch('/:notificationId/confirm-repair', authenticate, authorizeRoles(2), notificationController.confirmDeviceRepair);
+
+/**
+ * @openapi
  * /api/notifications/cultivation-sessions/{sessionId}:
  *   post:
  *     tags: [Notifications]

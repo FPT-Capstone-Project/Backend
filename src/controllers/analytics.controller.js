@@ -5,4 +5,8 @@ async function dashboard(req, res) {
   res.json({ data });
 }
 
-module.exports = { dashboard };
+async function environmentHistory(req, res) {
+  res.json({ data: await analyticsService.getEnvironmentHistory(req.query) });
+}
+
+module.exports = { dashboard, environmentHistory };
