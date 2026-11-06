@@ -193,6 +193,103 @@ function parseGrowthStage(value, fieldName) {
   return stage;
 }
 
+async function getIotHistory(sessionId, user, query = {}) {
+  const pagination = parsePagination(query);
+  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
+  const result = await cultivationSessionModel.findIotHistoryForAdmin(
+    sessionIdNumber,
+    pagination,
+  );
+  if (!result) throw new AppError('Cultivation session not found', 404);
+  const { totalTemperatureReadings, totalDeviceEvents, ...history } = result;
+  return {
+    ...history,
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      totalTemperatureReadings,
+      totalTemperaturePages: Math.ceil(totalTemperatureReadings / pagination.pageSize),
+      totalDeviceEvents,
+      totalDeviceEventPages: Math.ceil(totalDeviceEvents / pagination.pageSize),
+    },
+  };
+}
+
+async function getSensorHistory(sessionId, user, query = {}) {
+  const pagination = parsePagination(query);
+  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
+  const result = await cultivationSessionModel.findSensorHistoryForSession(
+    sessionIdNumber,
+    pagination,
+  );
+  if (!result) throw new AppError('Cultivation session not found', 404);
+  const { total, ...history } = result;
+  return {
+    ...history,
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    },
+  };
+}
+
+async function getDailyInspectionHistory(sessionId, user, query = {}) {
+  const pagination = parsePagination(query);
+  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
+  const result = await cultivationSessionModel.findDailyInspectionHistoryForAdmin(
+    sessionIdNumber,
+    pagination,
+  );
+  if (!result) throw new AppError('Cultivation session not found', 404);
+  const { total, ...history } = result;
+  return {
+    ...history,
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    },
+  };
+}
+
+async function getTrayDailyInspectionHistory(sessionId, sessionTrayId, user, query = {}) {
+  const pagination = parsePagination(query);
+  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
+  const result = await cultivationSessionModel.findDailyInspectionHistoryForTray(
+    sessionIdNumber,
+    parseId(sessionTrayId, 'sessionTrayId'),
+    pagination,
+  );
+  if (!result) throw new AppError('Session tray not found for this session', 404);
+  const { total, ...history } = result;
+  return {
+    ...history,
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total,
+      totalPages: Math.ceil(total / pagination.pageSize),
+    },
+  };
+}
+
+async function getAccessibleSessionId(sessionId, user) {
+  const actorId = parseId(user?.user_id, 'userId');
+  const roleId = Number(user?.role_id);
+  if (![1, 2, 3].includes(roleId)) {
+    throw new AppError('You do not have permission to access this resource', 403);
+  }
+  const sessionIdNumber = parseId(sessionId, 'sessionId');
+  const sessionDetails = await getByIdForAdmin(sessionIdNumber);
+  if (roleId === 3 && Number(sessionDetails.user_id) !== actorId) {
+    throw new AppError('Cultivation session not found', 404);
+  }
+  return sessionIdNumber;
+}
+
 async function assignTraysForAdmin(sessionId, payload = {}) {
   return cultivationSessionModel.assignTraysForAdmin(
     parseId(sessionId, 'sessionId'),
@@ -355,6 +452,10 @@ module.exports = {
   getByIdForAdmin,
   getAvailableTraysForAdmin,
   getProgressForAdmin,
+  getIotHistory,
+  getSensorHistory,
+  getDailyInspectionHistory,
+  getTrayDailyInspectionHistory,
   assignTraysForAdmin,
   updateGrowthForAdmin,
   updateHarvestReadinessForAdmin,
