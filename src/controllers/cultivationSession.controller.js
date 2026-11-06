@@ -20,6 +20,43 @@ async function adminGetProgress(req, res) {
   res.json({ data: progress });
 }
 
+async function getIotHistory(req, res) {
+  const history = await cultivationSessionService.getIotHistory(
+    req.params.sessionId,
+    req.user,
+    req.query || {},
+  );
+  res.json({ data: history });
+}
+
+async function getSensorHistory(req, res) {
+  const history = await cultivationSessionService.getSensorHistory(
+    req.params.sessionId,
+    req.user,
+    req.query || {},
+  );
+  res.json({ data: history });
+}
+
+async function getDailyInspectionHistory(req, res) {
+  const history = await cultivationSessionService.getDailyInspectionHistory(
+    req.params.sessionId,
+    req.user,
+    req.query || {},
+  );
+  res.json({ data: history });
+}
+
+async function getTrayDailyInspectionHistory(req, res) {
+  const history = await cultivationSessionService.getTrayDailyInspectionHistory(
+    req.params.sessionId,
+    req.params.sessionTrayId,
+    req.user,
+    req.query || {},
+  );
+  res.json({ data: history });
+}
+
 async function adminAssignTrays(req, res) {
   const result = await cultivationSessionService.assignTraysForAdmin(
     req.params.sessionId,
@@ -97,6 +134,10 @@ module.exports = {
   adminGetById,
   adminListAvailableTrays,
   adminGetProgress,
+  getIotHistory,
+  getSensorHistory,
+  getDailyInspectionHistory,
+  getTrayDailyInspectionHistory,
   adminAssignTrays,
   adminUpdateGrowth,
   adminUpdateHarvestReadiness,
