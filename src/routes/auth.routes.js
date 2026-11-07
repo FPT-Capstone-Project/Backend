@@ -56,7 +56,7 @@ router.post('/register', authController.register);
  *             schema:
  *               $ref: '#/components/schemas/AuthResponse'
  *       401:
- *         description: Invalid email or password
+ *         description: Email hoặc mật khẩu không chính xác
  *       403:
  *         description: User account is not active
  */

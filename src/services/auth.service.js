@@ -59,7 +59,7 @@ async function register({ roleId, email, password, fullName, phone, address }) {
 async function login({ email, password }) {
   const user = await userModel.findByEmail(normalizeEmail(email));
   if (!user || !(await bcrypt.compare(password || '', user.password_hash))) {
-    throw new AppError('Invalid email or password', 401);
+    throw new AppError('Email hoặc mật khẩu không chính xác', 401);
   }
   if (user.status !== 'ACTIVE') throw new AppError('User account is not active', 403);
   if (user.is_email_verified === false) throw new AppError('Email chưa được xác thực', 403);
