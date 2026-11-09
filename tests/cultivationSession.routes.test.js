@@ -19,8 +19,6 @@ test('session management allows operator inspections and restricts cancellation 
   let availableTrayCalls = 0;
   let availableFloorId;
   let progressHistoryCalls = 0;
-  let iotHistoryCalls = 0;
-  let sensorHistoryCalls = 0;
   let dailyInspectionHistoryCalls = 0;
   let trayDailyInspectionHistoryCalls = 0;
   let assignmentBody;
@@ -42,14 +40,6 @@ test('session management allows operator inspections and restricts cancellation 
       },
       adminGetProgress: (req, res) => {
         progressHistoryCalls += 1;
-        res.sendStatus(204);
-      },
-      getIotHistory: (req, res) => {
-        iotHistoryCalls += 1;
-        res.sendStatus(204);
-      },
-      getSensorHistory: (req, res) => {
-        sensorHistoryCalls += 1;
         res.sendStatus(204);
       },
       getDailyInspectionHistory: (req, res) => {
@@ -152,21 +142,13 @@ test('session management allows operator inspections and restricts cancellation 
     assert.equal(progressHistoryResponse.status, 204);
     assert.equal(progressHistoryCalls, 1);
 
-    const iotHistoryUrl = `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/iot-history?page=2&pageSize=10`;
-    assert.equal((await fetch(iotHistoryUrl)).status, 401);
-    const customerToken = jwt.sign({ sub: '3' }, env.jwtSecret);
-    assert.equal((await fetch(iotHistoryUrl, {
-      headers: { authorization: `Bearer ${customerToken}` },
-    })).status, 204);
+    const iotHistoryUrl = `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/77/iot-history`;
     assert.equal((await fetch(iotHistoryUrl, {
       headers: { authorization: `Bearer ${operatorToken}` },
-    })).status, 204);
-    assert.equal(iotHistoryCalls, 2);
-    const sensorHistoryUrl = `${iotHistoryUrl}/sensors`;
-    assert.equal((await fetch(sensorHistoryUrl, {
-      headers: { authorization: `Bearer ${customerToken}` },
-    })).status, 204);
-    assert.equal(sensorHistoryCalls, 1);
+    })).status, 404);
+    assert.equal((await fetch(`${iotHistoryUrl}/sensors`, {
+      headers: { authorization: `Bearer ${operatorToken}` },
+    })).status, 404);
     const dailyInspectionHistoryUrl = `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/77/daily-inspections`;
     assert.equal((await fetch(dailyInspectionHistoryUrl, {
       headers: { authorization: `Bearer ${customerToken}` },

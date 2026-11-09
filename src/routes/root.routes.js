@@ -25,6 +25,7 @@ rootRouter.use('/analytics', require('./analytics.routes'));
 rootRouter.use('/harvests', require('./harvest.routes'));
 rootRouter.use('/harvest-requests', require('./harvestRequest.routes'));
 rootRouter.use('/cultivation-sessions', cultivationSessionRoutes);
+rootRouter.use('/environment-history', require('./cultivationEnvironmentHistory.routes'));
 rootRouter.use('/farm', require('./farm.routes'));
 rootRouter.use('/customer', require('./customerCultivation.routes'));
 rootRouter.use('/', require('./diseaseManagement.routes'));

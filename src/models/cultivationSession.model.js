@@ -32,16 +32,6 @@ const sessionFields = `
   progress.updated_at AS progress_updated_at
 `;
 
-const sessionIotFloors = `
-  SELECT DISTINCT f.floor_id, f.floor_name, f.master_id, m.master_identifier,
-         f.node_address, f.misting_ssr_channel, m.light_ssr_channel
-  FROM cultivation_session_trays st
-  INNER JOIN cultivation_trays t ON t.tray_id = st.tray_id
-  INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
-  INNER JOIN iot_masters m ON m.id = f.master_id
-  WHERE st.session_id = $1
-`;
-
 function buildFilters(filters = {}) {
   const clauses = [];
   const values = [];
@@ -176,157 +166,6 @@ async function findProgressForAdmin(sessionId) {
     [sessionId],
   );
   return result.rows;
-}
-
-async function findIotHistoryForAdmin(sessionId, { limit, offset }) {
-  const sessionResult = await pool.query(
-    `SELECT session_id AS "sessionId", start_at AS "startAt", end_at AS "endAt",
-            start_at::timestamptz AS "effectiveStartAt",
-            COALESCE(end_at::timestamptz, now()) AS "effectiveEndAt"
-     FROM cultivation_sessions
-     WHERE session_id = $1`,
-    [sessionId],
-  );
-  const session = sessionResult.rows[0];
-  if (!session) return null;
-
-  const [floors, temperatureCount, temperatures, deviceCount, deviceEvents] = await Promise.all([
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT floor_id AS "floorId", floor_name AS "floorName", master_id AS "masterId",
-              master_identifier AS "masterIdentifier", node_address AS "nodeId",
-              misting_ssr_channel AS "mistingChannel", light_ssr_channel AS "lightChannel"
-       FROM session_floors
-       ORDER BY floor_id`,
-      [sessionId],
-    ),
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT COUNT(*)::int AS total
-       FROM iot_sensor_readings r
-       INNER JOIN session_floors f
-         ON f.master_id = r.master_id AND f.node_address = r.node_address
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE r.received_at >= s.start_at::timestamptz
-         AND r.received_at <= COALESCE(s.end_at::timestamptz, now())`,
-      [sessionId],
-    ),
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT r.id, r.temperature, r.humidity, r.is_valid AS ok,
-              r.received_at AS "receivedAt", r.measured_at AS "measuredAt", r.retained,
-              f.floor_id AS "floorId", f.floor_name AS "floorName",
-              f.master_id AS "masterId", f.master_identifier AS "masterIdentifier",
-              f.node_address AS "nodeId",
-              r.sensor_address AS "sensorId"
-       FROM iot_sensor_readings r
-       INNER JOIN session_floors f
-         ON f.master_id = r.master_id AND f.node_address = r.node_address
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE r.received_at >= s.start_at::timestamptz
-         AND r.received_at <= COALESCE(s.end_at::timestamptz, now())
-       ORDER BY r.received_at DESC, r.id DESC
-       LIMIT $2 OFFSET $3`,
-      [sessionId, limit, offset],
-    ),
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT COUNT(DISTINCT c.id)::int AS total
-       FROM iot_device_commands c
-       INNER JOIN session_floors f
-         ON f.master_id = c.master_id
-        AND c.channel IN (f.misting_ssr_channel, f.light_ssr_channel)
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE c.requested_at >= s.start_at::timestamptz
-         AND c.requested_at <= COALESCE(s.end_at::timestamptz, now())`,
-      [sessionId],
-    ),
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT c.id AS "commandId", c.channel, c.action, c.status,
-              c.requested_by AS "requestedBy", c.requested_at AS "requestedAt",
-              c.published_at AS "publishedAt", c.completed_at AS "completedAt",
-              c.error_message AS "errorMessage",
-              jsonb_agg(DISTINCT jsonb_build_object(
-                'floorId', f.floor_id,
-                'floorName', f.floor_name,
-                'deviceType', CASE WHEN c.channel = f.misting_ssr_channel
-                  THEN 'MISTING' ELSE 'LIGHT' END
-              )) AS floors,
-              c.master_id AS "masterId",
-              MAX(f.master_identifier) AS "masterIdentifier"
-       FROM iot_device_commands c
-       INNER JOIN session_floors f
-         ON f.master_id = c.master_id
-        AND c.channel IN (f.misting_ssr_channel, f.light_ssr_channel)
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE c.requested_at >= s.start_at::timestamptz
-         AND c.requested_at <= COALESCE(s.end_at::timestamptz, now())
-       GROUP BY c.id, c.channel, c.action, c.status, c.requested_by,
-                c.requested_at, c.published_at, c.completed_at,
-                c.error_message, c.master_id
-       ORDER BY c.requested_at DESC, c.id DESC
-       LIMIT $2 OFFSET $3`,
-      [sessionId, limit, offset],
-    ),
-  ]);
-  return {
-    session,
-    floors: floors.rows,
-    temperatureReadings: temperatures.rows,
-    totalTemperatureReadings: temperatureCount.rows[0].total,
-    deviceEvents: deviceEvents.rows,
-    totalDeviceEvents: deviceCount.rows[0].total,
-  };
-}
-
-async function findSensorHistoryForSession(sessionId, { limit, offset }) {
-  const sessionResult = await pool.query(
-    `SELECT session_id AS "sessionId", start_at AS "startAt", end_at AS "endAt",
-            start_at::timestamptz AS "effectiveStartAt",
-            COALESCE(end_at::timestamptz, now()) AS "effectiveEndAt"
-     FROM cultivation_sessions
-     WHERE session_id = $1`,
-    [sessionId],
-  );
-  const session = sessionResult.rows[0];
-  if (!session) return null;
-
-  const [count, readings] = await Promise.all([
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT COUNT(*)::int AS total
-       FROM iot_sensor_readings r
-       INNER JOIN session_floors f
-         ON f.master_id = r.master_id AND f.node_address = r.node_address
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE r.received_at >= s.start_at::timestamptz
-         AND r.received_at <= COALESCE(s.end_at::timestamptz, now())`,
-      [sessionId],
-    ),
-    pool.query(
-      `WITH session_floors AS (${sessionIotFloors})
-       SELECT r.id, r.temperature, r.humidity, r.is_valid AS ok,
-              r.received_at AS "receivedAt", r.measured_at AS "measuredAt", r.retained,
-              f.floor_id AS "floorId", f.floor_name AS "floorName",
-              f.master_id AS "masterId", f.master_identifier AS "masterIdentifier",
-              f.node_address AS "nodeId", r.sensor_address AS "sensorId"
-       FROM iot_sensor_readings r
-       INNER JOIN session_floors f
-         ON f.master_id = r.master_id AND f.node_address = r.node_address
-       INNER JOIN cultivation_sessions s ON s.session_id = $1
-       WHERE r.received_at >= s.start_at::timestamptz
-         AND r.received_at <= COALESCE(s.end_at::timestamptz, now())
-       ORDER BY r.received_at DESC, r.id DESC
-       LIMIT $2 OFFSET $3`,
-      [sessionId, limit, offset],
-    ),
-  ]);
-  return {
-    session,
-    readings: readings.rows,
-    total: count.rows[0].total,
-  };
 }
 
 async function findDailyInspectionHistoryForAdmin(sessionId, { limit, offset }) {
@@ -1085,8 +924,6 @@ module.exports = {
   findByIdForAdmin,
   findAvailableTraysForAdmin,
   findProgressForAdmin,
-  findIotHistoryForAdmin,
-  findSensorHistoryForSession,
   findDailyInspectionHistoryForAdmin,
   findDailyInspectionHistoryForTray,
   assignTraysForAdmin,

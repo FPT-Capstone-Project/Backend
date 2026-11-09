@@ -41,7 +41,7 @@ router.post('/register', authController.register);
  * /api/auth/login:
  *   post:
  *     tags: [Authentication]
- *     summary: Login and receive a JWT token
+ *     summary: Login and receive access and refresh tokens
  *     requestBody:
  *       required: true
  *       content:
@@ -61,6 +61,51 @@ router.post('/register', authController.register);
  *         description: User account is not active
  */
 router.post('/login', authController.login);
+
+/**
+ * @openapi
+ * /api/auth/refresh:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Rotate a refresh token and receive a new access token
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken]
+ *             properties:
+ *               refreshToken: { type: string }
+ *               deviceName: { type: string, maxLength: 255 }
+ *     responses:
+ *       200: { description: New access and refresh tokens }
+ *       400: { description: Missing refresh token }
+ *       401: { description: Invalid, expired, or reused refresh token }
+ *       403: { description: User account is not active }
+ */
+router.post('/refresh', authController.refresh);
+
+/**
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     tags: [Authentication]
+ *     summary: Revoke the refresh-token family for the current session
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [refreshToken]
+ *             properties:
+ *               refreshToken: { type: string }
+ *     responses:
+ *       200: { description: Session logged out }
+ *       400: { description: Missing refresh token }
+ */
+router.post('/logout', authController.logout);
 
 /**
  * @openapi

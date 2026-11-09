@@ -9,15 +9,33 @@ async function register(req, res) {
 }
 
 async function login(req, res) {
-  const result = await authService.login(req.body);
+  const result = await authService.login({
+    ...req.body,
+    userAgent: req.get('user-agent'),
+    ipAddress: req.ip,
+  });
   res.json({ message: 'Login successful', ...result });
+}
+
+async function refresh(req, res) {
+  const result = await authService.refresh({
+    ...req.body,
+    userAgent: req.get('user-agent'),
+    ipAddress: req.ip,
+  });
+  res.json(result);
+}
+
+async function logout(req, res) {
+  const result = await authService.logout(req.body);
+  res.json(result);
 }
 
 function me(req, res) {
   res.json({ user: req.user });
 }
 
-module.exports = { register, login, me };
+module.exports = { register, login, refresh, logout, me };
 
 async function registerOtp(req, res) {
   const result = await authService.registerOtp({

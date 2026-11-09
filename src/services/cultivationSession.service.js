@@ -193,48 +193,6 @@ function parseGrowthStage(value, fieldName) {
   return stage;
 }
 
-async function getIotHistory(sessionId, user, query = {}) {
-  const pagination = parsePagination(query);
-  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
-  const result = await cultivationSessionModel.findIotHistoryForAdmin(
-    sessionIdNumber,
-    pagination,
-  );
-  if (!result) throw new AppError('Cultivation session not found', 404);
-  const { totalTemperatureReadings, totalDeviceEvents, ...history } = result;
-  return {
-    ...history,
-    pagination: {
-      page: pagination.page,
-      pageSize: pagination.pageSize,
-      totalTemperatureReadings,
-      totalTemperaturePages: Math.ceil(totalTemperatureReadings / pagination.pageSize),
-      totalDeviceEvents,
-      totalDeviceEventPages: Math.ceil(totalDeviceEvents / pagination.pageSize),
-    },
-  };
-}
-
-async function getSensorHistory(sessionId, user, query = {}) {
-  const pagination = parsePagination(query);
-  const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
-  const result = await cultivationSessionModel.findSensorHistoryForSession(
-    sessionIdNumber,
-    pagination,
-  );
-  if (!result) throw new AppError('Cultivation session not found', 404);
-  const { total, ...history } = result;
-  return {
-    ...history,
-    pagination: {
-      page: pagination.page,
-      pageSize: pagination.pageSize,
-      total,
-      totalPages: Math.ceil(total / pagination.pageSize),
-    },
-  };
-}
-
 async function getDailyInspectionHistory(sessionId, user, query = {}) {
   const pagination = parsePagination(query);
   const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
@@ -452,8 +410,6 @@ module.exports = {
   getByIdForAdmin,
   getAvailableTraysForAdmin,
   getProgressForAdmin,
-  getIotHistory,
-  getSensorHistory,
   getDailyInspectionHistory,
   getTrayDailyInspectionHistory,
   assignTraysForAdmin,

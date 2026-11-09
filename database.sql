@@ -51,6 +51,56 @@ CREATE TABLE public.users (
   CONSTRAINT fk_users_role FOREIGN KEY (role_id) REFERENCES public.roles(role_id)
 );
 
+CREATE TABLE public.refresh_tokens (
+   refresh_token_id BIGSERIAL PRIMARY KEY,
+
+   user_id INTEGER NOT NULL,
+
+   token_hash TEXT NOT NULL UNIQUE,
+
+   token_family UUID NOT NULL,
+
+   device_name VARCHAR(255),
+
+   user_agent TEXT,
+
+   ip_address INET,
+
+   expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+
+   revoked_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+
+   replaced_by_token_id BIGINT DEFAULT NULL,
+
+   created_at TIMESTAMP WITHOUT TIME ZONE
+       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+   last_used_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+
+   CONSTRAINT fk_refresh_tokens_user
+       FOREIGN KEY (user_id)
+       REFERENCES public.users(user_id)
+       ON DELETE CASCADE,
+
+   CONSTRAINT fk_refresh_tokens_replaced
+       FOREIGN KEY (replaced_by_token_id)
+       REFERENCES public.refresh_tokens(refresh_token_id)
+       ON DELETE SET NULL
+);
+
+-- Index tìm kiếm theo user
+CREATE INDEX idx_refresh_tokens_user_id
+ON public.refresh_tokens(user_id);
+
+-- Index quản lý các token cùng phiên
+CREATE INDEX idx_refresh_tokens_family
+ON public.refresh_tokens(token_family);
+
+-- Index tìm token còn hiệu lực
+CREATE INDEX idx_refresh_tokens_active
+ON public.refresh_tokens(user_id, expires_at)
+WHERE revoked_at IS NULL;
+
 -- ---------- MUSHROOM ----------
 CREATE TABLE public.mushroom_types (
   mushroom_type_id SERIAL PRIMARY KEY,
@@ -291,6 +341,33 @@ CREATE TABLE public.cultivation_sessions (
   CONSTRAINT fk_sessions_mushroom
     FOREIGN KEY (mushroom_type_id) REFERENCES public.mushroom_types(mushroom_type_id)
 );
+
+-- ---------- CULTIVATION ENVIRONMENT HISTORY ----------
+CREATE TABLE IF NOT EXISTS public.cultivation_environment_history (
+  history_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  session_id INTEGER NOT NULL,
+  floor_id INTEGER NOT NULL,
+  period_start TIMESTAMPTZ NOT NULL,
+  period_end TIMESTAMPTZ NOT NULL,
+  growth_stage VARCHAR(100) NOT NULL DEFAULT 'UNKNOWN',
+  temperature_avg DOUBLE PRECISION,
+  humidity_avg DOUBLE PRECISION,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_env_session
+    FOREIGN KEY (session_id) REFERENCES public.cultivation_sessions(session_id),
+  CONSTRAINT fk_env_floor
+    FOREIGN KEY (floor_id) REFERENCES public.cultivation_floors(floor_id),
+  CONSTRAINT uq_env_session_floor_period
+    UNIQUE (session_id, floor_id, period_start),
+  CONSTRAINT chk_env_period
+    CHECK (period_end > period_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_env_session_period
+  ON public.cultivation_environment_history (session_id, period_start DESC);
+
+CREATE INDEX IF NOT EXISTS idx_env_floor_period
+  ON public.cultivation_environment_history (floor_id, period_start DESC);
 
 ALTER TABLE public.cultivation_sessions
   ADD CONSTRAINT chk_session_status CHECK (status IN (
@@ -794,6 +871,98 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_auto_one_run
 CREATE INDEX IF NOT EXISTS idx_auto_runs_floor
  ON public.iot_auto_control_runs(floor_id, id DESC);
 CREATE INDEX IF NOT EXISTS idx_trays_floor ON public.cultivation_trays(floor_id);
+
+CREATE OR REPLACE FUNCTION public.save_cultivation_environment_history(
+  p_period_start TIMESTAMPTZ,
+  p_period_end TIMESTAMPTZ
+)
+RETURNS INTEGER
+LANGUAGE plpgsql
+AS $$
+DECLARE
+  inserted_count INTEGER;
+BEGIN
+  IF p_period_start IS NULL
+    OR p_period_end IS NULL
+    OR p_period_end - p_period_start <> INTERVAL '10 minutes'
+    OR date_bin(INTERVAL '10 minutes', p_period_start, TIMESTAMPTZ '2000-01-01 00:00:00+00') <> p_period_start
+  THEN
+    RAISE EXCEPTION 'Expected an aligned 10-minute period';
+  END IF;
+
+  WITH session_floors AS (
+    SELECT s.session_id, s.start_at, s.end_at,
+           MIN(st.assigned_at) AS assigned_at,
+           f.floor_id, f.master_id, f.node_address
+    FROM public.cultivation_sessions s
+    INNER JOIN public.cultivation_session_trays st
+      ON st.session_id = s.session_id AND st.status = 'ACTIVE'
+    INNER JOIN public.cultivation_trays t
+      ON t.tray_id = st.tray_id AND t.status = 'OCCUPIED'
+    INNER JOIN public.cultivation_floors f
+      ON f.floor_id = t.floor_id AND f.status = 'ACTIVE'
+    WHERE s.status = 'CULTIVATING'
+      AND s.start_at::timestamptz < p_period_end
+      AND (s.end_at IS NULL OR s.end_at::timestamptz > p_period_start)
+    GROUP BY s.session_id, s.start_at, s.end_at,
+             f.floor_id, f.master_id, f.node_address
+  ),
+  sensor_averages AS (
+    SELECT sf.session_id, sf.floor_id, r.sensor_address,
+           AVG(r.temperature) FILTER (
+             WHERE r.temperature BETWEEN -40 AND 125
+           ) AS temperature_avg,
+           AVG(r.humidity) FILTER (
+             WHERE r.humidity BETWEEN 0 AND 100
+           ) AS humidity_avg
+    FROM session_floors sf
+    INNER JOIN public.iot_sensor_readings r
+      ON r.master_id = sf.master_id
+     AND r.node_address = sf.node_address
+     AND r.received_at >= GREATEST(
+       p_period_start,
+       sf.start_at::timestamptz,
+       sf.assigned_at::timestamptz
+     )
+     AND r.received_at < LEAST(
+       p_period_end,
+       COALESCE(sf.end_at::timestamptz, p_period_end)
+     )
+    WHERE r.is_valid AND NOT r.retained
+    GROUP BY sf.session_id, sf.floor_id, r.sensor_address
+  ),
+  floor_averages AS (
+    SELECT session_id, floor_id,
+           AVG(temperature_avg) FILTER (WHERE temperature_avg IS NOT NULL) AS temperature_avg,
+           AVG(humidity_avg) FILTER (WHERE humidity_avg IS NOT NULL) AS humidity_avg
+    FROM sensor_averages
+    GROUP BY session_id, floor_id
+  )
+  INSERT INTO public.cultivation_environment_history (
+    session_id, floor_id, period_start, period_end, growth_stage,
+    temperature_avg, humidity_avg
+  )
+  SELECT sf.session_id, sf.floor_id, p_period_start, p_period_end,
+         COALESCE(progress.current_stage, 'UNKNOWN'),
+         averages.temperature_avg, averages.humidity_avg
+  FROM session_floors sf
+  LEFT JOIN floor_averages averages
+    ON averages.session_id = sf.session_id AND averages.floor_id = sf.floor_id
+  LEFT JOIN LATERAL (
+    SELECT cp.current_stage
+    FROM public.cultivation_progress cp
+    WHERE cp.session_id = sf.session_id
+      AND cp.current_stage IS NOT NULL
+      AND cp.updated_at::timestamptz < p_period_end
+    ORDER BY cp.updated_at DESC, cp.progress_id DESC
+    LIMIT 1
+  ) progress ON TRUE
+  ON CONFLICT (session_id, floor_id, period_start) DO NOTHING;
+
+  GET DIAGNOSTICS inserted_count = ROW_COUNT;
+  RETURN inserted_count;
+END;
+$$;
 
 -- Reintroduce the cross-column checks omitted by the table-only export.
 DO $$

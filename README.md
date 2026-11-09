@@ -34,7 +34,8 @@ Backend/
 │   ├── middlewares/
 │   │   └── auth.middleware.js # Authentication và authorization
 │   ├── models/
-│   │   └── user.model.js      # Query bảng users
+│   │   ├── user.model.js      # Query bảng users
+│   │   └── refreshToken.model.js # Lưu, xoay vòng và thu hồi refresh token
 │   ├── routes/
 │   │   ├── auth.routes.js     # Register, login, current user
 │   │   ├── root.routes.js     # Nơi đăng ký các module route
@@ -116,7 +117,8 @@ DB_USER=postgres
 DB_PASSWORD=your-postgres-password
 
 JWT_SECRET=replace-with-a-long-random-secret
-JWT_EXPIRES_IN=1d
+ACCESS_TOKEN_EXPIRES_IN=15m
+REFRESH_TOKEN_EXPIRES_DAYS=30
 
 # PayOS
 PAYOS_CLIENT_ID=your-payos-client-id
@@ -314,6 +316,27 @@ node -e "const pool=require('./src/config/db'); pool.query('SELECT current_datab
 
 ## 7. Chạy project
 
+Job nền `jobs/environmentHistory.job.js` chạy ngay khi server khởi động để backfill, sau đó canh mốc 10 phút bằng timer tích hợp của Node.js (project không có `node-cron`). Job dùng advisory lock của PostgreSQL để chỉ một instance xử lý tại một thời điểm, backfill các bucket đã kết thúc nhưng chưa có trong bảng, và chờ thêm 10 phút trước khi chốt bucket để giảm nguy cơ bỏ sót reading đến sát ranh giới. Job chạy `INSERT ... SELECT` trực tiếp trong PostgreSQL, không phụ thuộc việc cài Function riêng trên Supabase. Chỉ tổng hợp session `CULTIVATING`, assignment `ACTIVE`, khay `OCCUPIED` và floor `ACTIVE`. AVG được tính trong PostgreSQL: trước tiên trung bình từng sensor, sau đó trung bình sensor với trọng số bằng nhau; nhiệt độ/độ ẩm xử lý độc lập khi một giá trị bị NULL. Reading phải `is_valid`, không `retained`, và được lọc theo `received_at`. Bucket không có sensor hợp lệ vẫn được ghi với giá trị trung bình `NULL` để ghi nhận đã xử lý và tránh backfill lặp vô hạn. Bảng `cultivation_environment_history` phải tồn tại trước khi bật server. Function tùy chọn `save_cultivation_environment_history` trong `database.sql`/migration 021 có thể dùng để chạy tổng hợp thủ công; job nền không gọi Function đó.
+
+Lịch sử đọc từ `cultivation_environment_history` qua `GET /api/environment-history/sessions/:sessionId`, `/sessions/:sessionId/latest` và `/floors/:floorId`; session và floor history hỗ trợ `from`, `to`, `page`, `pageSize`. Customer chỉ xem session của mình và floor history thuộc session của mình. Dashboard environment history cũng truy vấn bảng tổng hợp, không đọc `iot_sensor_readings`.
+
+Có thể kiểm tra Function thủ công trong Supabase SQL Editor (thời gian UTC, bucket 10 phút đã kết thúc):
+
+```sql
+WITH period AS (
+  SELECT date_bin(
+    INTERVAL '10 minutes',
+    now() - INTERVAL '10 minutes',
+    TIMESTAMPTZ '2000-01-01 00:00:00+00'
+  ) AS period_start
+)
+SELECT public.save_cultivation_environment_history(
+  period_start,
+  period_start + INTERVAL '10 minutes'
+)
+FROM period;
+```
+
 ### Development
 
 Chạy với `nodemon`, server tự restart khi source thay đổi:
@@ -441,7 +464,29 @@ Request body:
 }
 ```
 
-Response thành công trả về user và JWT token. Password không được trả về response.
+Response trả về `accessToken`, `refreshToken` và user. Gửi access token trong header
+`Authorization: Bearer <accessToken>` khi gọi API được bảo vệ. Trường `token` vẫn
+được trả về như alias của `accessToken` để tương thích client cũ. Password và refresh
+token dạng hash không được trả về response.
+
+### Làm mới token và đăng xuất
+
+Khi access token hết hạn, gửi refresh token hiện tại:
+
+```http
+POST /api/auth/refresh
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "<refreshToken>"
+}
+```
+
+Mỗi lần refresh, token cũ bị thu hồi và response chứa cặp token mới. Chỉ lưu refresh
+token mới sau khi nhận response thành công; dùng lại token cũ sẽ thu hồi phiên đó.
+Đăng xuất bằng `POST /api/auth/logout` với cùng JSON body để thu hồi phiên.
 
 ### Lấy user hiện tại
 
@@ -459,7 +504,7 @@ Authorization: Bearer <jwt-token>
 
 ## 10. JWT Authentication và Authorization
 
-JWT được tạo sau khi đăng ký hoặc đăng nhập thành công. Payload hiện có:
+Access JWT được tạo sau khi đăng ký hoặc đăng nhập thành công. Payload hiện có:
 
 ```json
 {
@@ -472,7 +517,7 @@ Middleware `authenticate` thực hiện:
 
 1. Đọc header `Authorization`.
 2. Kiểm tra format `Bearer <token>`.
-3. Verify chữ ký JWT và thời hạn token.
+3. Verify chữ ký JWT và thời hạn access token.
 4. Tìm user tương ứng trong database.
 5. Từ chối user không tồn tại hoặc không có trạng thái `ACTIVE`.
 6. Gắn user vào `req.user` để controller sử dụng.
@@ -552,6 +597,8 @@ router.get('/admin', authenticate, authorizeRoles(1), controller.adminAction);
 
 - Không commit `.env` hoặc password database lên Git.
 - Dùng `JWT_SECRET` đủ dài và ngẫu nhiên.
+- Access token mặc định có thời hạn 15 phút; refresh token mặc định có thời hạn 30 ngày.
+- Chỉ lưu refresh token ở phía client; database chỉ lưu SHA-256 hash của token.
 - Không dùng secret mặc định khi deploy production.
 - Không log password hoặc JWT token trong server log.
 - Nếu connection string đã bị chia sẻ, nên đổi password database trên Supabase.
