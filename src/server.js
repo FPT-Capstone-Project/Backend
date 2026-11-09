@@ -8,10 +8,12 @@ const paymentModel = require('./models/payment.model');
 const pool = require('./config/db');
 const autoMisting = require('./services/autoMisting.worker');
 const deviceIncidents = require('./services/deviceIncident.worker');
+const environmentHistory = require('../jobs/environmentHistory.job');
 // One MQTT connection per process; importing Express does not open a connection.
 iotMqtt.start();
 autoMisting.start();
 deviceIncidents.start();
+environmentHistory.start();
 const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const payosPaymentExpiryInterval = setInterval(() => {
@@ -42,6 +44,7 @@ async function shutdown(signal) {
   try {
     await autoMisting.stop();
     await deviceIncidents.stop();
+    await environmentHistory.stop();
     await Promise.all([
       new Promise((resolve) => server.close(resolve)),
       iotMqtt.stop(),

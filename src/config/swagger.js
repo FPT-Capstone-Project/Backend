@@ -27,6 +27,7 @@ const options = {
       { name: 'Orders', description: 'Customer cultivation orders for packages, mushroom types, and tray quantities' },
       { name: 'Cultivation Sessions', description: 'WF-03: assign floor and trays, monitor growth, then confirm harvest readiness separately' },
       { name: 'Cultivation Audit', description: 'Supporting tray inspections, images, incidents, and immutable growth history; not required lifecycle steps' },
+      { name: 'Environment History', description: 'Stored 10-minute cultivation temperature and humidity averages' },
       { name: 'Harvests', description: 'WF-04 harvest lifecycle, actual yield, and order history' },
       { name: 'Harvest Requests', description: 'WF-04 customer receiving method, pickup schedule, and handover completion' },
       { name: 'Farm Spawn Workflow', description: 'Farm spawn handling and customer cultivation tracking' },

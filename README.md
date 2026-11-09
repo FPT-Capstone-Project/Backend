@@ -316,6 +316,27 @@ node -e "const pool=require('./src/config/db'); pool.query('SELECT current_datab
 
 ## 7. Chạy project
 
+Job nền `jobs/environmentHistory.job.js` chạy ngay khi server khởi động để backfill, sau đó canh mốc 10 phút bằng timer tích hợp của Node.js (project không có `node-cron`). Job dùng advisory lock của PostgreSQL để chỉ một instance xử lý tại một thời điểm, backfill các bucket đã kết thúc nhưng chưa có trong bảng, và chờ thêm 10 phút trước khi chốt bucket để giảm nguy cơ bỏ sót reading đến sát ranh giới. Job chạy `INSERT ... SELECT` trực tiếp trong PostgreSQL, không phụ thuộc việc cài Function riêng trên Supabase. Chỉ tổng hợp session `CULTIVATING`, assignment `ACTIVE`, khay `OCCUPIED` và floor `ACTIVE`. AVG được tính trong PostgreSQL: trước tiên trung bình từng sensor, sau đó trung bình sensor với trọng số bằng nhau; nhiệt độ/độ ẩm xử lý độc lập khi một giá trị bị NULL. Reading phải `is_valid`, không `retained`, và được lọc theo `received_at`. Bucket không có sensor hợp lệ vẫn được ghi với giá trị trung bình `NULL` để ghi nhận đã xử lý và tránh backfill lặp vô hạn. Bảng `cultivation_environment_history` phải tồn tại trước khi bật server. Function tùy chọn `save_cultivation_environment_history` trong `database.sql`/migration 021 có thể dùng để chạy tổng hợp thủ công; job nền không gọi Function đó.
+
+Lịch sử đọc từ `cultivation_environment_history` qua `GET /api/environment-history/sessions/:sessionId`, `/sessions/:sessionId/latest` và `/floors/:floorId`; session và floor history hỗ trợ `from`, `to`, `page`, `pageSize`. Customer chỉ xem session của mình và floor history thuộc session của mình. Dashboard environment history cũng truy vấn bảng tổng hợp, không đọc `iot_sensor_readings`.
+
+Có thể kiểm tra Function thủ công trong Supabase SQL Editor (thời gian UTC, bucket 10 phút đã kết thúc):
+
+```sql
+WITH period AS (
+  SELECT date_bin(
+    INTERVAL '10 minutes',
+    now() - INTERVAL '10 minutes',
+    TIMESTAMPTZ '2000-01-01 00:00:00+00'
+  ) AS period_start
+)
+SELECT public.save_cultivation_environment_history(
+  period_start,
+  period_start + INTERVAL '10 minutes'
+)
+FROM period;
+```
+
 ### Development
 
 Chạy với `nodemon`, server tự restart khi source thay đổi:

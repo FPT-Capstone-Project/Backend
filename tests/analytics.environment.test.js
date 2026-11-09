@@ -40,6 +40,15 @@ test('environment charts aggregate real PostgreSQL history through the staff API
       assert.equal(queryCount, before);
     }
     await db.exec(`
+      INSERT INTO roles (role_id, role_name) VALUES (3, 'Customer');
+      INSERT INTO users (role_id, email, password_hash, full_name)
+        VALUES (3, 'environment-chart@example.com', 'hash', 'Environment Chart');
+      INSERT INTO mushroom_types (name, growing_days) VALUES ('Chart mushroom', 30);
+      INSERT INTO orders (user_id) VALUES (1);
+      INSERT INTO order_items (order_id, mushroom_type_id, unit_price, total_price)
+        VALUES (1, 1, 10, 10);
+      INSERT INTO cultivation_sessions (mushroom_type_id, start_at, order_item_id, status)
+        VALUES (1, '2026-11-01 00:00:00', 1, 'CULTIVATING');
       INSERT INTO cultivation_rooms(room_code,room_name) VALUES ('R','Room');
       INSERT INTO iot_masters(master_identifier,cultivation_room_id) VALUES ('m1',1),('m2',1);
       INSERT INTO cultivation_floors(room_id,floor_number,floor_name,master_id,node_address,misting_ssr_channel,status)
@@ -50,16 +59,12 @@ test('environment charts aggregate real PostgreSQL history through the staff API
         max_activations_per_hour,max_cumulative_on_ms_per_hour,temperature_min,temperature_max,max_sensor_spread_percent,
         config_source,source_profiles)
         VALUES (1,75,90,74,85,1000,1000,1000,20,60000,20,30,10,'FLOOR','[]');
-      INSERT INTO iot_sensor_readings(master_id,node_address,sensor_address,temperature,humidity,is_valid,received_at,retained) VALUES
-        (1,1,1,20,60,true,'2026-11-01T00:00:00Z',false),
-        (1,1,1,30,80,true,'2026-11-01T00:05:00Z',false),
-        (1,1,2,35,90,true,'2026-11-01T00:10:00Z',false),
-        (1,1,3,100,100,false,'2026-11-01T00:10:00Z',false),
-        (1,1,3,100,100,true,'2026-11-01T00:11:00Z',true),
-        (1,1,3,NULL,50,true,'2026-11-01T00:15:00Z',false),
-        (1,1,1,99,99,true,'2026-11-02T00:00:00Z',false),
-        (1,1,1,99,99,true,'2026-10-31T23:59:59Z',false),
-        (1,2,1,22,66,true,'2026-11-01T00:05:00Z',false);
+      INSERT INTO cultivation_environment_history
+        (session_id,floor_id,period_start,period_end,growth_stage,temperature_avg,humidity_avg) VALUES
+        (1,1,'2026-11-01T00:00:00Z','2026-11-01T00:10:00Z','PINNING',25,70),
+        (1,1,'2026-11-01T00:10:00Z','2026-11-01T00:20:00Z','PINNING',35,90),
+        (1,1,'2026-11-01T00:15:00Z','2026-11-01T00:25:00Z','PINNING',NULL,50),
+        (1,2,'2026-11-01T00:05:00Z','2026-11-01T00:15:00Z','PINNING',22,66);
     `);
     const before = queryCount;
     const result = await request('?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z');

@@ -49,7 +49,7 @@ router.get('/dashboard', authenticate, authorizeRoles(1, 2), analyticsController
  *   get:
  *     tags: [Analytics]
  *     summary: Chart-ready temperature and humidity history for every active floor
- *     description: 'One request replaces per-floor/per-sensor history pagination. Default window is 24h ending at the latest 5-minute boundary, with 96 15-minute buckets. Custom from/to must be supplied together, with a positive range at most 24h. Buckets start at from; range is [from,to). Only valid non-retained readings from sensors 1-3 are included. Each metric is averaged per sensor then equally across sensors. Missing values are null. Thresholds are the current configured floor thresholds, not historical thresholds. History uses the current master/node mapping of each floor.'
+ *     description: 'Reads only cultivation_environment_history, never raw sensor readings. Default window is 24h ending at the latest 5-minute boundary, with chart points grouped into 96 15-minute buckets from stored 10-minute session/floor averages. Custom from/to must be supplied together, with a positive range at most 24h. Range is [from,to). Missing values are null. Thresholds are the current configured floor thresholds, not historical thresholds.'
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: query
