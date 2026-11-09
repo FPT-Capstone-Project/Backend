@@ -51,6 +51,56 @@ CREATE TABLE public.users (
   CONSTRAINT fk_users_role FOREIGN KEY (role_id) REFERENCES public.roles(role_id)
 );
 
+CREATE TABLE public.refresh_tokens (
+   refresh_token_id BIGSERIAL PRIMARY KEY,
+
+   user_id INTEGER NOT NULL,
+
+   token_hash TEXT NOT NULL UNIQUE,
+
+   token_family UUID NOT NULL,
+
+   device_name VARCHAR(255),
+
+   user_agent TEXT,
+
+   ip_address INET,
+
+   expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+
+   revoked_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+
+   replaced_by_token_id BIGINT DEFAULT NULL,
+
+   created_at TIMESTAMP WITHOUT TIME ZONE
+       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+   last_used_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+
+   CONSTRAINT fk_refresh_tokens_user
+       FOREIGN KEY (user_id)
+       REFERENCES public.users(user_id)
+       ON DELETE CASCADE,
+
+   CONSTRAINT fk_refresh_tokens_replaced
+       FOREIGN KEY (replaced_by_token_id)
+       REFERENCES public.refresh_tokens(refresh_token_id)
+       ON DELETE SET NULL
+);
+
+-- Index tìm kiếm theo user
+CREATE INDEX idx_refresh_tokens_user_id
+ON public.refresh_tokens(user_id);
+
+-- Index quản lý các token cùng phiên
+CREATE INDEX idx_refresh_tokens_family
+ON public.refresh_tokens(token_family);
+
+-- Index tìm token còn hiệu lực
+CREATE INDEX idx_refresh_tokens_active
+ON public.refresh_tokens(user_id, expires_at)
+WHERE revoked_at IS NULL;
+
 -- ---------- MUSHROOM ----------
 CREATE TABLE public.mushroom_types (
   mushroom_type_id SERIAL PRIMARY KEY,

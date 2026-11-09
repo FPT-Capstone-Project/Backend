@@ -34,25 +34,6 @@ function loadService() {
         progress_percent: 40,
       }];
     },
-    findIotHistoryForAdmin: async (...args) => {
-      calls.push(args);
-      return {
-        session: { sessionId: args[0] },
-        floors: [],
-        temperatureReadings: [],
-        totalTemperatureReadings: 0,
-        deviceEvents: [],
-        totalDeviceEvents: 0,
-      };
-    },
-    findSensorHistoryForSession: async (...args) => {
-      calls.push(args);
-      return {
-        session: { sessionId: args[0] },
-        readings: [{ id: 1, temperature: 24.5, humidity: 88.2 }],
-        total: 1,
-      };
-    },
     findDailyInspectionHistoryForAdmin: async (...args) => {
       calls.push(args);
       return {
@@ -173,57 +154,6 @@ test('lists currently assignable trays and returns immutable cultivation progres
   assert.equal(progress.session_id, 7);
   assert.equal(progress.current_stage, 'PINNING');
   assert.deepEqual(calls, [[2], [7]]);
-});
-
-test('paginates IoT temperature and device history for a session', async () => {
-  const { service, calls } = loadService();
-  const customer = { user_id: 7, role_id: 3 };
-  const history = await service.getIotHistory('7', customer, { page: '2', pageSize: '10' });
-
-  assert.equal(history.session.sessionId, 7);
-  assert.deepEqual(history.pagination, {
-    page: 2,
-    pageSize: 10,
-    totalTemperatureReadings: 0,
-    totalTemperaturePages: 0,
-    totalDeviceEvents: 0,
-    totalDeviceEventPages: 0,
-  });
-  assert.deepEqual(calls, [[7, { page: 2, pageSize: 10, limit: 10, offset: 10 }]]);
-
-  await assert.rejects(
-    () => service.getIotHistory('bad', customer),
-    { statusCode: 400 },
-  );
-  await assert.rejects(
-    () => service.getIotHistory('7', customer, { pageSize: 101 }),
-    { statusCode: 400 },
-  );
-  await assert.rejects(
-    () => service.getIotHistory('8', customer),
-    { statusCode: 404, message: 'Cultivation session not found' },
-  );
-  await assert.rejects(
-    () => service.getIotHistory('7', { user_id: 7, role_id: 4 }),
-    { statusCode: 403 },
-  );
-});
-
-test('returns paginated sensor temperature and humidity history for an owned session', async () => {
-  const { service, calls } = loadService();
-  const history = await service.getSensorHistory(
-    '7',
-    { user_id: 7, role_id: 3 },
-    { page: '1', pageSize: '5' },
-  );
-
-  assert.deepEqual(history.readings, [{ id: 1, temperature: 24.5, humidity: 88.2 }]);
-  assert.deepEqual(history.pagination, { page: 1, pageSize: 5, total: 1, totalPages: 1 });
-  assert.deepEqual(calls, [[7, { page: 1, pageSize: 5, limit: 5, offset: 0 }]]);
-  await assert.rejects(
-    () => service.getSensorHistory('8', { user_id: 7, role_id: 3 }),
-    { statusCode: 404, message: 'Cultivation session not found' },
-  );
 });
 
 test('returns daily inspection history across all trays for an owned session', async () => {

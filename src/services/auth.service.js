@@ -1,7 +1,9 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
 const env = require('../config/env');
 const userModel = require('../models/user.model');
+const refreshTokenModel = require('../models/refreshToken.model');
 const AppError = require('../utils/app-error');
 const { sendOtpEmail } = require('./email.service');
 const {
@@ -12,12 +14,52 @@ const {
   getCooldownSecondsRemaining,
 } = require('../utils/otp.util');
 
-function createToken(user) {
+function createAccessToken(user) {
   return jwt.sign(
     { sub: String(user.user_id), roleId: user.role_id },
     env.jwtSecret,
-    { expiresIn: env.jwtExpiresIn },
+    { expiresIn: env.accessTokenExpiresIn },
   );
+}
+
+function hashRefreshToken(token) {
+  return crypto.createHash('sha256').update(token).digest('hex');
+}
+
+function createRefreshToken() {
+  return crypto.randomBytes(64).toString('base64url');
+}
+
+function getRefreshTokenExpiry() {
+  return new Date(Date.now() + env.refreshTokenExpiresInDays * 24 * 60 * 60 * 1000);
+}
+
+function validateDeviceName(deviceName) {
+  if (deviceName !== undefined && deviceName !== null
+    && (typeof deviceName !== 'string' || deviceName.length > 255)) {
+    throw new AppError('deviceName must be a string of at most 255 characters', 400);
+  }
+}
+
+async function createTokenPair(user, metadata = {}, tokenFamily = crypto.randomUUID()) {
+  validateDeviceName(metadata.deviceName);
+  const accessToken = createAccessToken(user);
+  const refreshToken = createRefreshToken();
+  await refreshTokenModel.create({
+    userId: user.user_id,
+    tokenHash: hashRefreshToken(refreshToken),
+    tokenFamily,
+    deviceName: metadata.deviceName,
+    userAgent: metadata.userAgent,
+    ipAddress: metadata.ipAddress,
+    expiresAt: getRefreshTokenExpiry(),
+  });
+  return {
+    accessToken,
+    refreshToken,
+    tokenType: 'Bearer',
+    expiresIn: env.accessTokenExpiresIn,
+  };
 }
 
 function normalizeEmail(email) {
@@ -48,7 +90,7 @@ async function register({ roleId, email, password, fullName, phone, address }) {
     const user = await userModel.create({
       roleId: selectedRoleId, email: normalizedEmail, passwordHash, fullName, phone, address,
     });
-    return { user, token: createToken(user) };
+    return { user, ...await createTokenPair(user) };
   } catch (error) {
     if (error.code === '23505') throw new AppError('Email is already registered', 409);
     if (error.code === '23503') throw new AppError('The selected role does not exist', 400);
@@ -56,14 +98,56 @@ async function register({ roleId, email, password, fullName, phone, address }) {
   }
 }
 
-async function login({ email, password }) {
+async function login({ email, password, deviceName, userAgent, ipAddress }) {
   const user = await userModel.findByEmail(normalizeEmail(email));
   if (!user || !(await bcrypt.compare(password || '', user.password_hash))) {
     throw new AppError('Email hoặc mật khẩu không chính xác', 401);
   }
   if (user.status !== 'ACTIVE') throw new AppError('User account is not active', 403);
   if (user.is_email_verified === false) throw new AppError('Email chưa được xác thực', 403);
-  return { user: sanitizeUser(user), token: createToken(user) };
+  return {
+    user: sanitizeUser(user),
+    ...await createTokenPair(user, { deviceName, userAgent, ipAddress }),
+  };
+}
+
+async function refresh({ refreshToken, deviceName, userAgent, ipAddress }) {
+  if (typeof refreshToken !== 'string' || !refreshToken) {
+    throw new AppError('refreshToken is required', 400);
+  }
+  validateDeviceName(deviceName);
+
+  const nextRefreshToken = createRefreshToken();
+  const result = await refreshTokenModel.rotate({
+    tokenHash: hashRefreshToken(refreshToken),
+    newTokenHash: hashRefreshToken(nextRefreshToken),
+    deviceName,
+    userAgent,
+    ipAddress,
+    expiresAt: getRefreshTokenExpiry(),
+  });
+  if (!result) throw new AppError('Invalid or expired refresh token', 401);
+  if (result.reuseDetected) {
+    throw new AppError('Refresh token reuse detected; please log in again', 401);
+  }
+  if (result.expired) throw new AppError('Invalid or expired refresh token', 401);
+  if (result.userInactive) throw new AppError('User account is not active', 403);
+
+  const accessToken = createAccessToken(result.user);
+  return {
+    accessToken,
+    refreshToken: nextRefreshToken,
+    tokenType: 'Bearer',
+    expiresIn: env.accessTokenExpiresIn,
+  };
+}
+
+async function logout({ refreshToken }) {
+  if (typeof refreshToken !== 'string' || !refreshToken) {
+    throw new AppError('refreshToken is required', 400);
+  }
+  await refreshTokenModel.revokeByHash(hashRefreshToken(refreshToken));
+  return { message: 'Logged out successfully' };
 }
 
 function sanitizeUser(user) {
@@ -71,7 +155,7 @@ function sanitizeUser(user) {
   return safeUser;
 }
 
-module.exports = { register, login, sanitizeUser };
+module.exports = { register, login, refresh, logout, sanitizeUser };
 
 const DEFAULT_CUSTOMER_ROLE_ID = 3;
 const OTP_TYPES = {

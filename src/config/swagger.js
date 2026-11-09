@@ -429,6 +429,10 @@ const options = {
           type: 'object',
           properties: {
             message: { type: 'string', example: 'Login successful' },
+            accessToken: { type: 'string' },
+            refreshToken: { type: 'string' },
+            tokenType: { type: 'string', example: 'Bearer' },
+            expiresIn: { type: 'string', example: '15m' },
             token: { type: 'string', example: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...' },
             user: { $ref: '#/components/schemas/User' },
           },

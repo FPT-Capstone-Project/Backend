@@ -34,7 +34,8 @@ Backend/
 │   ├── middlewares/
 │   │   └── auth.middleware.js # Authentication và authorization
 │   ├── models/
-│   │   └── user.model.js      # Query bảng users
+│   │   ├── user.model.js      # Query bảng users
+│   │   └── refreshToken.model.js # Lưu, xoay vòng và thu hồi refresh token
 │   ├── routes/
 │   │   ├── auth.routes.js     # Register, login, current user
 │   │   ├── root.routes.js     # Nơi đăng ký các module route
@@ -116,7 +117,8 @@ DB_USER=postgres
 DB_PASSWORD=your-postgres-password
 
 JWT_SECRET=replace-with-a-long-random-secret
-JWT_EXPIRES_IN=1d
+ACCESS_TOKEN_EXPIRES_IN=15m
+REFRESH_TOKEN_EXPIRES_DAYS=30
 
 # PayOS
 PAYOS_CLIENT_ID=your-payos-client-id
@@ -441,7 +443,29 @@ Request body:
 }
 ```
 
-Response thành công trả về user và JWT token. Password không được trả về response.
+Response trả về `accessToken`, `refreshToken` và user. Gửi access token trong header
+`Authorization: Bearer <accessToken>` khi gọi API được bảo vệ. Trường `token` vẫn
+được trả về như alias của `accessToken` để tương thích client cũ. Password và refresh
+token dạng hash không được trả về response.
+
+### Làm mới token và đăng xuất
+
+Khi access token hết hạn, gửi refresh token hiện tại:
+
+```http
+POST /api/auth/refresh
+Content-Type: application/json
+```
+
+```json
+{
+  "refreshToken": "<refreshToken>"
+}
+```
+
+Mỗi lần refresh, token cũ bị thu hồi và response chứa cặp token mới. Chỉ lưu refresh
+token mới sau khi nhận response thành công; dùng lại token cũ sẽ thu hồi phiên đó.
+Đăng xuất bằng `POST /api/auth/logout` với cùng JSON body để thu hồi phiên.
 
 ### Lấy user hiện tại
 
@@ -459,7 +483,7 @@ Authorization: Bearer <jwt-token>
 
 ## 10. JWT Authentication và Authorization
 
-JWT được tạo sau khi đăng ký hoặc đăng nhập thành công. Payload hiện có:
+Access JWT được tạo sau khi đăng ký hoặc đăng nhập thành công. Payload hiện có:
 
 ```json
 {
@@ -472,7 +496,7 @@ Middleware `authenticate` thực hiện:
 
 1. Đọc header `Authorization`.
 2. Kiểm tra format `Bearer <token>`.
-3. Verify chữ ký JWT và thời hạn token.
+3. Verify chữ ký JWT và thời hạn access token.
 4. Tìm user tương ứng trong database.
 5. Từ chối user không tồn tại hoặc không có trạng thái `ACTIVE`.
 6. Gắn user vào `req.user` để controller sử dụng.
@@ -552,6 +576,8 @@ router.get('/admin', authenticate, authorizeRoles(1), controller.adminAction);
 
 - Không commit `.env` hoặc password database lên Git.
 - Dùng `JWT_SECRET` đủ dài và ngẫu nhiên.
+- Access token mặc định có thời hạn 15 phút; refresh token mặc định có thời hạn 30 ngày.
+- Chỉ lưu refresh token ở phía client; database chỉ lưu SHA-256 hash của token.
 - Không dùng secret mặc định khi deploy production.
 - Không log password hoặc JWT token trong server log.
 - Nếu connection string đã bị chia sẻ, nên đổi password database trên Supabase.
