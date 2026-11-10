@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const jwt = require('jsonwebtoken');
 const { PGlite } = require('@electric-sql/pglite');
 
-test('environment charts aggregate real PostgreSQL history through the staff API', async () => {
+test('environment charts aggregate sensor readings without cultivation sessions through the staff API', async () => {
   const db = new PGlite();
   const dbPath = require.resolve('../src/config/db');
   const userPath = require.resolve('../src/models/user.model');
@@ -40,15 +40,6 @@ test('environment charts aggregate real PostgreSQL history through the staff API
       assert.equal(queryCount, before);
     }
     await db.exec(`
-      INSERT INTO roles (role_id, role_name) VALUES (3, 'Customer');
-      INSERT INTO users (role_id, email, password_hash, full_name)
-        VALUES (3, 'environment-chart@example.com', 'hash', 'Environment Chart');
-      INSERT INTO mushroom_types (name, growing_days) VALUES ('Chart mushroom', 30);
-      INSERT INTO orders (user_id) VALUES (1);
-      INSERT INTO order_items (order_id, mushroom_type_id, unit_price, total_price)
-        VALUES (1, 1, 10, 10);
-      INSERT INTO cultivation_sessions (mushroom_type_id, start_at, order_item_id, status)
-        VALUES (1, '2026-11-01 00:00:00', 1, 'CULTIVATING');
       INSERT INTO cultivation_rooms(room_code,room_name) VALUES ('R','Room');
       INSERT INTO iot_masters(master_identifier,cultivation_room_id) VALUES ('m1',1),('m2',1);
       INSERT INTO cultivation_floors(room_id,floor_number,floor_name,master_id,node_address,misting_ssr_channel,status)
@@ -59,13 +50,22 @@ test('environment charts aggregate real PostgreSQL history through the staff API
         max_activations_per_hour,max_cumulative_on_ms_per_hour,temperature_min,temperature_max,max_sensor_spread_percent,
         config_source,source_profiles)
         VALUES (1,75,90,74,85,1000,1000,1000,20,60000,20,30,10,'FLOOR','[]');
-      INSERT INTO cultivation_environment_history
-        (session_id,floor_id,period_start,period_end,growth_stage,temperature_avg,humidity_avg) VALUES
-        (1,1,'2026-11-01T00:00:00Z','2026-11-01T00:10:00Z','PINNING',25,70),
-        (1,1,'2026-11-01T00:10:00Z','2026-11-01T00:20:00Z','PINNING',35,90),
-        (1,1,'2026-11-01T00:15:00Z','2026-11-01T00:25:00Z','PINNING',NULL,50),
-        (1,2,'2026-11-01T00:05:00Z','2026-11-01T00:15:00Z','PINNING',22,66);
+      INSERT INTO iot_sensor_readings
+        (master_id,node_address,sensor_address,received_at,temperature,humidity,is_valid,retained) VALUES
+        (1,1,1,'2026-11-01T00:00:00Z',20,60,true,false),
+        (1,1,1,'2026-11-01T00:10:00Z',30,80,true,false),
+        (1,1,2,'2026-11-01T00:05:00Z',35,90,true,false),
+        (1,1,1,'2026-11-01T00:15:00Z',NULL,50,true,false),
+        (1,2,1,'2026-11-01T00:05:00Z',22,66,true,false),
+        (1,1,3,'2026-11-01T00:05:00Z',100,100,false,false),
+        (1,1,3,'2026-11-01T00:06:00Z',100,100,true,true),
+        (1,1,3,'2026-11-01T00:07:00Z',126,101,true,false),
+        (1,1,3,'2026-11-01T00:08:00Z',-41,-1,true,false),
+        (1,1,1,'2026-10-31T23:59:59Z',100,100,true,false),
+        (1,1,1,'2026-11-02T00:00:00Z',100,100,true,false),
+        (2,2,1,'2026-11-01T00:05:00Z',100,100,true,false);
     `);
+    assert.equal((await db.query('SELECT COUNT(*)::int AS count FROM cultivation_sessions')).rows[0].count, 0);
     const before = queryCount;
     const result = await request('?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z');
     assert.equal(result.status, 200);
@@ -87,6 +87,10 @@ test('environment charts aggregate real PostgreSQL history through the staff API
     assert.equal(floors[2].thresholds.temperature_min, null);
     const partial = await request('?from=2026-11-01T00:00:00Z&to=2026-11-01T00:16:00Z');
     assert.equal(partial.body.data.floors[0].points.length, 2);
+    const shifted = await request('?from=2026-11-01T00:05:00Z&to=2026-11-01T00:15:00Z');
+    assert.deepEqual(shifted.body.data.floors[0].points, [{
+      timestamp: Date.parse('2026-11-01T00:05:00Z'), temperature: 32.5, humidity: 85,
+    }]);
     const swagger = require('../src/config/swagger');
     assert.ok(swagger.paths['/api/analytics/dashboard/environment-history'].get.responses[200]);
   } finally {

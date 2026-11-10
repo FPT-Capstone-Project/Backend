@@ -46,14 +46,22 @@ async function getEnvironmentHistory({ from, to, bucketMs }) {
     JOIN iot_masters m ON m.id=f.master_id
     LEFT JOIN iot_auto_control_configs c ON c.floor_id=f.floor_id
     CROSS JOIN LATERAL (
-      WITH floor_buckets AS (
-        SELECT floor(extract(epoch FROM (h.period_start-$1::timestamptz))*1000/$3)::integer AS bucket,
-          avg(h.temperature_avg) FILTER (WHERE h.temperature_avg BETWEEN -40 AND 125) AS temperature,
-          avg(h.humidity_avg) FILTER (WHERE h.humidity_avg BETWEEN 0 AND 100) AS humidity
-        FROM cultivation_environment_history h
-        WHERE h.floor_id=f.floor_id
-          AND h.period_start >= $1::timestamptz
-          AND h.period_start < $2::timestamptz
+      WITH sensor_buckets AS (
+        SELECT floor(extract(epoch FROM (r.received_at-$1::timestamptz))*1000/$3)::integer AS bucket,
+          r.sensor_address,
+          avg(r.temperature) FILTER (WHERE r.temperature BETWEEN -40 AND 125) AS temperature,
+          avg(r.humidity) FILTER (WHERE r.humidity BETWEEN 0 AND 100) AS humidity
+        FROM iot_sensor_readings r
+        WHERE r.master_id=f.master_id AND r.node_address=f.node_address
+          AND r.received_at >= $1::timestamptz
+          AND r.received_at < $2::timestamptz
+          AND r.is_valid AND NOT r.retained
+          AND r.sensor_address BETWEEN 1 AND 3
+        GROUP BY bucket, r.sensor_address
+      ), floor_buckets AS (
+        -- Give each sensor equal weight regardless of its reporting frequency.
+        SELECT bucket, avg(temperature) AS temperature, avg(humidity) AS humidity
+        FROM sensor_buckets
         GROUP BY bucket
       )
       SELECT json_agg(json_build_object(
