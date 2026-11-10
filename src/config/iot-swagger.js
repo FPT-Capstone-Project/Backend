@@ -98,4 +98,23 @@ paths[`${path}/history`].get.parameters.push(...Object.entries({
   offset: { type: 'integer', minimum: 0, maximum: 1000000, default: 0 },
 }).map(([name, schema]) => ({ name, in: 'query', schema })));
 
+paths[`${base}/floors/{floorId}/fan`] = { put: {
+  tags: ['IoT'], summary: 'Configure the manual fan channel for a floor',
+  security: [{ bearerAuth: [] }],
+  description: 'Requires iot.automation.manage. Null removes the mapping. Does not publish MQTT. Rejects channels used by fans, valves or the room light on the same master. GET /api/iot/floors returns fan_ssr_channel even when null. Use the existing master SSR endpoints for state and manual ON/OFF.',
+  parameters: [{ in: 'path', name: 'floorId', required: true, schema: { type: 'integer', minimum: 1 } }],
+  requestBody: { required: true, content: { 'application/json': { schema: {
+    type: 'object', additionalProperties: false, required: ['channel'],
+    properties: { channel: { type: 'integer', minimum: 1, maximum: 8, nullable: true } },
+  }, example: { channel: 4 } } } },
+  responses: {
+    200: { description: 'Updated floor in data, including nullable fan_ssr_channel' },
+    400: { description: 'Invalid floor ID or channel' },
+    401: { description: 'Authentication required' },
+    403: { description: 'Missing iot.automation.manage permission' },
+    404: { description: 'Floor not found' },
+    409: { description: 'Channel already assigned' },
+  },
+} };
+
 module.exports = { schemas, paths };

@@ -122,6 +122,23 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
  }
  const api={
   list:()=>repo.list(),
+  async configureFan(value,body) {
+   const id=positive(value);
+   if(!body || Array.isArray(body) || typeof body!=='object'
+    || Object.keys(body).length!==1 || !Object.hasOwn(body,'channel')
+    || (body.channel!==null && (!Number.isInteger(body.channel) || body.channel<1 || body.channel>8))) {
+    throw new AppError('channel must be an integer from 1 to 8, or null',400);
+   }
+   return repo.lockFloor(id,async()=>{
+    await repo.floor(id);
+    try {
+     return await repo.one('UPDATE cultivation_floors SET fan_ssr_channel=$2,updated_at=now() WHERE floor_id=$1 RETURNING *',[id,body.channel]);
+    } catch(error) {
+     if(error.constraint==='fan_mapping_conflict')throw new AppError(error.message,409);
+     throw error;
+    }
+   });
+  },
   async environment(value) {const id=positive(value);return env(id,await repo.config(id) || {sensor_max_age_ms:20000,required_valid_sensors:3,max_sensor_spread_percent:100});},
   async configuration(value) {
    const id=positive(value);await repo.floor(id);
