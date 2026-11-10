@@ -650,7 +650,7 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
       if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvest readiness', 409, 'UNRESOLVED_QUALITY_ISSUES');
     }
     const result = await client.query(
-      `UPDATE cultivation_sessions SET harvest_status = $2,
+      `UPDATE cultivation_sessions SET harvest_status = $2::varchar,
          harvest_ready_at = CASE WHEN $2 = 'HARVEST_READY' THEN CURRENT_TIMESTAMP ELSE NULL END,
          harvest_ready_by = CASE WHEN $2 = 'HARVEST_READY' THEN $3::integer ELSE NULL END
        WHERE session_id = $1 RETURNING session_id, status, harvest_status, start_at, harvest_date, harvest_ready_at, harvest_ready_by`,
