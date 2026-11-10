@@ -7,6 +7,7 @@ router.use(authenticate);
 const auto = require('../controllers/autoMisting.controller');
 const { manageAutomation } = require('../middlewares/autoMisting.middleware');
 router.get('/floors', auto.list);
+router.put('/floors/:floorId/fan', manageAutomation, auto.configureFan);
 router.post('/floors', manageAutomation, auto.create);
 router.put('/floors/:floorId', manageAutomation, auto.map);
 router.post('/floors/:floorId/trays/generate', manageAutomation, auto.generateTrays);

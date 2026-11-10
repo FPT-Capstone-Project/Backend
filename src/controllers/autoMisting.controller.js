@@ -11,6 +11,7 @@ function handler(fn,status=200) {
 }
 module.exports={
  list:handler(()=>service.list()),
+ configureFan:handler(r=>service.configureFan(r.params.floorId,r.body)),
  create:handler(r=>service.map(null,r.body),201),
  map:handler(r=>service.map(r.params.floorId,r.body)),
  generateTrays:handler(r=>service.generateTrays(r.params.floorId)),
