@@ -313,6 +313,17 @@ async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy
   );
 }
 
+async function createInspectionWithImagesForAdmin(sessionTrayId, payload = {}, inspectedBy, files = []) {
+  const inspectionResult = await createInspectionForAdmin(sessionTrayId, payload, inspectedBy);
+  const inspectionId = inspectionResult.inspection.inspection_id;
+  const images = await Promise.all(files.map(file => addInspectionImageForAdmin(
+    inspectionId,
+    file,
+    { caption: payload.caption },
+  )));
+  return { ...inspectionResult, images };
+}
+
 async function addInspectionImageForAdmin(inspectionId, file, payload = {}) {
   const id = parseId(inspectionId, 'inspectionId');
   if (!file) throw new AppError('Image file is required', 400);
@@ -416,6 +427,7 @@ module.exports = {
   updateGrowthForAdmin,
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
+  createInspectionWithImagesForAdmin,
   addInspectionImageForAdmin,
   createIncidentForAdmin,
   listIncidentsForAdmin,
