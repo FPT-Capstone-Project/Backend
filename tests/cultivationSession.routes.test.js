@@ -127,6 +127,22 @@ test('session management allows operator inspections and restricts cancellation 
     assert.equal(inspectionResponse.status, 204);
     assert.equal(inspectionCalls, 1);
 
+    const inspectionForm = new FormData();
+    inspectionForm.append('growthStage', 'PINNING');
+    inspectionForm.append('growthProgress', '65');
+    inspectionForm.append('images', new Blob(['image one'], { type: 'image/jpeg' }), 'one.jpg');
+    inspectionForm.append('images', new Blob(['image two'], { type: 'image/jpeg' }), 'two.jpg');
+    const inspectionWithImagesResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/session-trays/14/inspections`,
+      {
+        method: 'POST',
+        headers: { authorization: `Bearer ${operatorToken}` },
+        body: inspectionForm,
+      },
+    );
+    assert.equal(inspectionWithImagesResponse.status, 204);
+    assert.equal(inspectionCalls, 2);
+
     const availableTraysResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/available-trays?floorId=2`,
       { headers: { authorization: `Bearer ${operatorToken}` } },

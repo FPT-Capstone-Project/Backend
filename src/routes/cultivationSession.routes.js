@@ -165,8 +165,8 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  * /api/cultivation-sessions/admin/session-trays/{sessionTrayId}/inspections:
  *   post:
  *     tags: [Cultivation Audit]
- *     summary: Record a daily tray inspection
- *     description: Records tray observations only. Use the session progress API to update cultivation progress and lifecycle status.
+ *     summary: Record a daily tray inspection with optional images
+ *     description: Records tray observations and up to 10 optional images in one request. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -179,7 +179,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             required: [growthStage, growthProgress]
@@ -199,6 +199,15 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *                 type: string
  *               notes:
  *                 type: string
+ *               caption:
+ *                 type: string
+ *                 description: Optional caption applied to each uploaded image
+ *               images:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items:
+ *                   type: string
+ *                   format: binary
  *     responses:
  *       201:
  *         description: Tray inspection recorded
@@ -212,6 +221,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
 router.post(
   '/admin/session-trays/:sessionTrayId/inspections',
   adminOrFarmOperator,
+  upload.array('images', 10),
   cultivationSessionController.adminCreateInspection,
 );
 

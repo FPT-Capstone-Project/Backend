@@ -63,10 +63,11 @@ async function adminUpdateHarvestReadiness(req, res) {
 }
 
 async function adminCreateInspection(req, res) {
-  const result = await cultivationSessionService.createInspectionForAdmin(
+  const result = await cultivationSessionService.createInspectionWithImagesForAdmin(
     req.params.sessionTrayId,
     req.body || {},
     req.user.user_id,
+    req.files || [],
   );
   res.status(201).json({ message: 'Daily tray inspection recorded successfully', data: result });
 }

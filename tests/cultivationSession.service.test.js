@@ -121,6 +121,35 @@ test('validates daily inspection input and passes the Farm Operator ID', async (
   );
 });
 
+test('records a daily inspection and uploads each attached image', async () => {
+  const { service, calls, uploads } = loadService();
+  const files = [
+    { buffer: Buffer.from('image one') },
+    { buffer: Buffer.from('image two') },
+  ];
+
+  const result = await service.createInspectionWithImagesForAdmin('14', {
+    growthStage: 'PINNING',
+    growthProgress: '65',
+    caption: 'Daily check',
+  }, '3', files);
+
+  assert.equal(result.inspection.inspection_id, 1);
+  assert.equal(result.images.length, 2);
+  assert.deepEqual(uploads, files.map(file => [file, 'cultivation-inspections']));
+  assert.deepEqual(calls[0], [14, {
+    growthStage: 'PINNING',
+    growthProgress: 65,
+    trayCondition: undefined,
+    mushroomCondition: undefined,
+    notes: undefined,
+  }, 3]);
+  assert.equal(calls.filter(call => call.length === 1 && call[0] === 1).length, 2);
+  assert.equal(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg').length, 2);
+  assert.ok(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg')
+    .every(call => call[2] === 'Daily check'));
+});
+
 test('validates and delegates explicitly selected floor and trays', async () => {
   const { service, calls } = loadService();
 
