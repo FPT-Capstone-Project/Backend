@@ -26,7 +26,7 @@ async function setupDatabase() {
       duration_days INTEGER NOT NULL,
       status TEXT NOT NULL,
       harvest_ready_at TIMESTAMP, harvest_ready_by INTEGER,
-      harvest_status TEXT NOT NULL DEFAULT 'NOT_READY'
+      harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY'
     );
     CREATE TABLE cultivation_floors (
       floor_id SERIAL PRIMARY KEY,
