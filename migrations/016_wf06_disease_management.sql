@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS public.issue_media (
   media_type VARCHAR NOT NULL CHECK (media_type IN ('IMAGE', 'VIDEO')),
   caption TEXT,
   uploaded_by INTEGER NOT NULL REFERENCES public.users(user_id),
-  uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 ALTER TABLE public.treatment_media
@@ -74,7 +74,7 @@ CREATE TABLE IF NOT EXISTS public.consultation_messages (
     REFERENCES public.expert_consultations(consultation_id) ON DELETE CASCADE,
   sender_id INTEGER NOT NULL REFERENCES public.users(user_id),
   message TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_cultivation_issues_spawn_inspection_id

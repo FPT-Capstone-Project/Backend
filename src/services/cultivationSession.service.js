@@ -39,6 +39,12 @@ const NOTIFICATION_TYPES = ['OPERATOR_MESSAGE', 'MUSHROOM_DISEASE', 'DEVICE_ISSU
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 100;
 
+function hasTimezone(value) {
+  return typeof value === 'string'
+    && /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value)
+    && Number.isFinite(Date.parse(value));
+}
+
 function parseId(value, fieldName) {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -127,12 +133,13 @@ async function getAllForAdmin(query = {}) {
     limit: pagination.limit,
     offset: pagination.offset,
   };
-  if (filters.startDateFrom && Number.isNaN(Date.parse(filters.startDateFrom))) {
-    throw new AppError('startDateFrom must be a valid timestamp', 400);
+  if (filters.startDateFrom && !hasTimezone(filters.startDateFrom)) {
+    throw new AppError('startDateFrom must be an ISO timestamp with timezone', 400);
   }
-  if (filters.startDateTo && Number.isNaN(Date.parse(filters.startDateTo))) {
-    throw new AppError('startDateTo must be a valid timestamp', 400);
+  if (filters.startDateTo && !hasTimezone(filters.startDateTo)) {
+    throw new AppError('startDateTo must be an ISO timestamp with timezone', 400);
   }
+
   if (filters.startDateFrom && filters.startDateTo
     && new Date(filters.startDateFrom) > new Date(filters.startDateTo)) {
     throw new AppError('startDateFrom must be on or before startDateTo', 400);

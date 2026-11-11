@@ -138,7 +138,7 @@ async function createInspection(sessionId, inspectedBy, data) {
          warning_quantity, abnormal_quantity, condition, notes,
          replacement_quantity, next_check_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamp)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::timestamptz)
        RETURNING *`,
       [
         sessionId,

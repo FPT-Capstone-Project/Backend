@@ -2,7 +2,7 @@ BEGIN;
 
 -- WF-03: keep readiness separate from lifecycle and record the assessing operator.
 ALTER TABLE public.cultivation_sessions
-  ADD COLUMN IF NOT EXISTS harvest_ready_at TIMESTAMP,
+  ADD COLUMN IF NOT EXISTS harvest_ready_at TIMESTAMPTZ,
   ADD COLUMN IF NOT EXISTS harvest_ready_by INTEGER REFERENCES public.users(user_id);
 
 -- WF-04: record who confirmed customer pickup or external delivery.

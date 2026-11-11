@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS mushroom_types (
 
     status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
 
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT chk_mushroom_growing_days
         CHECK (growing_days > 0),

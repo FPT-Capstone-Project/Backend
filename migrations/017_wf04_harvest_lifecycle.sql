@@ -20,7 +20,7 @@ ALTER TABLE public.cultivation_sessions
 ALTER TABLE public.harvests
   ADD COLUMN IF NOT EXISTS session_id INTEGER,
   ADD COLUMN IF NOT EXISTS status VARCHAR,
-  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP;
+  ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ;
 
 DO $$
 BEGIN

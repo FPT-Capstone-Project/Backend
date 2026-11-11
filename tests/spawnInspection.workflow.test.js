@@ -36,10 +36,10 @@ async function setupWorkflowDatabase() {
         'COMPLETED', 'CANCELLED'
       )),
       harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY',
-      start_at TIMESTAMP NOT NULL DEFAULT now(),
+      start_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       harvest_date DATE,
       duration_days INTEGER,
-      created_at TIMESTAMP NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE inventory_transactions (
       transaction_id SERIAL PRIMARY KEY,
@@ -55,7 +55,7 @@ async function setupWorkflowDatabase() {
       inventory_id SERIAL PRIMARY KEY,
       mushroom_type_id INTEGER NOT NULL,
       quantity NUMERIC NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT now()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE spawn_inspections (
       inspection_id BIGSERIAL PRIMARY KEY,
@@ -69,9 +69,9 @@ async function setupWorkflowDatabase() {
       condition VARCHAR(30) NOT NULL,
       notes TEXT,
       replacement_quantity INTEGER NOT NULL DEFAULT 0,
-      next_check_at TIMESTAMP,
-      inspected_at TIMESTAMP NOT NULL DEFAULT now(),
-      created_at TIMESTAMP NOT NULL DEFAULT now(),
+      next_check_at TIMESTAMPTZ,
+      inspected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       CHECK (total_checked > 0),
       CHECK (normal_quantity + warning_quantity + abnormal_quantity = total_checked),
       CHECK (replacement_quantity <= abnormal_quantity)
@@ -81,7 +81,7 @@ async function setupWorkflowDatabase() {
       inspection_id BIGINT NOT NULL,
       image_url TEXT NOT NULL,
       caption TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE cultivation_progress (
       progress_id SERIAL PRIMARY KEY,
@@ -91,7 +91,7 @@ async function setupWorkflowDatabase() {
       start_date DATE,
       expected_harvest_date DATE,
       description TEXT,
-      updated_at TIMESTAMP NOT NULL DEFAULT now()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE cultivation_floors (
       floor_id SERIAL PRIMARY KEY,
@@ -101,7 +101,7 @@ async function setupWorkflowDatabase() {
       tray_id SERIAL PRIMARY KEY,
       floor_id INTEGER NOT NULL,
       status TEXT NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT now()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE cultivation_session_trays (
       session_tray_id SERIAL PRIMARY KEY,
@@ -114,7 +114,7 @@ async function setupWorkflowDatabase() {
       order_item_id INTEGER NOT NULL,
       quantity INTEGER NOT NULL,
       status TEXT NOT NULL,
-      expires_at TIMESTAMP NOT NULL
+      expires_at TIMESTAMPTZ NOT NULL
     );
 
     INSERT INTO users (full_name, email) VALUES ('Farm Operator', 'fo@example.test');

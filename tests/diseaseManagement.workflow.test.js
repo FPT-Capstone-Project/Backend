@@ -58,7 +58,7 @@ async function setupDatabase() {
       inspection_id INTEGER NOT NULL,
       image_url TEXT NOT NULL,
       caption TEXT,
-      uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE spawn_inspections (
       inspection_id BIGINT PRIMARY KEY,
@@ -71,7 +71,7 @@ async function setupDatabase() {
       inspection_id BIGINT NOT NULL,
       image_url TEXT NOT NULL,
       caption TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE iot_sensor_latest (
       master_id INTEGER NOT NULL,
@@ -95,8 +95,8 @@ async function setupDatabase() {
       status TEXT NOT NULL DEFAULT 'OPEN',
       action_taken TEXT,
       next_action TEXT,
-      reported_at TIMESTAMP NOT NULL DEFAULT now(),
-      resolved_at TIMESTAMP,
+      reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      resolved_at TIMESTAMPTZ,
       CHECK (
         (session_tray_id IS NOT NULL AND spawn_inspection_id IS NULL)
         OR (session_tray_id IS NULL AND spawn_inspection_id IS NOT NULL)
@@ -111,8 +111,8 @@ async function setupDatabase() {
       diagnosis TEXT,
       solution TEXT,
       status TEXT NOT NULL DEFAULT 'PENDING',
-      created_at TIMESTAMP NOT NULL DEFAULT now(),
-      responded_at TIMESTAMP,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      responded_at TIMESTAMPTZ,
       CHECK (status IN ('PENDING', 'IN_PROGRESS', 'ANSWERED', 'CLOSED'))
     );
     CREATE TABLE disease_treatment_logs (
@@ -121,7 +121,7 @@ async function setupDatabase() {
       performed_by INTEGER NOT NULL,
       action_description TEXT NOT NULL,
       result_description TEXT,
-      performed_at TIMESTAMP NOT NULL DEFAULT now()
+      performed_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE treatment_media (
       media_id BIGSERIAL PRIMARY KEY,
@@ -131,7 +131,7 @@ async function setupDatabase() {
       media_stage TEXT NOT NULL,
       caption TEXT,
       uploaded_by INTEGER NOT NULL,
-      uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE TABLE notifications (
       notification_id SERIAL PRIMARY KEY,
@@ -140,11 +140,11 @@ async function setupDatabase() {
       title TEXT NOT NULL,
       message TEXT NOT NULL,
       is_read BOOLEAN NOT NULL DEFAULT FALSE,
-      read_at TIMESTAMP,
+      read_at TIMESTAMPTZ,
       created_by INTEGER,
       reference_type TEXT,
       reference_id INTEGER,
-      created_at TIMESTAMP NOT NULL DEFAULT now()
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
 
     INSERT INTO roles VALUES

@@ -23,7 +23,7 @@ test('017 upgrades harvests to the WF-04 session lifecycle idempotently', async 
       CREATE TABLE harvests (
         harvest_id SERIAL PRIMARY KEY,
         harvest_date DATE NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         harvest_request_id INTEGER REFERENCES harvest_requests(harvest_request_id),
         session_tray_id INTEGER REFERENCES cultivation_session_trays(session_tray_id),
         total_weight_kg NUMERIC,

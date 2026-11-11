@@ -3,9 +3,9 @@ const pool = require('../config/db');
 async function create({ userId, tokenHash, tokenFamily, deviceName, userAgent, ipAddress, expiresAt }) {
   const result = await pool.query(
     `INSERT INTO public.refresh_tokens (
-       user_id, token_hash, token_family, device_name, user_agent, ip_address, expires_at
+       user_id, token_hash, token_family, device_name, user_agent, ip_address, expires_at, created_at
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
      RETURNING refresh_token_id`,
     [userId, tokenHash, tokenFamily, deviceName || null, userAgent || null, ipAddress || null, expiresAt],
   );
@@ -68,9 +68,9 @@ async function rotate({
 
     const inserted = await client.query(
       `INSERT INTO public.refresh_tokens (
-         user_id, token_hash, token_family, device_name, user_agent, ip_address, expires_at
+         user_id, token_hash, token_family, device_name, user_agent, ip_address, expires_at, created_at
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
        RETURNING refresh_token_id`,
       [
         currentToken.user_id,
