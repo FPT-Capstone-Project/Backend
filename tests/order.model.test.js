@@ -112,7 +112,7 @@ test('creates a cultivation item for the selected package, mushroom, and tray qu
   assert.equal(statements.filter(({ statement }) => statement.startsWith('INSERT INTO order_items')).length, 1);
   const reservationInsert = statements.find(({ statement }) => statement.startsWith('INSERT INTO tray_reservations'));
   assert.ok(reservationInsert);
-  assert.deepEqual(reservationInsert.values.slice(0, 3), [15, 3, 9]);
+  assert.deepEqual(reservationInsert.values.slice(0, 3), [15, 3, 6]);
   assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
   assert.ok(!statements.some(({ statement }) => statement === 'ROLLBACK'));
 });
@@ -133,7 +133,7 @@ test('rejects orders when selected tray quantity exceeds available trays', async
 });
 
 test('rejects orders when selected mushroom spawn is held or unavailable', async () => {
-  const { model, statements } = loadOrderModel({ spawnInventory: 10, heldSpawn: 2 });
+  const { model, statements } = loadOrderModel({ spawnInventory: 7, heldSpawn: 2 });
 
   await assert.rejects(
     () => model.createCultivationOrder({
@@ -142,7 +142,7 @@ test('rejects orders when selected mushroom spawn is held or unavailable', async
       mushroomTypeId: 9,
       quantity: 3,
     }),
-    { statusCode: 409, code: 'INSUFFICIENT_SPAWN', message: 'Only 8 spawn units are currently available' },
+    { statusCode: 409, code: 'INSUFFICIENT_SPAWN', message: 'Only 5 spawn units are currently available' },
   );
 
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));

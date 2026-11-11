@@ -39,9 +39,9 @@ test('WF-01 counts valid trays on floor 1 or 3 without mushroom profiles, never 
     await db.exec(`
       INSERT INTO orders VALUES(1,'PENDING','UNPAID');
       INSERT INTO order_items VALUES(1,1,8);
-      INSERT INTO tray_reservations VALUES(1,1,3,'HELD',now()+interval '15 minutes');`);
+      INSERT INTO tray_reservations VALUES(1,1,2,'HELD',now()+interval '15 minutes');`);
     await assert.rejects(capacity, { code: 'INSUFFICIENT_TRAYS', message: 'Only 4 cultivation trays are currently available' });
-    await db.exec("UPDATE tray_reservations SET expires_at=now()-interval '1 minute'; UPDATE spawn_inventory SET quantity=14");
+    await db.exec("UPDATE tray_reservations SET expires_at=now()-interval '1 minute'; UPDATE spawn_inventory SET quantity=9");
     await assert.rejects(capacity, { code: 'INSUFFICIENT_SPAWN', statusCode: 409 });
     await db.exec("UPDATE spawn_inventory SET quantity=100; UPDATE cultivation_floors SET status='INACTIVE' WHERE floor_id=1");
     await assert.rejects(capacity, { code: 'INSUFFICIENT_TRAYS' });

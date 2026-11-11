@@ -42,7 +42,7 @@ function loadPaymentModel({
       reservation_id: 31,
       order_item_id: 15,
       quantity: 1,
-      spawn_quantity: 3,
+      spawn_quantity: 2,
       status: 'HELD',
       expires_at: new Date(Date.now() + 60_000),
       is_active: true,
@@ -203,7 +203,7 @@ test('fulfills a paid order once, consumes spawn, and records the OUT transactio
   assert.equal(state.order.status, 'PROCESSING');
   assert.equal(state.sessionsCreated, 1);
   assert.equal(state.assignedTrayCount, 0);
-  assert.equal(state.inventory.quantity, 7);
+  assert.equal(state.inventory.quantity, 8);
   assert.equal(state.inventoryTransactions, 1);
   assert.equal(state.reservation.status, 'CONSUMED');
   assert.deepEqual(state.notifications, ['STARTED']);
@@ -218,7 +218,7 @@ test('acknowledges late payment but requests a refund when expired resources are
       expires_at: new Date(Date.now() - 60_000),
       is_active: false,
     },
-    inventoryQuantity: 2,
+    inventoryQuantity: 1,
   });
 
   const result = await model.markPayosPaymentAsPaid(21, 530000, 'late-reference-21');
@@ -229,7 +229,7 @@ test('acknowledges late payment but requests a refund when expired resources are
   assert.equal(state.order.payment_status, 'REFUND_PENDING');
   assert.equal(state.sessionsCreated, 0);
   assert.equal(state.assignedTrayCount, 0);
-  assert.equal(state.inventory.quantity, 2);
+  assert.equal(state.inventory.quantity, 1);
   assert.equal(state.inventoryTransactions, 0);
   assert.equal(state.reservation.status, 'EXPIRED');
   assert.deepEqual(state.notifications, ['REFUND']);

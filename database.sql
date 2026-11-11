@@ -469,7 +469,7 @@ CREATE TABLE public.tray_reservations (
   created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   released_at    TIMESTAMP,
   CONSTRAINT tray_reservations_spawn_quantity_check
-    CHECK (spawn_quantity = quantity * 3)
+    CHECK (spawn_quantity = quantity * 2 OR (status = 'CONSUMED' AND spawn_quantity = quantity * 3))
 );
 
 CREATE TABLE public.harvest_requests (

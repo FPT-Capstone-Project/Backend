@@ -1,6 +1,6 @@
 const AppError = require('../utils/app-error');
 
-const SPAWN_UNITS_PER_TRAY = 3;
+const SPAWN_UNITS_PER_TRAY = 2;
 
 function toHoldMinutes(value) {
   const minutes = Number(value);
