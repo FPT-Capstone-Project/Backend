@@ -235,6 +235,28 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
   }
 });
 
+test('new two-spawn trays require inspection of exactly the allocated spawn', async () => {
+  const db = await setupWorkflowDatabase();
+  try {
+    await db.exec("UPDATE inventory_transactions SET quantity = 4, quantity_after = 16");
+    const model = loadModel(db);
+    assert.equal((await model.findByIdForFarm(1)).spawn_quantity, 4);
+    assert.equal((await model.findAllForFarm())[0].spawn_quantity, 4);
+    await model.changeStage(1, 'MYCELIAL_DEVELOPMENT');
+    await assert.rejects(() => model.createInspection(1, 1, {
+      totalChecked: 6, normalQuantity: 6, warningQuantity: 0,
+      abnormalQuantity: 0, condition: 'NORMAL',
+    }), { statusCode: 400 });
+    await model.createInspection(1, 1, {
+      totalChecked: 4, normalQuantity: 4, warningQuantity: 0,
+      abnormalQuantity: 0, condition: 'NORMAL',
+    });
+    assert.equal((await model.changeStage(1, 'READY_FOR_CULTIVATION')).status, 'READY_FOR_CULTIVATION');
+  } finally {
+    await db.close();
+  }
+});
+
 test('combined resting/incubation requires a complete NORMAL inspection before readiness', async () => {
   const db = await setupWorkflowDatabase();
   try {

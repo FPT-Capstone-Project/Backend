@@ -4,7 +4,9 @@ const AppError = require('../utils/app-error');
 const sessionSelect = `
   SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date, s.duration_days,
          oi.order_item_id, oi.quantity AS tray_quantity,
-         oi.quantity * 3 AS spawn_quantity, oi.mushroom_type_id,
+         COALESCE((SELECT it.quantity::int FROM inventory_transactions it
+             WHERE it.session_id = s.session_id AND it.transaction_type = 'OUT'
+             ORDER BY it.transaction_id LIMIT 1), oi.quantity * 2) AS spawn_quantity, oi.mushroom_type_id,
          mt.name AS mushroom_name, o.order_id, o.user_id, o.payment_status,
          u.full_name AS customer_name, u.email AS customer_email,
          EXISTS (
@@ -31,7 +33,9 @@ async function findAllForFarm(status) {
   }
   const result = await pool.query(
     `SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date,
-            oi.order_item_id, oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
+            oi.order_item_id, oi.quantity AS tray_quantity, COALESCE((SELECT it.quantity::int FROM inventory_transactions it
+             WHERE it.session_id = s.session_id AND it.transaction_type = 'OUT'
+             ORDER BY it.transaction_id LIMIT 1), oi.quantity * 2) AS spawn_quantity,
             mt.name AS mushroom_name, o.order_id, u.full_name AS customer_name,
             (SELECT MAX(si.inspected_at) FROM spawn_inspections si
              WHERE si.session_id = s.session_id) AS last_inspected_at
@@ -347,7 +351,9 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
   const result = await pool.query(
     `SELECT s.session_id, s.status, s.harvest_status, s.start_at, s.harvest_date,
             s.harvest_date AS expected_harvest_date, s.duration_days,
-            oi.order_item_id, oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
+            oi.order_item_id, oi.quantity AS tray_quantity, COALESCE((SELECT it.quantity::int FROM inventory_transactions it
+             WHERE it.session_id = s.session_id AND it.transaction_type = 'OUT'
+             ORDER BY it.transaction_id LIMIT 1), oi.quantity * 2) AS spawn_quantity,
             mt.name AS mushroom_name, o.order_id,
             latest_progress.current_stage, latest_progress.progress_percent,
             latest_progress.updated_at AS progress_updated_at,

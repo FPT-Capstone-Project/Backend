@@ -180,7 +180,7 @@ router.get('/:orderId', authenticate, orderController.getById);
  *   post:
  *     tags: [Orders]
  *     summary: Create a cultivation order for a mushroom type, package, and tray quantity
- *     description: The selected active package must cover the selected active mushroom's growing days. One ACTIVE floor with an approved matching mushroom profile must have enough AVAILABLE trays with ACTIVE positions in the same floor and room, after unexpired HELD reservations. Capacity is never combined across floors. Each tray requires three spawn units. Reservations are consumed after successful payment; Farm Operator selects physical trays later in WF-03.
+ *     description: The selected active package must cover the selected active mushroom's growing days. One ACTIVE floor with an approved matching mushroom profile must have enough AVAILABLE trays with ACTIVE positions in the same floor and room, after unexpired HELD reservations. Capacity is never combined across floors. Each tray requires two spawn units. Reservations are consumed after successful payment; Farm Operator selects physical trays later in WF-03.
  *     security:
  *       - bearerAuth: []
  *     requestBody:

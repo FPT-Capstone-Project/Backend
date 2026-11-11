@@ -22,7 +22,9 @@ const sessionFields = `
   u.full_name AS customer_name, u.email AS customer_email,
   s.mushroom_type_id, mt.name AS mushroom_name,
   oi.rental_package_id AS package_id, rp.package_name,
-  oi.quantity AS tray_quantity, oi.quantity * 3 AS spawn_quantity,
+  oi.quantity AS tray_quantity, COALESCE((SELECT it.quantity::int FROM inventory_transactions it
+             WHERE it.session_id = s.session_id AND it.transaction_type = 'OUT'
+             ORDER BY it.transaction_id LIMIT 1), oi.quantity * 2) AS spawn_quantity,
   s.start_at, s.end_at, s.duration_days, s.harvest_date, s.status, s.harvest_status,
   s.protocol_id, progress.current_stage, progress.progress_percent,
   progress.current_stage AS growth_status,

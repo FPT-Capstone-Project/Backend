@@ -76,7 +76,7 @@ function loadPaymentModel({
       reservation_id: 31,
       order_item_id: 15,
       quantity,
-      spawn_quantity: quantity * 3,
+      spawn_quantity: quantity * 2,
       status: 'HELD',
       expires_at: futureDate(),
       is_active: true,
@@ -282,7 +282,7 @@ test('creates a whole-VND payment after reserving trays and spawn for the config
   assert.equal(payment.amount, 530000);
   assert.equal(state.order.payment_status, 'PENDING');
   const reservationUpdate = statements.find(({ statement }) => statement.startsWith('UPDATE tray_reservations SET quantity'));
-  assert.deepEqual(reservationUpdate.values.slice(0, 4), [15, 2, 6, 15]);
+  assert.deepEqual(reservationUpdate.values.slice(0, 4), [15, 2, 4, 15]);
   assert.ok(statements.some(({ statement }) => statement.startsWith('SELECT inventory_id, mushroom_type_id, quantity')));
   assert.ok(statements.some(({ statement }) => statement.startsWith('SELECT COALESCE(SUM(tr.spawn_quantity)')));
   assert.ok(payment.expires_at instanceof Date);
@@ -356,15 +356,15 @@ test('fulfills a paid order idempotently, deducts spawn, and records an OUT tran
   assert.equal(state.paymentPaidUpdates, 1);
   assert.equal(state.sessionsCreated, 1);
   assert.equal(state.assignedTrayCount, 0);
-  assert.equal(state.inventory.quantity, '6');
+  assert.equal(state.inventory.quantity, '8');
   assert.equal(state.inventoryTransactions, 1);
   assert.equal(state.reservation.status, 'CONSUMED');
   assert.equal(state.order.payment_status, 'PAID');
   assert.equal(state.order.status, 'PROCESSING');
   const inventoryUpdate = statements.find(({ statement }) => statement.startsWith('UPDATE spawn_inventory'));
-  assert.deepEqual(inventoryUpdate.values, [41, 6]);
+  assert.deepEqual(inventoryUpdate.values, [41, 4]);
   const inventoryTransaction = statements.find(({ statement }) => statement.startsWith('INSERT INTO inventory_transactions'));
-  assert.deepEqual(inventoryTransaction.values.slice(0, 6), [41, 77, 6, 12, 6, 'Cultivation order 11']);
+  assert.deepEqual(inventoryTransaction.values.slice(0, 6), [41, 77, 4, 12, 8, 'Cultivation order 11']);
 });
 
 test('marks a pending PayOS payment failed and leaves the order pending for retry', async () => {
