@@ -13,6 +13,8 @@ test('sensor fault notification and repair workflow uses actual floor owners and
   try {
     await db.exec(fs.readFileSync('database.sql', 'utf8'));
     await db.exec(fs.readFileSync('migrations/020_device_incidents.sql', 'utf8'));
+    await db.exec(fs.readFileSync('migrations/023_auto_resolve_master_incidents.sql', 'utf8'));
+    await db.exec(fs.readFileSync('migrations/023_auto_resolve_master_incidents.sql', 'utf8'));
     await db.exec(`
       INSERT INTO roles(role_name) VALUES ('Admin'),('Farm Operator'),('Customer');
       INSERT INTO users(role_id,email,password_hash,full_name) VALUES
@@ -67,21 +69,24 @@ test('sensor fault notification and repair workflow uses actual floor owners and
     assert.equal((await request('PATCH', endpoint, 2)).status, 409);
     assert.equal((await request('PATCH', endpoint, 2, { repairNote: 42 })).status, 400);
     const listing = await request('GET', '', 2);
-    assert.equal(listing.body.data[0].device_incident.can_confirm_repair, true);
+    assert.equal(listing.body.data[0].device_incident.can_confirm_repair, false);
     assert.equal((await request('GET', '', 3)).body.data[0].device_incident.can_confirm_repair, false);
     await db.exec(`UPDATE iot_sensor_latest SET is_valid=true,retained=true WHERE node_address=1 AND sensor_address=1`);
+    await model.scan();
+    assert.equal((await db.query('SELECT status FROM device_incidents')).rows[0].status, 'OPEN');
     assert.equal((await request('PATCH', endpoint, 2)).status, 409);
     await db.exec(`UPDATE iot_sensor_latest SET retained=false,last_received_at=now() WHERE node_address=1 AND sensor_address=1`);
     assert.deepEqual(await model.scan(), { created: 0 });
-    // Telemetry recovery alone must not mark the repair complete.
-    assert.equal((await db.query('SELECT status FROM device_incidents')).rows[0].status, 'OPEN');
+    assert.equal((await db.query('SELECT status FROM device_incidents')).rows[0].status, 'RESOLVED');
     const repaired = await request('PATCH', endpoint, 2, { repairNote: 'Đã thay cảm biến' });
     assert.equal(repaired.status, 200);
     assert.equal(repaired.body.data.status, 'RESOLVED');
-    assert.equal(repaired.body.data.resolved_by, 2);
+    assert.equal(repaired.body.data.resolved_by, null);
+    assert.equal(repaired.body.data.auto_resolved, true);
     assert.equal((await request('PATCH', endpoint, 2)).status, 200);
-    const confirmations = (await db.query("SELECT user_id FROM notifications WHERE title='Cảm biến đã được sửa xong' ORDER BY user_id")).rows;
-    assert.deepEqual(confirmations, [{ user_id: 1 }, { user_id: 3 }]);
+    await model.scan();
+    const confirmations = (await db.query("SELECT user_id FROM notifications WHERE title='Cảm biến đã phục hồi' ORDER BY user_id")).rows;
+    assert.deepEqual(confirmations, [{ user_id: 1 }, { user_id: 2 }, { user_id: 3 }, { user_id: 5 }]);
     assert.equal((await request('GET', '', 5)).body.data[0].device_incident.status, 'RESOLVED');
     assert.equal((await request('GET', '', 5)).body.data[0].device_incident.can_confirm_repair, false);
     await db.exec(`UPDATE iot_sensor_latest SET last_received_at=now()-interval '2 minutes' WHERE node_address=1 AND sensor_address=1;
@@ -103,9 +108,12 @@ test('sensor fault notification and repair workflow uses actual floor owners and
     assert.equal((await request('PATCH', `/${nodeAlert}/confirm-repair`, 2)).status, 409);
     await db.exec(`UPDATE iot_sensor_latest SET last_received_at=now(),is_valid=false WHERE node_address=1 AND sensor_address=1`);
     // An explicit invalid sensor reading still proves the node communicates.
+    await model.scan();
+    assert.equal((await db.query('SELECT auto_resolved FROM device_incidents WHERE incident_id=$1', [node.incident_id])).rows[0].auto_resolved, true);
+    assert.equal((await db.query("SELECT status FROM device_incidents WHERE device_type='SENSOR' AND reason='STALE'")).rows[0].status, 'OPEN');
     assert.equal((await request('PATCH', `/${nodeAlert}/confirm-repair`, 2)).status, 200);
     assert.equal((await request('PATCH', `/${nodeAlert}/confirm-repair`, 2)).status, 200);
-    assert.equal((await db.query("SELECT count(*)::integer AS n FROM notifications WHERE title='Node đã được sửa xong'")).rows[0].n, 2);
+    assert.equal((await db.query("SELECT count(*)::integer AS n FROM notifications WHERE title='Node đã phục hồi'")).rows[0].n, 4);
 
     await db.exec(`UPDATE iot_masters SET reported_status='offline',status_received_at=now(),last_seen_at=now()`);
     assert.deepEqual(await model.scan(), { created: 1 });
@@ -120,14 +128,27 @@ test('sensor fault notification and repair workflow uses actual floor owners and
     // A retained online status cannot prove live recovery.
     await db.exec(`UPDATE iot_masters SET reported_status='online',status_retained=true,last_seen_at=now()-interval '2 minutes'`);
     assert.equal((await request('PATCH', masterEndpoint, 2)).status, 409);
+    await model.scan();
+    assert.equal((await db.query('SELECT status FROM device_incidents WHERE incident_id=$1', [master.incident_id])).rows[0].status, 'OPEN');
     await db.exec(`UPDATE iot_masters SET reported_status='online',status_retained=false,last_seen_at=now()`);
+    await model.scan();
+    const recovered = (await db.query('SELECT * FROM device_incidents WHERE incident_id=$1', [master.incident_id])).rows[0];
+    assert.equal(recovered.status, 'RESOLVED');
+    assert.equal(recovered.auto_resolved, true);
+    assert.equal(recovered.resolved_by, null);
+    assert.ok(recovered.resolved_at);
     assert.equal((await request('PATCH', masterEndpoint, 2)).status, 200);
     assert.equal((await request('PATCH', masterEndpoint, 2)).status, 200);
-    assert.deepEqual((await db.query("SELECT user_id FROM notifications WHERE title='Mạch master đã được sửa xong' ORDER BY user_id")).rows,
-      [{ user_id: 1 }, { user_id: 3 }, { user_id: 4 }]);
+    assert.deepEqual((await db.query("SELECT user_id FROM notifications WHERE title='Mạch master đã phục hồi' ORDER BY user_id")).rows,
+      [1,2,3,4,5].map(user_id => ({ user_id })));
     // Silence alone also reports master loss, even if its last status was online.
     await db.exec(`UPDATE iot_masters SET last_seen_at=now()-interval '2 minutes'`);
     assert.deepEqual(await model.scan(), { created: 1 });
+    assert.deepEqual(await model.scan(), { created: 0 });
+    const reopened = (await db.query("SELECT * FROM device_incidents WHERE device_type='MASTER' AND status='OPEN'")).rows;
+    assert.equal(reopened.length, 1);
+    assert.notEqual(reopened[0].incident_id, master.incident_id);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM notifications WHERE reference_type='DEVICE_INCIDENT' AND reference_id=$1", [reopened[0].incident_id])).rows[0].n, 5);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));
     if (previous) require.cache[dbPath] = previous; else delete require.cache[dbPath];
@@ -162,5 +183,18 @@ test('020 creates one shared table idempotently and rejects invalid device targe
     for (const values of ["'MASTER',1,1,NULL,NULL", "'NODE',1,1,NULL,NULL", "'SENSOR',1,1,1,NULL", "'OTHER',NULL,1,NULL,NULL"]) {
       await assert.rejects(db.exec(`INSERT INTO device_incidents(device_type,floor_id,master_id,node_address,sensor_address,reason) VALUES (${values},'INVALID')`));
     }
+    const recoveryUpgrade = fs.readFileSync('migrations/023_auto_resolve_master_incidents.sql', 'utf8');
+    await db.exec(recoveryUpgrade);
+    await db.exec(recoveryUpgrade);
+    await assert.rejects(db.exec(`UPDATE device_incidents SET status='RESOLVED',resolved_at=now(),auto_resolved=false`));
+    await db.exec(`INSERT INTO device_incidents(device_type,master_id,reason) VALUES ('MASTER',1,'MASTER_OFFLINE');
+      UPDATE device_incidents SET status='RESOLVED',resolved_at=now(),auto_resolved=true WHERE device_type='MASTER'`);
+    assert.equal((await db.query("SELECT resolved_by FROM device_incidents WHERE device_type='MASTER'")).rows[0].resolved_by, null);
+    assert.equal((await db.query("SELECT status FROM device_incidents WHERE device_type='SENSOR'")).rows[0].status, 'OPEN');
+    await db.exec(`UPDATE device_incidents SET status='RESOLVED',resolved_at=now(),auto_resolved=true WHERE device_type='SENSOR';
+      INSERT INTO device_incidents(device_type,floor_id,master_id,node_address,reason,status,resolved_at,auto_resolved)
+        VALUES ('NODE',1,1,1,'NODE_NO_TELEMETRY','RESOLVED',now(),true)`);
+    await assert.rejects(db.exec(`UPDATE device_incidents SET resolved_at=NULL WHERE auto_resolved`));
+    await assert.rejects(db.exec(`UPDATE device_incidents SET resolved_by=1 WHERE auto_resolved`));
   } finally { await db.close(); }
 });

@@ -9,8 +9,9 @@ const router = express.Router();
  * /api/notifications/{notificationId}/confirm-repair:
  *   patch:
  *     tags: [Notifications]
- *     summary: Farm Operator confirms a sensor, node or master repair from their notification
- *     description: Requires fresh recovery evidence for the device type. Repeated confirmation is idempotent. GET notifications includes device_incident with device_type (SENSOR, NODE, MASTER), status, resolved_by, resolved_at and can_confirm_repair.
+ *     summary: Legacy compatibility endpoint for automatic device recovery
+ *     deprecated: true
+ *     description: All device types recover automatically with fresh live evidence. This endpoint runs the same recovery check for legacy clients; repairNote is ignored. GET notifications returns auto_resolved and can_confirm_repair=false. Repeated calls do not duplicate notifications.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -26,7 +27,7 @@ const router = express.Router();
  *             properties:
  *               repairNote: { type: string, maxLength: 1000 }
  *     responses:
- *       200: { description: Repair confirmed; Admin and original Customer recipients notified }
+ *       200: { description: Recovery confirmed automatically; active staff and original recipients notified once }
  *       400: { description: Invalid ID or repair note }
  *       401: { description: Authentication required }
  *       403: { description: Farm Operator only }

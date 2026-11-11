@@ -124,6 +124,29 @@ test('IoT migration and model SQL against isolated PostgreSQL', async (t) => {
       assert.equal(latest.lastReceivedAt.toISOString(), at.toISOString());
       assert.equal((await model.findMaster('master01')).lastSeenAt.toISOString(), before.lastSeenAt.toISOString());
     });
+    await t.test('current sensor health rejects stale, retained and disconnected readings without erasing packet validity', async () => {
+      await db.exec(`UPDATE iot_masters SET reported_status='online',last_seen_at=now(),status_received_at=now();
+        UPDATE iot_sensor_latest SET is_valid=true,retained=false,last_received_at=now() WHERE master_id=1`);
+      assert.equal((await model.findSensor(1, 1, 1)).ok, true);
+      await db.exec(`UPDATE iot_sensor_latest SET last_received_at=now()-interval '61 seconds'`);
+      let sensor = await model.findSensor(1, 1, 1);
+      assert.equal(sensor.ok, false);
+      assert.equal(sensor.readingValid, true);
+      assert.equal(sensor.healthReason, 'STALE');
+      await db.exec(`UPDATE iot_sensor_latest SET last_received_at=now(),retained=true`);
+      assert.equal((await model.findSensor(1, 1, 1)).healthReason, 'RETAINED');
+      await db.exec(`UPDATE iot_sensor_latest SET retained=false,is_valid=false`);
+      assert.equal((await model.findSensor(1, 1, 1)).healthReason, 'INVALID');
+      await db.exec(`UPDATE iot_sensor_latest SET is_valid=true;
+        UPDATE iot_masters SET reported_status='offline',status_received_at=now()`);
+      assert.ok((await model.findSensors(1)).every(s => !s.ok && s.readingValid && s.healthReason==='MASTER_OFFLINE'));
+      await db.exec(`UPDATE iot_masters SET reported_status='online',last_seen_at=now()-interval '61 seconds'`);
+      assert.equal((await model.findSensor(1, 1, 1)).healthReason, 'MASTER_OFFLINE');
+      await db.exec(`UPDATE iot_masters SET last_seen_at=now()`);
+      sensor = await model.findSensor(1, 1, 1);
+      assert.equal(sensor.ok, true);
+      assert.equal(sensor.healthReason, null);
+    });
     await t.test('crash-left pending commands expire without replay', async () => {
       const record = await model.createCommand(await model.findMaster('master01'), 2, 'OFF', null);
       await db.query("UPDATE iot_device_commands SET expires_at=now()-interval '1 second' WHERE id=$1", [record.commandId]);

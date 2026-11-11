@@ -35,8 +35,18 @@ const masterColumns = `id, master_identifier AS "masterId", cultivation_room_id 
   light_ssr_channel, reported_status AS "reportedStatus", last_seen_at AS "lastSeenAt",
   status_received_at AS "statusReceivedAt", status_retained AS "statusRetained"`;
 const sensorColumns = `node_address AS "nodeId", sensor_address AS "sensorId", temperature, humidity,
-  is_valid AS ok, last_received_at AS "lastReceivedAt", last_valid_at AS "lastValidAt", retained,
+  (health.reason IS NULL) AS ok, is_valid AS "readingValid", health.reason AS "healthReason",
+  last_received_at AS "lastReceivedAt", last_valid_at AS "lastValidAt", retained,
   NULL::timestamptz AS "measuredAt"`;
+const sensorHealthJoin = `JOIN iot_masters m ON m.id=s.master_id
+  CROSS JOIN LATERAL (SELECT CASE
+    WHEN m.last_seen_at IS NULL OR m.last_seen_at < now()-interval '60 seconds'
+      OR COALESCE(m.reported_status='offline' AND m.status_received_at >= m.last_seen_at,false)
+      THEN 'MASTER_OFFLINE'
+    WHEN s.retained THEN 'RETAINED'
+    WHEN s.last_received_at < now()-interval '60 seconds' THEN 'STALE'
+    WHEN NOT s.is_valid THEN 'INVALID'
+    ELSE NULL END AS reason) health`;
 const commandColumns = `c.id AS "commandId", m.master_identifier AS "masterId", c.channel, c.action, c.status,
   c.requested_by AS "requestedBy", c.requested_at AS "requestedAt", c.expires_at AS "expiresAt",
   c.published_at AS "publishedAt", c.completed_at AS "completedAt", c.error_message AS "errorMessage"`;
@@ -53,11 +63,11 @@ async function setLightChannel(id, channel) {
   return result.rows[0];
 }
 async function findSensors(id) {
-  return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest WHERE master_id=$1
+  return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest s ${sensorHealthJoin} WHERE master_id=$1
     ORDER BY node_address, sensor_address`, [id])).rows;
 }
 async function findSensor(id, node, sensor) {
-  return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest
+  return (await pool.query(`SELECT ${sensorColumns} FROM iot_sensor_latest s ${sensorHealthJoin}
     WHERE master_id=$1 AND node_address=$2 AND sensor_address=$3`, [id, node, sensor])).rows[0];
 }
 async function history(id, node, sensor, { from, to, limit, offset }) {
