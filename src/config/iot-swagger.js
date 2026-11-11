@@ -6,7 +6,10 @@ const sensor = {
   nodeId: { type: 'integer', minimum: 1, maximum: 247 },
   sensorId: { type: 'integer', minimum: 1, maximum: 3 },
   temperature: { type: 'number', nullable: true }, humidity: { type: 'number', nullable: true },
-  ok: { type: 'boolean' }, lastReceivedAt: timestamp, lastValidAt: timestamp,
+  ok: { type: 'boolean', description: 'Current health: valid, non-retained reading within 60 seconds and a live master.' },
+  readingValid: { type: 'boolean', description: 'Validity of the last received packet, independent of current connectivity.' },
+  healthReason: { type: 'string', nullable: true, enum: ['MASTER_OFFLINE', 'RETAINED', 'STALE', 'INVALID'], description: 'Null when healthy.' },
+  lastReceivedAt: timestamp, lastValidAt: timestamp,
   measuredAt: { ...timestamp, description: 'Always null: firmware supplies no measurement timestamp.' },
   retained: { type: 'boolean' },
 };
@@ -26,7 +29,7 @@ const schemas = {
     limit: { type: 'integer' }, offset: { type: 'integer' },
     readings: { type: 'array', items: { type: 'object', properties: {
       id: { type: 'string' }, temperature: sensor.temperature, humidity: sensor.humidity,
-      ok: sensor.ok, receivedAt: timestamp, measuredAt: sensor.measuredAt, retained: sensor.retained,
+      ok: { type: 'boolean', description: 'Validity of this historical packet.' }, receivedAt: timestamp, measuredAt: sensor.measuredAt, retained: sensor.retained,
     } } },
   } },
   IotSsr: { type: 'object', properties: { masterId: { type: 'string' }, channels: {

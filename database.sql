@@ -1123,8 +1123,14 @@ CREATE TABLE IF NOT EXISTS device_incidents (
   resolved_at TIMESTAMPTZ,
   resolved_by INTEGER REFERENCES users(user_id),
   repair_note TEXT,
-  CHECK ((status = 'OPEN' AND resolved_at IS NULL AND resolved_by IS NULL)
-    OR (status = 'RESOLVED' AND resolved_at IS NOT NULL AND resolved_by IS NOT NULL)),
+  auto_resolved BOOLEAN NOT NULL DEFAULT false,
+  CONSTRAINT device_incidents_resolution_check CHECK (
+    (status='OPEN' AND resolved_at IS NULL AND resolved_by IS NULL AND NOT auto_resolved)
+    OR (status='RESOLVED' AND resolved_at IS NOT NULL AND (
+      (NOT auto_resolved AND resolved_by IS NOT NULL)
+      OR (auto_resolved AND resolved_by IS NULL)
+    ))
+  ),
   CONSTRAINT device_incidents_target_check CHECK (
   (device_type='MASTER' AND floor_id IS NULL AND node_address IS NULL AND sensor_address IS NULL)
   OR (device_type='NODE' AND floor_id IS NOT NULL AND node_address BETWEEN 1 AND 247

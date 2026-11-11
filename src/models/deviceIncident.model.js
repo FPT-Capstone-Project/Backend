@@ -38,8 +38,35 @@ async function transaction(work) {
   } finally { db.release(); }
 }
 
+async function recover(db) {
+  const { rows } = await db.query(`UPDATE device_incidents i SET status='RESOLVED',
+    resolved_at=now(), resolved_by=NULL, auto_resolved=true,
+    repair_note='Hệ thống tự động xác nhận thiết bị đã hoạt động trở lại.'
+    FROM iot_masters m WHERE i.master_id=m.id AND i.status='OPEN'
+      AND COALESCE((${masterHealthy}),false)
+      AND ((i.device_type='MASTER' AND m.last_seen_at > i.detected_at)
+        OR (i.device_type IN ('NODE','SENSOR') AND EXISTS (
+          SELECT 1 FROM iot_sensor_latest s WHERE s.master_id=i.master_id
+            AND s.node_address=i.node_address AND NOT s.retained
+            AND s.last_received_at > i.detected_at
+            AND s.last_received_at >= now() - make_interval(secs => $1)
+            AND (i.device_type='NODE' OR (s.sensor_address=i.sensor_address AND s.is_valid))
+        ))) RETURNING i.*`, [MAX_AGE_SECONDS]);
+  for (const incident of rows) {
+    await db.query(`INSERT INTO notifications
+      (user_id,notification_type,title,message,reference_type,reference_id)
+      SELECT DISTINCT u.user_id,'DEVICE_ISSUE',$2::text,$3::text,'DEVICE_INCIDENT',$1::integer
+      FROM users u WHERE u.status='ACTIVE' AND (u.role_id IN (1,2) OR EXISTS (
+        SELECT 1 FROM notifications n WHERE n.user_id=u.user_id
+          AND n.reference_type='DEVICE_INCIDENT' AND n.reference_id=$1))`,
+    [incident.incident_id, `${deviceName(incident)} đã phục hồi`,
+      `${deviceLabel(incident)} đã hoạt động trở lại. Hệ thống đã tự động xác nhận sự cố được giải quyết, không cần xác nhận thủ công.`]);
+  }
+}
+
 async function scan() {
   return transaction(async (db) => {
+    await recover(db);
     const { rows } = await db.query(`
       WITH floors AS (
         SELECT f.*, COALESCE((${masterHealthy}),false) AS master_healthy,
@@ -91,7 +118,7 @@ async function scan() {
                 'READY_FOR_CULTIVATION','CULTIVATING','HARVEST_READY','HARVESTING')
           )))`, [incident.incident_id,
         `${location} đang gặp vấn đề. Nhân viên đã được thông báo và sẽ kiểm tra, sửa chữa ngay.`,
-        `${location} gặp lỗi ${sensor.reason}. Farm Operator cần kiểm tra, sửa chữa và xác nhận đã sửa xong trên thông báo.`,
+        `${location} gặp lỗi ${sensor.reason}. Farm Operator cần kiểm tra, sửa chữa. Hệ thống sẽ tự động xác nhận khi thiết bị phục hồi.`,
         sensor.floor_id, sensor.master_id, `${deviceName(incident)} đang gặp vấn đề`]);
       created++;
     }
@@ -109,34 +136,17 @@ async function resolve(userId, notificationId, note) {
     const incident = rows[0];
     if (!incident) throw new AppError('Device incident notification not found', 404);
     if (incident.status === 'RESOLVED') return incident;
-    const healthy = await db.query(`SELECT 1 FROM iot_masters m
-      WHERE m.id=$2 AND COALESCE((${masterHealthy}),false)
-        AND ($5='MASTER' OR EXISTS (SELECT 1 FROM iot_sensor_latest s
-          WHERE s.master_id=m.id AND s.node_address=$3 AND NOT s.retained
-            AND s.last_received_at >= now() - make_interval(secs => $1)
-            AND ($5='NODE' OR (s.sensor_address=$4 AND s.is_valid))))`,
-    [MAX_AGE_SECONDS, incident.master_id, incident.node_address, incident.sensor_address, incident.device_type]);
-    if (!healthy.rows.length) throw new AppError('Thiết bị chưa có dữ liệu phục hồi mới. Hãy kiểm tra lại trước khi xác nhận đã sửa xong.', 409);
-    const result = await db.query(`UPDATE device_incidents SET status='RESOLVED',
-      resolved_at=now(),resolved_by=$2,repair_note=$3 WHERE incident_id=$1 RETURNING *`,
-    [incident.incident_id, userId, note]);
-    // Original recipients are retained even if their cultivation session ended
-    // while the repair was in progress. Include currently active admins too.
-    await db.query(`INSERT INTO notifications
-      (user_id,notification_type,title,message,created_by,reference_type,reference_id)
-      SELECT DISTINCT u.user_id,'DEVICE_ISSUE',$4::text,$2::text,$3::integer,'DEVICE_INCIDENT',$1::integer
-      FROM users u WHERE u.status='ACTIVE' AND (u.role_id=1 OR (u.role_id=3 AND EXISTS (
-        SELECT 1 FROM notifications n WHERE n.user_id=u.user_id
-          AND n.reference_type='DEVICE_INCIDENT' AND n.reference_id=$1)))`,
-    [incident.incident_id, `${deviceLabel(incident)} đã được nhân viên sửa xong và xác nhận hoạt động trở lại.`, userId,
-      `${deviceName(incident)} đã được sửa xong`]);
-    return result.rows[0];
+    // Legacy clients use the same automatic recovery; no manual repair is recorded.
+    await recover(db);
+    const recovered = (await db.query('SELECT * FROM device_incidents WHERE incident_id=$1', [incident.incident_id])).rows[0];
+    if (recovered.status !== 'RESOLVED') throw new AppError('Device has no fresh recovery evidence. Recovery is confirmed automatically.', 409);
+    return recovered;
   });
 }
 
 async function details(userId, ids) {
   const { rows } = await pool.query(`SELECT i.*,
-    (i.status='OPEN' AND u.role_id=2 AND u.status='ACTIVE') AS can_confirm_repair
+    false AS can_confirm_repair
     FROM device_incidents i CROSS JOIN users u
     WHERE u.user_id=$1 AND i.incident_id=ANY($2::integer[])
       AND EXISTS (SELECT 1 FROM notifications n WHERE n.user_id=u.user_id
