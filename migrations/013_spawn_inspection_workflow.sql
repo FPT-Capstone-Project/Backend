@@ -23,9 +23,9 @@ CREATE TABLE IF NOT EXISTS public.spawn_inspections (
   condition            VARCHAR(30) NOT NULL,
   notes                TEXT,
   replacement_quantity INTEGER NOT NULL DEFAULT 0,
-  next_check_at        TIMESTAMP,
-  inspected_at         TIMESTAMP NOT NULL DEFAULT now(),
-  created_at           TIMESTAMP NOT NULL DEFAULT now(),
+  next_check_at        TIMESTAMPTZ,
+  inspected_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_si_stage CHECK (stage IN ('RESTING', 'MYCELIAL_DEVELOPMENT')),
   CONSTRAINT chk_si_condition CHECK (condition IN ('NORMAL', 'WARNING', 'ABNORMAL')),
   CONSTRAINT chk_si_total CHECK (total_checked > 0),
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS public.spawn_inspection_images (
   inspection_id BIGINT NOT NULL REFERENCES public.spawn_inspections(inspection_id) ON DELETE CASCADE,
   image_url     TEXT NOT NULL,
   caption       TEXT,
-  created_at    TIMESTAMP NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX IF NOT EXISTS idx_sii_inspection

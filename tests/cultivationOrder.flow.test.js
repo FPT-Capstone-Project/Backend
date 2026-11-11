@@ -66,7 +66,7 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
         room_id INTEGER NOT NULL DEFAULT 1,
         position_id INTEGER,
         status VARCHAR NOT NULL,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE orders (
         order_id SERIAL PRIMARY KEY,
@@ -77,8 +77,8 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
         total_amount NUMERIC NOT NULL DEFAULT 0,
         status VARCHAR NOT NULL DEFAULT 'PENDING',
         payment_status VARCHAR NOT NULL DEFAULT 'UNPAID',
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE order_items (
         order_item_id SERIAL PRIMARY KEY,
@@ -96,15 +96,15 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
         spawn_quantity INTEGER NOT NULL,
         status VARCHAR NOT NULL DEFAULT 'HELD',
         expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        released_at TIMESTAMP,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        released_at TIMESTAMPTZ,
         CHECK (spawn_quantity = quantity * 2)
       );
       CREATE TABLE spawn_inventory (
         inventory_id SERIAL PRIMARY KEY,
         mushroom_type_id INTEGER NOT NULL UNIQUE,
         quantity NUMERIC NOT NULL,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE payments (
         payment_id SERIAL PRIMARY KEY,
@@ -113,8 +113,8 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
         payment_method VARCHAR NOT NULL,
         transaction_code VARCHAR,
         status VARCHAR NOT NULL DEFAULT 'PENDING',
-        paid_at TIMESTAMP,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        paid_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
         payos_payment_link_id TEXT,
         payos_checkout_url TEXT,
         payos_qr_code TEXT,
@@ -124,12 +124,12 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
         protocol_id SERIAL PRIMARY KEY,
         mushroom_type_id INTEGER NOT NULL,
         status VARCHAR NOT NULL,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       CREATE TABLE cultivation_sessions (
         session_id SERIAL PRIMARY KEY,
         mushroom_type_id INTEGER NOT NULL,
-        start_at TIMESTAMP NOT NULL,
+        start_at TIMESTAMPTZ NOT NULL,
         duration_days INTEGER NOT NULL,
         status VARCHAR NOT NULL,
         harvest_date DATE,

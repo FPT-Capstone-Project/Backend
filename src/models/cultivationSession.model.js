@@ -56,11 +56,11 @@ function buildFilters(filters = {}) {
   }
   if (filters.startDateFrom !== undefined) {
     values.push(filters.startDateFrom);
-    clauses.push(`s.start_at >= $${values.length}::timestamp`);
+    clauses.push(`s.start_at >= $${values.length}::timestamptz`);
   }
   if (filters.startDateTo !== undefined) {
     values.push(filters.startDateTo);
-    clauses.push(`s.start_at <= $${values.length}::timestamp`);
+    clauses.push(`s.start_at <= $${values.length}::timestamptz`);
   }
 
   return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', values };
@@ -595,7 +595,7 @@ async function updateGrowthForAdmin(sessionId, data) {
       `INSERT INTO cultivation_progress (
          session_id, current_stage, progress_percent, start_date,
          expected_harvest_date, condition, description
-       ) VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6, $7)
+       ) VALUES ($1, $2, $3, $4::timestamptz::date, $5::date, $6, $7)
        RETURNING *`,
       [sessionId, data.currentStage, data.progressPercent, session.start_at,
         session.harvest_date, data.condition, data.notes ?? null],
@@ -662,7 +662,7 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
       `INSERT INTO cultivation_progress (
          session_id, current_stage, progress_percent, start_date,
          expected_harvest_date, condition, description
-       ) VALUES ($1, $2, $3, $4::timestamp::date, $5::date, $6, $7)`,
+       ) VALUES ($1, $2, $3, $4::timestamptz::date, $5::date, $6, $7)`,
       [sessionId, latest.current_stage, latest.progress_percent, session.start_at,
         session.harvest_date, latest.condition,
         data.notes ?? (data.harvestReady ? 'Harvest readiness confirmed' : 'Not ready for harvest')],

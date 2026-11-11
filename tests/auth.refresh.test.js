@@ -24,8 +24,8 @@ test('login issues rotating refresh tokens and logout revokes the token family',
         address TEXT,
         status TEXT NOT NULL DEFAULT 'ACTIVE',
         is_email_verified BOOLEAN NOT NULL DEFAULT TRUE,
-        created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
       );
       INSERT INTO public.users (role_id, email, password_hash, full_name)
       VALUES (3, 'customer@example.test', 'hashed-password', 'Test Customer');
@@ -37,11 +37,11 @@ test('login issues rotating refresh tokens and logout revokes the token family',
         device_name VARCHAR(255),
         user_agent TEXT,
         ip_address INET,
-        expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
-        revoked_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+        expires_at TIMESTAMPTZ NOT NULL,
+        revoked_at TIMESTAMPTZ DEFAULT NULL,
         replaced_by_token_id BIGINT REFERENCES public.refresh_tokens(refresh_token_id) ON DELETE SET NULL,
-        created_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
-        last_used_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL
+        created_at TIMESTAMPTZ NOT NULL,
+        last_used_at TIMESTAMPTZ DEFAULT NULL
       );
       CREATE INDEX idx_refresh_tokens_user_id ON public.refresh_tokens(user_id);
       CREATE INDEX idx_refresh_tokens_family ON public.refresh_tokens(token_family);
@@ -92,6 +92,7 @@ test('login issues rotating refresh tokens and logout revokes the token family',
       [hash(login.refreshToken)],
     )).rows[0];
     assert.ok(firstStored);
+    assert.ok(firstStored.created_at);
     assert.equal(firstStored.user_agent, 'test-agent');
     assert.equal(firstStored.ip_address, '127.0.0.1');
 
@@ -109,6 +110,10 @@ test('login issues rotating refresh tokens and logout revokes the token family',
     )).rows[0];
     assert.ok(rotated.revoked_at);
     assert.ok(rotated.replaced_by_token_id);
+    assert.ok((await db.query(
+      'SELECT created_at FROM public.refresh_tokens WHERE refresh_token_id = $1',
+      [rotated.replaced_by_token_id],
+    )).rows[0].created_at);
 
     await assert.rejects(
       authService.refresh({ refreshToken: login.refreshToken }),

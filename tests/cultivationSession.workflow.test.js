@@ -21,11 +21,11 @@ async function setupDatabase() {
       session_id SERIAL PRIMARY KEY,
       order_item_id INTEGER NOT NULL,
       mushroom_type_id INTEGER NOT NULL,
-      start_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      start_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       harvest_date DATE,
       duration_days INTEGER NOT NULL,
       status TEXT NOT NULL,
-      harvest_ready_at TIMESTAMP, harvest_ready_by INTEGER,
+      harvest_ready_at TIMESTAMPTZ, harvest_ready_by INTEGER,
       harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY'
     );
     CREATE TABLE cultivation_floors (
@@ -55,13 +55,13 @@ async function setupDatabase() {
       tray_code TEXT,
       tray_name TEXT,
       status TEXT NOT NULL,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE cultivation_session_trays (
       session_tray_id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL,
       tray_id INTEGER NOT NULL,
-      assigned_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       status TEXT NOT NULL
     );
     CREATE TABLE cultivation_progress (
@@ -72,13 +72,13 @@ async function setupDatabase() {
       start_date DATE,
       expected_harvest_date DATE,
       description TEXT,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE cultivation_inspections (
       inspection_id SERIAL PRIMARY KEY,
       session_tray_id INTEGER NOT NULL,
       inspected_by INTEGER NOT NULL,
-      inspection_date TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      inspection_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       growth_stage TEXT,
       tray_condition TEXT,
       mushroom_condition TEXT,
@@ -97,8 +97,8 @@ async function setupDatabase() {
       status TEXT NOT NULL DEFAULT 'OPEN',
       action_taken TEXT,
       next_action TEXT,
-      reported_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      resolved_at TIMESTAMP
+      reported_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      resolved_at TIMESTAMPTZ
     );
     CREATE TABLE harvests (
       harvest_id SERIAL PRIMARY KEY,

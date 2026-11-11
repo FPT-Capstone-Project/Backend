@@ -687,7 +687,7 @@ async function createTreatment(consultationId, data, performedBy) {
       `INSERT INTO disease_treatment_logs (
          consultation_id, performed_by, action_description, result_description, performed_at
        )
-       VALUES ($1, $2, $3, $4, COALESCE($5::timestamp, now()))
+       VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()))
        RETURNING *`,
       [
         consultationId,

@@ -30,8 +30,8 @@ BEGIN
         WHERE status = 'PENDING';
 
         ALTER TABLE rentals
-            ALTER COLUMN start_date TYPE TIMESTAMP USING start_date::timestamp,
-            ALTER COLUMN end_date TYPE TIMESTAMP USING end_date::timestamp,
+            ALTER COLUMN start_date TYPE TIMESTAMPTZ USING start_date::timestamptz,
+            ALTER COLUMN end_date TYPE TIMESTAMPTZ USING end_date::timestamptz,
             ALTER COLUMN start_date DROP NOT NULL,
             ALTER COLUMN end_date DROP NOT NULL;
 
@@ -59,7 +59,7 @@ ALTER TABLE order_items
     );
 
 ALTER TABLE rentals
-    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP;
+    ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP;
 
 UPDATE rentals r
 SET duration_days = rp.duration_days

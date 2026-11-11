@@ -25,12 +25,12 @@ test('016 upgrades existing disease-management tables idempotently', async () =>
       CREATE TABLE disease_treatment_logs (
         treatment_log_id BIGSERIAL PRIMARY KEY,
         consultation_id INTEGER NOT NULL,
-        performed_at TIMESTAMP NOT NULL DEFAULT now()
+        performed_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       CREATE TABLE treatment_media (
         media_id BIGSERIAL PRIMARY KEY,
         treatment_log_id BIGINT NOT NULL,
-        uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+        uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
       );
       INSERT INTO cultivation_issues (session_tray_id, status)
         VALUES (1, 'WAITING_EXPERT'), (2, 'MONITORING');

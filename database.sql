@@ -39,15 +39,15 @@ CREATE TABLE public.users (
   address           TEXT,
   status            VARCHAR NOT NULL DEFAULT 'ACTIVE'
     CHECK (status IN ('ACTIVE', 'INACTIVE', 'BLOCKED')),
-  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   is_email_verified BOOLEAN NOT NULL DEFAULT FALSE,
   otp_code          VARCHAR,
   otp_type          VARCHAR
     CHECK (otp_type IS NULL OR otp_type IN ('REGISTRATION', 'FORGOT_PASSWORD', 'CHANGE_PASSWORD')),
-  otp_expires_at    TIMESTAMP,
+  otp_expires_at    TIMESTAMPTZ,
   otp_attempts      INTEGER NOT NULL DEFAULT 0 CHECK (otp_attempts >= 0),
-  otp_last_sent_at  TIMESTAMP,
+  otp_last_sent_at  TIMESTAMPTZ,
   CONSTRAINT fk_users_role FOREIGN KEY (role_id) REFERENCES public.roles(role_id)
 );
 
@@ -66,16 +66,16 @@ CREATE TABLE public.refresh_tokens (
 
    ip_address INET,
 
-   expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+   expires_at TIMESTAMPTZ NOT NULL,
 
-   revoked_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+   revoked_at TIMESTAMPTZ DEFAULT NULL,
 
    replaced_by_token_id BIGINT DEFAULT NULL,
 
-   created_at TIMESTAMP WITHOUT TIME ZONE
+   created_at TIMESTAMPTZ
        NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
-   last_used_at TIMESTAMP WITHOUT TIME ZONE DEFAULT NULL,
+   last_used_at TIMESTAMPTZ DEFAULT NULL,
 
    CONSTRAINT fk_refresh_tokens_user
        FOREIGN KEY (user_id)
@@ -111,7 +111,7 @@ CREATE TABLE public.mushroom_types (
   image_url        TEXT,
   status           VARCHAR NOT NULL DEFAULT 'ACTIVE'
     CHECK (status IN ('ACTIVE', 'INACTIVE')),
-  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE public.mushroom_conditions (
@@ -121,8 +121,8 @@ CREATE TABLE public.mushroom_conditions (
   temperature_max  NUMERIC,
   humidity_min     NUMERIC,
   humidity_max     NUMERIC,
-  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_mushroom_conditions_type
     FOREIGN KEY (mushroom_type_id) REFERENCES public.mushroom_types(mushroom_type_id)
 );
@@ -146,8 +146,8 @@ CREATE TABLE public.cultivation_rooms (
   capacity    INTEGER NOT NULL DEFAULT 0 CHECK (capacity >= 0),
   status      VARCHAR NOT NULL DEFAULT 'ACTIVE'
     CHECK (status IN ('ACTIVE', 'INACTIVE', 'MAINTENANCE')),
-  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 -- ---------- IOT MASTERS (cần trước cultivation_floors) ----------
@@ -197,8 +197,8 @@ CREATE TABLE public.tray_positions (
   column_number INTEGER NOT NULL CHECK (column_number > 0),
   status        VARCHAR NOT NULL DEFAULT 'ACTIVE'
     CHECK (status IN ('ACTIVE', 'MAINTENANCE', 'INACTIVE')),
-  created_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT tray_positions_floor_room_fk
     FOREIGN KEY (floor_id, room_id)
     REFERENCES public.cultivation_floors (floor_id, room_id),
@@ -213,8 +213,8 @@ CREATE TABLE public.cultivation_trays (
   tray_name   VARCHAR,
   status      VARCHAR NOT NULL DEFAULT 'AVAILABLE'
     CHECK (status IN ('AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE')),
-  created_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at  TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   floor_id    INTEGER,
   position_id INTEGER UNIQUE,
   CONSTRAINT fk_trays_room
@@ -239,8 +239,8 @@ CREATE TABLE public.orders (
   total_amount   NUMERIC NOT NULL DEFAULT 0,
   status         VARCHAR NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'CONFIRMED', 'PROCESSING', 'COMPLETED', 'CANCELLED')),
-  created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  updated_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   payment_status VARCHAR NOT NULL DEFAULT 'UNPAID'
     CHECK (payment_status IN ('UNPAID', 'PENDING', 'PAID', 'FAILED', 'REFUND_PENDING', 'REFUNDED')),
   CONSTRAINT fk_orders_user FOREIGN KEY (user_id) REFERENCES public.users(user_id)
@@ -270,8 +270,8 @@ CREATE TABLE public.payments (
   transaction_code    VARCHAR,
   status              VARCHAR NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'PAID', 'FAILED', 'REFUNDED', 'CANCELLED')),
-  paid_at             TIMESTAMP,
-  created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  paid_at             TIMESTAMPTZ,
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   payos_payment_link_id TEXT,
   payos_checkout_url  TEXT,
   payos_qr_code       TEXT,
@@ -290,8 +290,8 @@ CREATE TABLE public.shipments (
   tracking_code   VARCHAR,
   status          VARCHAR NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'SHIPPED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED')),
-  shipped_at      TIMESTAMP,
-  delivered_at    TIMESTAMP,
+  shipped_at      TIMESTAMPTZ,
+  delivered_at    TIMESTAMPTZ,
   CONSTRAINT fk_shipments_order FOREIGN KEY (order_id) REFERENCES public.orders(order_id)
 );
 
@@ -302,7 +302,7 @@ CREATE TABLE public.cultivation_protocols (
   protocol_name    VARCHAR NOT NULL,
   version          VARCHAR NOT NULL DEFAULT '1.0',
   status           VARCHAR NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE')),
-  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE public.spawn_inventory (
@@ -310,7 +310,7 @@ CREATE TABLE public.spawn_inventory (
   mushroom_type_id INTEGER NOT NULL UNIQUE
     REFERENCES public.mushroom_types(mushroom_type_id),
   quantity         NUMERIC NOT NULL DEFAULT 0 CHECK (quantity >= 0),
-  updated_at       TIMESTAMP NOT NULL DEFAULT now()
+  updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.cultivation_protocol_steps (
@@ -327,13 +327,13 @@ CREATE TABLE public.cultivation_protocol_steps (
 CREATE TABLE public.cultivation_sessions (
   session_id       SERIAL PRIMARY KEY,
   mushroom_type_id INTEGER NOT NULL,
-  start_at         TIMESTAMP NOT NULL,
-  end_at           TIMESTAMP,
+  start_at         TIMESTAMPTZ NOT NULL,
+  end_at           TIMESTAMPTZ,
   duration_days    INTEGER CHECK (duration_days IS NULL OR duration_days > 0),
   status           VARCHAR NOT NULL DEFAULT 'PENDING',
   harvest_status   VARCHAR NOT NULL DEFAULT 'NOT_READY',
   harvest_date     DATE,
-  created_at       TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   order_item_id    INTEGER NOT NULL REFERENCES public.order_items(order_item_id),
   protocol_id      INTEGER REFERENCES public.cultivation_protocols(protocol_id),
   CONSTRAINT chk_cultivation_session_harvest_status
@@ -393,9 +393,9 @@ CREATE TABLE public.spawn_inspections (
   condition            VARCHAR(30) NOT NULL,
   notes                TEXT,
   replacement_quantity INTEGER NOT NULL DEFAULT 0,
-  next_check_at        TIMESTAMP,
-  inspected_at         TIMESTAMP NOT NULL DEFAULT now(),
-  created_at           TIMESTAMP NOT NULL DEFAULT now(),
+  next_check_at        TIMESTAMPTZ,
+  inspected_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
   CONSTRAINT chk_si_stage CHECK (stage IN ('RESTING', 'MYCELIAL_DEVELOPMENT')),
   CONSTRAINT chk_si_condition CHECK (condition IN ('NORMAL', 'WARNING', 'ABNORMAL')),
   CONSTRAINT chk_si_total CHECK (total_checked > 0),
@@ -416,7 +416,7 @@ CREATE TABLE public.spawn_inspection_images (
   inspection_id BIGINT NOT NULL REFERENCES public.spawn_inspections(inspection_id) ON DELETE CASCADE,
   image_url     TEXT NOT NULL,
   caption       TEXT,
-  created_at    TIMESTAMP NOT NULL DEFAULT now()
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE INDEX idx_sii_inspection ON public.spawn_inspection_images (inspection_id);
@@ -431,7 +431,7 @@ CREATE TABLE public.inventory_transactions (
   quantity_before  NUMERIC NOT NULL,
   quantity_after   NUMERIC NOT NULL,
   notes            TEXT,
-  created_at       TIMESTAMP NOT NULL DEFAULT now()
+  created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.cultivation_progress (
@@ -444,7 +444,7 @@ CREATE TABLE public.cultivation_progress (
   start_date            DATE,
   expected_harvest_date DATE,
   description           TEXT,
-  updated_at            TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_progress_session
     FOREIGN KEY (session_id) REFERENCES public.cultivation_sessions(session_id)
 );
@@ -453,7 +453,7 @@ CREATE TABLE public.cultivation_session_trays (
   session_tray_id SERIAL PRIMARY KEY,
   session_id      INTEGER NOT NULL REFERENCES public.cultivation_sessions(session_id),
   tray_id         INTEGER NOT NULL REFERENCES public.cultivation_trays(tray_id),
-  assigned_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  assigned_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   status          VARCHAR NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'RELEASED')),
   notes           TEXT
 );
@@ -466,8 +466,8 @@ CREATE TABLE public.tray_reservations (
   status         VARCHAR NOT NULL DEFAULT 'HELD'
     CHECK (status IN ('HELD', 'CONSUMED', 'RELEASED', 'EXPIRED')),
   expires_at     TIMESTAMPTZ NOT NULL,
-  created_at     TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  released_at    TIMESTAMP,
+  created_at     TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  released_at    TIMESTAMPTZ,
   CONSTRAINT tray_reservations_spawn_quantity_check
     CHECK (spawn_quantity = quantity * 2 OR (status = 'CONSUMED' AND spawn_quantity = quantity * 3))
 );
@@ -476,18 +476,18 @@ CREATE TABLE public.harvest_requests (
   harvest_request_id SERIAL PRIMARY KEY,
   session_id         INTEGER NOT NULL UNIQUE REFERENCES public.cultivation_sessions(session_id),
   harvest_method     VARCHAR NOT NULL CHECK (harvest_method IN ('PICKUP', 'DELIVERY')),
-  scheduled_at       TIMESTAMP,
+  scheduled_at       TIMESTAMPTZ,
   status             VARCHAR NOT NULL DEFAULT 'PENDING',
   customer_note      TEXT,
-  confirmed_at       TIMESTAMP,
-  completed_at       TIMESTAMP
+  confirmed_at       TIMESTAMPTZ,
+  completed_at       TIMESTAMPTZ
 );
 
 CREATE TABLE public.cultivation_inspections (
   inspection_id      SERIAL PRIMARY KEY,
   session_tray_id    INTEGER NOT NULL REFERENCES public.cultivation_session_trays(session_tray_id),
   inspected_by       INTEGER NOT NULL REFERENCES public.users(user_id),
-  inspection_date    TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  inspection_date    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   growth_stage       VARCHAR,
   tray_condition     VARCHAR,
   mushroom_condition VARCHAR,
@@ -500,7 +500,7 @@ CREATE TABLE public.cultivation_inspection_images (
   inspection_id INTEGER NOT NULL REFERENCES public.cultivation_inspections(inspection_id),
   image_url     TEXT NOT NULL,
   caption       VARCHAR,
-  uploaded_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+  uploaded_at   TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE TABLE public.harvests (
@@ -508,7 +508,7 @@ CREATE TABLE public.harvests (
   harvest_date       DATE NOT NULL,
   quality_grade      VARCHAR,
   notes              TEXT,
-  created_at         TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   harvest_request_id INTEGER REFERENCES public.harvest_requests(harvest_request_id),
   session_tray_id    INTEGER REFERENCES public.cultivation_session_trays(session_tray_id),
   harvested_by       INTEGER REFERENCES public.users(user_id),
@@ -535,8 +535,8 @@ CREATE TABLE public.notifications (
   title             VARCHAR NOT NULL,
   message           TEXT NOT NULL,
   is_read           BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at        TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  read_at           TIMESTAMP,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  read_at           TIMESTAMPTZ,
   created_by        INTEGER,
   reference_type    VARCHAR,
   reference_id      INTEGER,
@@ -567,8 +567,8 @@ CREATE TABLE public.cultivation_issues (
   next_action    TEXT,
   reported_stage TEXT,
   environment_snapshot JSONB,
-  reported_at    TIMESTAMP NOT NULL DEFAULT now(),
-  resolved_at    TIMESTAMP,
+  reported_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at    TIMESTAMPTZ,
   CONSTRAINT cultivation_issues_source_check CHECK (
     (session_tray_id IS NOT NULL AND spawn_inspection_id IS NULL)
     OR (session_tray_id IS NULL AND spawn_inspection_id IS NOT NULL)
@@ -586,8 +586,8 @@ CREATE TABLE public.expert_consultations (
   solution        TEXT,
   status          VARCHAR NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'IN_PROGRESS', 'NEED_MORE_INFO', 'ANSWERED', 'CLOSED')),
-  created_at      TIMESTAMP NOT NULL DEFAULT now(),
-  responded_at    TIMESTAMP
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  responded_at    TIMESTAMPTZ
 );
 
 CREATE TABLE public.consultation_messages (
@@ -596,7 +596,7 @@ CREATE TABLE public.consultation_messages (
     REFERENCES public.expert_consultations(consultation_id) ON DELETE CASCADE,
   sender_id INTEGER NOT NULL REFERENCES public.users(user_id),
   message TEXT NOT NULL,
-  created_at TIMESTAMP NOT NULL DEFAULT now()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.issue_media (
@@ -607,7 +607,7 @@ CREATE TABLE public.issue_media (
   media_type VARCHAR NOT NULL CHECK (media_type IN ('IMAGE', 'VIDEO')),
   caption TEXT,
   uploaded_by INTEGER NOT NULL REFERENCES public.users(user_id),
-  uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.disease_treatment_logs (
@@ -617,7 +617,7 @@ CREATE TABLE public.disease_treatment_logs (
   performed_by     INTEGER NOT NULL REFERENCES public.users(user_id),
   action_description TEXT NOT NULL,
   result_description TEXT,
-  performed_at     TIMESTAMP NOT NULL DEFAULT now()
+  performed_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE public.treatment_media (
@@ -630,7 +630,7 @@ CREATE TABLE public.treatment_media (
   media_stage      VARCHAR NOT NULL CHECK (media_stage IN ('BEFORE', 'DURING', 'AFTER')),
   caption          TEXT,
   uploaded_by      INTEGER NOT NULL REFERENCES public.users(user_id),
-  uploaded_at      TIMESTAMP NOT NULL DEFAULT now()
+  uploaded_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 -- ---------- IOT ----------
@@ -902,8 +902,8 @@ BEGIN
     INNER JOIN public.cultivation_floors f
       ON f.floor_id = t.floor_id AND f.status = 'ACTIVE'
     WHERE s.status = 'CULTIVATING'
-      AND s.start_at::timestamptz < p_period_end
-      AND (s.end_at IS NULL OR s.end_at::timestamptz > p_period_start)
+      AND s.start_at < p_period_end
+      AND (s.end_at IS NULL OR s.end_at > p_period_start)
     GROUP BY s.session_id, s.start_at, s.end_at,
              f.floor_id, f.master_id, f.node_address
   ),
@@ -921,12 +921,12 @@ BEGIN
      AND r.node_address = sf.node_address
      AND r.received_at >= GREATEST(
        p_period_start,
-       sf.start_at::timestamptz,
-       sf.assigned_at::timestamptz
+       sf.start_at,
+       sf.assigned_at
      )
      AND r.received_at < LEAST(
        p_period_end,
-       COALESCE(sf.end_at::timestamptz, p_period_end)
+       COALESCE(sf.end_at, p_period_end)
      )
     WHERE r.is_valid AND NOT r.retained
     GROUP BY sf.session_id, sf.floor_id, r.sensor_address
@@ -953,7 +953,7 @@ BEGIN
     FROM public.cultivation_progress cp
     WHERE cp.session_id = sf.session_id
       AND cp.current_stage IS NOT NULL
-      AND cp.updated_at::timestamptz < p_period_end
+      AND cp.updated_at < p_period_end
     ORDER BY cp.updated_at DESC, cp.progress_id DESC
     LIMIT 1
   ) progress ON TRUE

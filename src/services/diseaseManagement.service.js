@@ -56,8 +56,10 @@ function parsePage(query = {}) {
 
 function parseTimestamp(value, field) {
   if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
-    throw new AppError(`${field} must be a valid ISO timestamp`, 400);
+  if (typeof value !== 'string'
+    || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value)
+    || !Number.isFinite(Date.parse(value))) {
+    throw new AppError(`${field} must be an ISO timestamp with timezone`, 400);
   }
   return new Date(value).toISOString();
 }

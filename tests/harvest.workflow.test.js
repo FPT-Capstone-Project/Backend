@@ -28,7 +28,7 @@ async function setupDatabase() {
       mushroom_type_id INTEGER NOT NULL REFERENCES mushroom_types(mushroom_type_id),
       status TEXT NOT NULL,
       harvest_status TEXT NOT NULL DEFAULT 'NOT_READY',
-      end_at TIMESTAMP
+      end_at TIMESTAMPTZ
     );
     CREATE TABLE cultivation_trays (
       tray_id SERIAL PRIMARY KEY,
@@ -46,12 +46,12 @@ async function setupDatabase() {
       harvest_request_id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL UNIQUE REFERENCES cultivation_sessions(session_id),
       harvest_method TEXT NOT NULL,
-      scheduled_at TIMESTAMP,
+      scheduled_at TIMESTAMPTZ,
       status TEXT NOT NULL DEFAULT 'PENDING',
       customer_note TEXT,
-      confirmed_at TIMESTAMP,
+      confirmed_at TIMESTAMPTZ,
       confirmed_by INTEGER REFERENCES users(user_id),
-      completed_at TIMESTAMP
+      completed_at TIMESTAMPTZ
     );
     CREATE TABLE harvests (
       harvest_id SERIAL PRIMARY KEY,
@@ -66,8 +66,8 @@ async function setupDatabase() {
       rejected_weight_kg NUMERIC CHECK (rejected_weight_kg IS NULL OR rejected_weight_kg >= 0),
       quality_grade TEXT,
       notes TEXT,
-      created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
       CHECK (
         total_weight_kg IS NULL OR usable_weight_kg IS NULL OR rejected_weight_kg IS NULL
         OR usable_weight_kg + rejected_weight_kg = total_weight_kg

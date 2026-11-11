@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS public.disease_treatment_logs (
   performed_by INTEGER NOT NULL REFERENCES public.users(user_id),
   action_description TEXT NOT NULL,
   result_description TEXT,
-  performed_at TIMESTAMP NOT NULL DEFAULT now()
+  performed_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS public.treatment_media (
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS public.treatment_media (
   media_stage VARCHAR NOT NULL CHECK (media_stage IN ('BEFORE', 'DURING', 'AFTER')),
   caption TEXT,
   uploaded_by INTEGER NOT NULL REFERENCES public.users(user_id),
-  uploaded_at TIMESTAMP NOT NULL DEFAULT now()
+  uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 COMMIT;
