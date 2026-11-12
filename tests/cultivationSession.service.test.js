@@ -12,6 +12,10 @@ function loadService() {
       calls.push(args);
       return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
     },
+    updateInspectionForAdmin: async (...args) => {
+      calls.push(args);
+      return { inspection: { inspection_id: args[1] } };
+    },
     assignTraysForAdmin: async (...args) => {
       calls.push(args);
       return {
@@ -118,6 +122,33 @@ test('validates daily inspection input and passes the Farm Operator ID', async (
   await assert.rejects(
     () => service.createInspectionForAdmin('14', { growthStage: 'FRUITING_INITIATION', growthProgress: 101 }, '3'),
     { statusCode: 400, message: 'growthProgress must be at most 100' },
+  );
+});
+
+test('validates and updates an existing daily tray inspection', async () => {
+  const { service, calls } = loadService();
+  const result = await service.updateInspectionForAdmin('14', '20', {
+    growthStage: 'pinning',
+    growthProgress: '75',
+    trayCondition: 'Clean',
+    mushroomCondition: 'Healthy',
+    notes: 'Corrected observation',
+  });
+
+  assert.equal(result.inspection.inspection_id, 20);
+  assert.deepEqual(calls, [[14, 20, {
+    growthStage: 'PINNING',
+    growthProgress: 75,
+    trayCondition: 'Clean',
+    mushroomCondition: 'Healthy',
+    notes: 'Corrected observation',
+  }]]);
+  await assert.rejects(
+    () => service.updateInspectionForAdmin('14', '20', {
+      growthStage: 'INVALID',
+      growthProgress: 75,
+    }),
+    { statusCode: 400 },
   );
 });
 

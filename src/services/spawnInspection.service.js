@@ -75,6 +75,15 @@ async function getFarmSession(sessionId) {
 }
 
 async function createFarmInspection(sessionId, inspectedBy, payload = {}) {
+  const data = parseInspectionPayload(payload, { defaultReplacementQuantity: 0 });
+  return spawnInspectionModel.createInspection(
+    parseId(sessionId, 'sessionId'),
+    parseId(inspectedBy, 'inspectedBy'),
+    data,
+  );
+}
+
+function parseInspectionPayload(payload, { defaultReplacementQuantity } = {}) {
   const totalChecked = parseCount(payload.totalChecked ?? payload.total_checked, 'totalChecked');
   const normalQuantity = parseCount(payload.normalQuantity ?? payload.normal_quantity, 'normalQuantity');
   const warningQuantity = parseCount(payload.warningQuantity ?? payload.warning_quantity, 'warningQuantity');
@@ -82,7 +91,7 @@ async function createFarmInspection(sessionId, inspectedBy, payload = {}) {
   const replacementQuantity = parseCount(
     payload.replacementQuantity ?? payload.replacement_quantity,
     'replacementQuantity',
-    { defaultValue: 0 },
+    defaultReplacementQuantity === undefined ? {} : { defaultValue: defaultReplacementQuantity },
   );
   if (totalChecked < 1) throw new AppError('totalChecked must be greater than zero', 400);
   if (normalQuantity + warningQuantity + abnormalQuantity !== totalChecked) {
@@ -101,19 +110,23 @@ async function createFarmInspection(sessionId, inspectedBy, payload = {}) {
     || (condition === 'ABNORMAL' && abnormalQuantity === 0)) {
     throw new AppError('condition must match the most severe inspected quantity', 400);
   }
-  return spawnInspectionModel.createInspection(
+  return {
+    totalChecked,
+    normalQuantity,
+    warningQuantity,
+    abnormalQuantity,
+    replacementQuantity,
+    condition,
+    notes: parseText(payload.notes, 'notes', { maxLength: 5000 }),
+    nextCheckAt: parseTimestamp(payload.nextCheckAt ?? payload.next_check_at, 'nextCheckAt'),
+  };
+}
+
+async function updateFarmInspection(sessionId, inspectionId, payload = {}) {
+  return spawnInspectionModel.updateInspection(
     parseId(sessionId, 'sessionId'),
-    parseId(inspectedBy, 'inspectedBy'),
-    {
-      totalChecked,
-      normalQuantity,
-      warningQuantity,
-      abnormalQuantity,
-      replacementQuantity,
-      condition,
-      notes: parseText(payload.notes, 'notes', { maxLength: 5000 }),
-      nextCheckAt: parseTimestamp(payload.nextCheckAt ?? payload.next_check_at, 'nextCheckAt'),
-    },
+    parseId(inspectionId, 'inspectionId'),
+    parseInspectionPayload(payload),
   );
 }
 
@@ -196,6 +209,7 @@ module.exports = {
   listFarmSessions,
   getFarmSession,
   createFarmInspection,
+  updateFarmInspection,
   listFarmInspections,
   addFarmInspectionImage,
   replaceFarmSpawn,

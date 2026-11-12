@@ -353,12 +353,28 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
     await model.updateGrowthForAdmin(1, { ...growing, currentStage: 'MATURATION', notes: 'Mature' });
     const beforeInspection = (await model.findProgressForAdmin(1)).length;
     const sessionTrayId = assignment.assigned_trays[0].session_tray_id;
-    await model.createInspectionForAdmin(sessionTrayId,
+    const dailyInspection = await model.createInspectionForAdmin(sessionTrayId,
       { growthStage: 'MATURATION', growthProgress: 100 }, 1);
+    const originalInspectionDate = dailyInspection.inspection.inspection_date;
+    const updatedInspection = await model.updateInspectionForAdmin(sessionTrayId,
+      dailyInspection.inspection.inspection_id,
+      { growthStage: 'MATURATION', growthProgress: 95, mushroomCondition: 'Corrected observation' });
+    assert.equal(updatedInspection.inspection.growth_progress, '95');
+    assert.equal(updatedInspection.inspection.mushroom_condition, 'Corrected observation');
+    assert.equal(
+      new Date(updatedInspection.inspection.inspection_date).toISOString(),
+      new Date(originalInspectionDate).toISOString(),
+    );
     await assert.rejects(
       () => model.createInspectionForAdmin(sessionTrayId,
         { growthStage: 'MATURATION', growthProgress: 100 }, 1),
       { code: 'DUPLICATE_DAILY_INSPECTION' },
+    );
+    await assert.rejects(
+      () => model.updateInspectionForAdmin(assignment.assigned_trays[1].session_tray_id,
+        dailyInspection.inspection.inspection_id,
+        { growthStage: 'MATURATION', growthProgress: 95 }),
+      { statusCode: 404 },
     );
     const otherTraySessionId = assignment.assigned_trays[1].session_tray_id;
     await model.createInspectionForAdmin(otherTraySessionId,

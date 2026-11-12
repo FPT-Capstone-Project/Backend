@@ -816,6 +816,59 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
   }
 }
 
+async function updateInspectionForAdmin(sessionTrayId, inspectionId, data) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const assignmentResult = await client.query(
+      `SELECT st.session_tray_id
+       FROM cultivation_session_trays st
+       INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
+       WHERE st.session_tray_id = $1
+       FOR UPDATE OF st, s`,
+      [sessionTrayId],
+    );
+    if (!assignmentResult.rows[0]) {
+      throw new AppError('Cultivation session tray not found', 404);
+    }
+
+    const inspectionResult = await client.query(
+      `SELECT inspection_id
+       FROM cultivation_inspections
+       WHERE inspection_id = $1 AND session_tray_id = $2
+       FOR UPDATE`,
+      [inspectionId, sessionTrayId],
+    );
+    if (!inspectionResult.rows[0]) {
+      throw new AppError('Cultivation inspection not found for this session tray', 404);
+    }
+
+    const updated = await client.query(
+      `UPDATE cultivation_inspections
+       SET growth_stage = $3, growth_progress = $4, tray_condition = $5,
+           mushroom_condition = $6, notes = $7
+       WHERE inspection_id = $1 AND session_tray_id = $2
+       RETURNING *`,
+      [
+        inspectionId,
+        sessionTrayId,
+        data.growthStage,
+        data.growthProgress,
+        data.trayCondition ?? null,
+        data.mushroomCondition ?? null,
+        data.notes ?? null,
+      ],
+    );
+    await client.query('COMMIT');
+    return { inspection: updated.rows[0] };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function completeForAdmin(sessionId, note) {
   const client = await pool.connect();
   try {
@@ -1019,6 +1072,7 @@ module.exports = {
   updateGrowthForAdmin,
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
+  updateInspectionForAdmin,
   cancelForAdmin,
   findSessionRecipient,
   createSessionNotification,

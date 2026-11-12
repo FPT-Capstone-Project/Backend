@@ -200,6 +200,24 @@ function parseGrowthStage(value, fieldName) {
   return stage;
 }
 
+function parseDailyInspectionPayload(payload = {}) {
+  return {
+    growthStage: parseGrowthStage(payload.growthStage ?? payload.growth_stage, 'growthStage'),
+    growthProgress: parseDecimal(
+      payload.growthProgress ?? payload.growth_progress,
+      'growthProgress',
+      { min: 0, max: 100 },
+    ),
+    trayCondition: parseText(payload.trayCondition ?? payload.tray_condition, 'trayCondition', { maxLength: 500 }),
+    mushroomCondition: parseText(
+      payload.mushroomCondition ?? payload.mushroom_condition,
+      'mushroomCondition',
+      { maxLength: 500 },
+    ),
+    notes: parseText(payload.notes, 'notes'),
+  };
+}
+
 async function getDailyInspectionHistory(sessionId, user, query = {}) {
   const pagination = parsePagination(query);
   const sessionIdNumber = await getAccessibleSessionId(sessionId, user);
@@ -297,26 +315,18 @@ async function updateHarvestReadinessForAdmin(sessionId, payload = {}, confirmed
 }
 
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
-  const growthStage = parseGrowthStage(payload.growthStage ?? payload.growth_stage, 'growthStage');
-  const growthProgress = parseDecimal(
-    payload.growthProgress ?? payload.growth_progress,
-    'growthProgress',
-    { min: 0, max: 100 },
-  );
   return cultivationSessionModel.createInspectionForAdmin(
     parseId(sessionTrayId, 'sessionTrayId'),
-    {
-      growthStage,
-      growthProgress,
-      trayCondition: parseText(payload.trayCondition ?? payload.tray_condition, 'trayCondition', { maxLength: 500 }),
-      mushroomCondition: parseText(
-        payload.mushroomCondition ?? payload.mushroom_condition,
-        'mushroomCondition',
-        { maxLength: 500 },
-      ),
-      notes: parseText(payload.notes, 'notes'),
-    },
+    parseDailyInspectionPayload(payload),
     parseId(inspectedBy, 'inspectedBy'),
+  );
+}
+
+async function updateInspectionForAdmin(sessionTrayId, inspectionId, payload = {}) {
+  return cultivationSessionModel.updateInspectionForAdmin(
+    parseId(sessionTrayId, 'sessionTrayId'),
+    parseId(inspectionId, 'inspectionId'),
+    parseDailyInspectionPayload(payload),
   );
 }
 
@@ -434,6 +444,7 @@ module.exports = {
   updateGrowthForAdmin,
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
+  updateInspectionForAdmin,
   createInspectionWithImagesForAdmin,
   addInspectionImageForAdmin,
   createIncidentForAdmin,

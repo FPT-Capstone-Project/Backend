@@ -301,6 +301,68 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
   }
 });
 
+test('updating a spawn inspection corrects replacement inventory transactionally', async () => {
+  const db = await setupWorkflowDatabase();
+  try {
+    const model = loadModel(db);
+    await model.changeStage(1, 'SPAWN_RESTING');
+    const inspection = await model.createInspection(1, 1, {
+      totalChecked: 6,
+      normalQuantity: 6,
+      warningQuantity: 0,
+      abnormalQuantity: 0,
+      condition: 'NORMAL',
+    });
+
+    const corrected = await model.updateInspection(1, inspection.inspection_id, {
+      totalChecked: 6,
+      normalQuantity: 5,
+      warningQuantity: 0,
+      abnormalQuantity: 1,
+      condition: 'ABNORMAL',
+      replacementQuantity: 1,
+    });
+    assert.equal(corrected.replacement_quantity, 1);
+    assert.equal(Number((await db.query('SELECT quantity FROM spawn_inventory')).rows[0].quantity), 7);
+    assert.equal(
+      (await db.query(
+        "SELECT transaction_type FROM inventory_transactions ORDER BY transaction_id DESC LIMIT 1",
+      )).rows[0].transaction_type,
+      'OUT',
+    );
+
+    const restored = await model.updateInspection(1, inspection.inspection_id, {
+      totalChecked: 6,
+      normalQuantity: 6,
+      warningQuantity: 0,
+      abnormalQuantity: 0,
+      condition: 'NORMAL',
+      replacementQuantity: 0,
+    });
+    assert.equal(restored.replacement_quantity, 0);
+    assert.equal(Number((await db.query('SELECT quantity FROM spawn_inventory')).rows[0].quantity), 8);
+    assert.equal(
+      (await db.query(
+        "SELECT transaction_type FROM inventory_transactions ORDER BY transaction_id DESC LIMIT 1",
+      )).rows[0].transaction_type,
+      'IN',
+    );
+    await assert.rejects(
+      () => model.updateInspection(1, 999, {
+        totalChecked: 6,
+        normalQuantity: 6,
+        warningQuantity: 0,
+        abnormalQuantity: 0,
+        condition: 'NORMAL',
+        replacementQuantity: 0,
+      }),
+      { statusCode: 404 },
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test('new two-spawn trays require inspection of exactly the allocated spawn', async () => {
   const db = await setupWorkflowDatabase();
   try {

@@ -66,6 +66,50 @@ router.get('/sessions/:id', farmOperator, spawnInspectionController.farmGetSessi
  *         description: Session is not in an inspectable stage, already has a spawn inspection today, or replacement stock is insufficient
  */
 router.post('/sessions/:id/spawn-inspections', farmOperator, spawnInspectionController.farmCreateInspection);
+/**
+ * @openapi
+ * /api/farm/sessions/{id}/spawn-inspections/{inspectionId}:
+ *   put:
+ *     tags: [Farm Spawn Workflow]
+ *     summary: Update a spawn inspection in a session
+ *     description: Replaces the inspection's recorded counts, condition, notes, replacement quantity, and next check time. If replacement quantity changes, spawn inventory is adjusted transactionally. The inspection date and images are unchanged.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *       - in: path
+ *         name: inspectionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [totalChecked, normalQuantity, warningQuantity, abnormalQuantity, condition, replacementQuantity]
+ *             properties:
+ *               totalChecked: { type: integer, minimum: 1 }
+ *               normalQuantity: { type: integer, minimum: 0 }
+ *               warningQuantity: { type: integer, minimum: 0 }
+ *               abnormalQuantity: { type: integer, minimum: 0 }
+ *               condition: { type: string, enum: [NORMAL, WARNING, ABNORMAL] }
+ *               replacementQuantity: { type: integer, minimum: 0 }
+ *               notes: { type: string }
+ *               nextCheckAt: { type: string, format: date-time }
+ *     responses:
+ *       200: { description: Spawn inspection updated }
+ *       400: { description: Invalid inspection data }
+ *       404: { description: Session or inspection not found }
+ *       409: { description: Session is not paid or inventory update failed }
+ */
+router.put(
+  '/sessions/:id/spawn-inspections/:inspectionId',
+  farmOperator,
+  spawnInspectionController.farmUpdateInspection,
+);
 router.get('/sessions/:id/spawn-inspections', farmOperator, spawnInspectionController.farmListInspections);
 
 /**
