@@ -1,6 +1,36 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
+
+test('timestamp repair restores report and image inserts on existing tables', async () => {
+  const db = await setupWorkflowDatabase();
+  try {
+    await db.exec(`
+      ALTER TABLE spawn_inspections ALTER COLUMN inspected_at DROP DEFAULT,
+        ALTER COLUMN created_at DROP DEFAULT;
+      ALTER TABLE spawn_inspection_images ALTER COLUMN created_at DROP DEFAULT;
+    `);
+    const insert = `INSERT INTO spawn_inspections
+      (session_id, inspected_by, stage, total_checked, normal_quantity, condition)
+      VALUES (1, 1, 'RESTING', 3, 3, 'NORMAL') RETURNING *`;
+    await assert.rejects(() => db.query(insert), { code: '23502' });
+    const migration = readFileSync(path.join(__dirname,
+      '../migrations/026_restore_spawn_inspection_timestamp_defaults.sql'), 'utf8');
+    await db.exec(migration);
+    await db.exec(migration);
+    const report = (await db.query(insert)).rows[0];
+    assert.ok(report.inspected_at);
+    assert.ok(report.created_at);
+    const image = (await db.query(`INSERT INTO spawn_inspection_images
+      (inspection_id, image_url) VALUES ($1, $2) RETURNING *`,
+    [report.inspection_id, 'https://example.test/spawn.jpg'])).rows[0];
+    assert.ok(image.created_at);
+  } finally {
+    await db.close();
+  }
+});
 
 async function setupWorkflowDatabase() {
   const db = new PGlite();
