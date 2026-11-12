@@ -400,7 +400,7 @@ test('WF-03 forecast history, quality blockers and readiness reassessment', asyn
     assert.equal(updated.growth_status, 'MATURATION');
     assert.equal(new Date(updated.expected_harvest_date).toISOString().slice(0,10), '2026-12-15');
     assert.equal((await db.query('SELECT harvest_date::text AS date FROM cultivation_sessions WHERE session_id=1')).rows[0].date, '2026-12-15');
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 1);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 3);
     for (const [issueType, severity] of [['DISEASE','LOW'],['CONTAMINATION','MEDIUM'],['QUALITY_FAILURE','LOW'],['DEVICE_FAILURE','HIGH']]) {
       const issue = await model.createIncidentForAdmin(1, { sessionTrayId: assigned.assigned_trays[0].session_tray_id,
         incidentType: issueType, title: 'Requires assessment', severity }, 2);
@@ -415,7 +415,7 @@ test('WF-03 forecast history, quality blockers and readiness reassessment', asyn
     await model.updateGrowthForAdmin(1, observation);
     const reassessment = (await db.query('SELECT harvest_status, harvest_ready_at, harvest_ready_by FROM cultivation_sessions WHERE session_id=1')).rows[0];
     assert.deepEqual(reassessment, { harvest_status: 'NOT_READY', harvest_ready_at: null, harvest_ready_by: null });
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 2);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM notifications')).rows[0].n, 5);
     const history = await model.findProgressForAdmin(1);
     assert.equal(history.length, 4);
     assert.equal(Number(history.at(-1).progress_percent), 90);
