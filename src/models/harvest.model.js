@@ -136,6 +136,19 @@ async function start(harvestId, harvestedBy) {
        WHERE session_id = $1`,
       [harvest.session_id],
     );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, reference_type, reference_id
+       )
+       SELECT o.user_id, 'CULTIVATION_STATUS', 'Đang thu hoạch nấm',
+              'Trang trại đang tiến hành thu hoạch nấm trong phiên của bạn.',
+              'CULTIVATION_SESSION', $1
+       FROM cultivation_sessions s
+       INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+       INNER JOIN orders o ON o.order_id = oi.order_id
+       WHERE s.session_id = $1`,
+      [harvest.session_id],
+    );
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
@@ -216,6 +229,19 @@ async function complete(harvestId, harvestedBy) {
        WHERE harvest_id = $1
        RETURNING *`,
       [harvestId, harvestedBy],
+    );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, reference_type, reference_id
+       )
+       SELECT o.user_id, 'CULTIVATION_STATUS', 'Đã thu hoạch xong, chờ bàn giao',
+              'Nấm đã được thu hoạch. Đơn hàng sẽ hoàn tất sau khi giao hàng hoặc khách đến nhận.',
+              'CULTIVATION_SESSION', $1
+       FROM cultivation_sessions s
+       INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+       INNER JOIN orders o ON o.order_id = oi.order_id
+       WHERE s.session_id = $1`,
+      [harvest.session_id],
     );
     await client.query('COMMIT');
     return result.rows[0];

@@ -17,6 +17,24 @@ function sessionCanReceive(session) {
     || (session.status === 'CULTIVATING' && session.harvest_status === 'HARVEST_READY');
 }
 
+async function notifyReceivingMethod(client, userId, sessionId, harvestMethod) {
+  const isPickup = harvestMethod === 'PICKUP';
+  await client.query(
+    `INSERT INTO notifications (
+       user_id, notification_type, title, message, reference_type, reference_id
+     )
+     VALUES ($1, 'CULTIVATION_STATUS', $2, $3, 'CULTIVATION_SESSION', $4)`,
+    [
+      userId,
+      isPickup ? 'Đã ghi nhận yêu cầu khách đến hái' : 'Đã ghi nhận yêu cầu giao hàng',
+      isPickup
+        ? 'Lựa chọn khách đến hái nấm tại trang trại đã được ghi nhận.'
+        : 'Yêu cầu giao nấm của bạn đã được ghi nhận.',
+      sessionId,
+    ],
+  );
+}
+
 async function lockRequest(client, harvestRequestId) {
   const result = await client.query(
     `SELECT hr.harvest_request_id, hr.session_id, hr.harvest_method,
@@ -74,6 +92,12 @@ async function create(sessionId, data, actor) {
        WHERE session_id = $1 AND harvest_request_id IS NULL`,
       [sessionId, result.rows[0].harvest_request_id],
     );
+    await notifyReceivingMethod(
+      client,
+      session.customer_id,
+      sessionId,
+      data.harvestMethod,
+    );
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
@@ -123,6 +147,23 @@ async function update(harvestRequestId, data, actor) {
        WHERE session_id = $1 AND harvest_request_id IS NULL`,
       [request.session_id, harvestRequestId],
     );
+    const previousScheduledAt = request.scheduled_at
+      ? new Date(request.scheduled_at).getTime()
+      : null;
+    const nextScheduledAt = data.scheduledAt
+      ? new Date(data.scheduledAt).getTime()
+      : null;
+    if (
+      request.harvest_method !== data.harvestMethod ||
+      previousScheduledAt !== nextScheduledAt
+    ) {
+      await notifyReceivingMethod(
+        client,
+        request.customer_id,
+        request.session_id,
+        data.harvestMethod,
+      );
+    }
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
@@ -191,6 +232,15 @@ async function complete(harvestRequestId, actor) {
     await client.query(
       `UPDATE cultivation_session_trays SET status = 'RELEASED', notes = 'Awaiting sanitation after harvest handover'
        WHERE session_id = $1 AND status = 'ACTIVE'`, [request.session_id],
+    );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, reference_type, reference_id
+       )
+       VALUES ($1, 'CULTIVATION_COMPLETED', 'Vụ trồng đã hoàn tất',
+               'Thu hoạch và bàn giao đơn hàng của bạn đã hoàn tất.',
+               'CULTIVATION_SESSION', $2)`,
+      [request.customer_id, request.session_id],
     );
     await client.query('COMMIT');
     return result.rows[0];

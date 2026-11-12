@@ -46,6 +46,22 @@ async function setupWorkflowDatabase() {
       payment_status TEXT NOT NULL,
       status TEXT NOT NULL DEFAULT 'PROCESSING'
     );
+    CREATE TABLE notifications (
+      notification_id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      reference_type TEXT,
+      reference_id INTEGER
+    );
+    CREATE TABLE harvest_requests (
+      harvest_request_id SERIAL PRIMARY KEY,
+      session_id INTEGER NOT NULL UNIQUE,
+      harvest_method TEXT NOT NULL,
+      status TEXT NOT NULL,
+      scheduled_at TIMESTAMPTZ
+    );
     CREATE TABLE mushroom_types (
       mushroom_type_id SERIAL PRIMARY KEY,
       name TEXT NOT NULL
@@ -214,12 +230,21 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
     });
     await model.changeStage(1, 'READY_FOR_CULTIVATION');
     const session = await db.query('SELECT status FROM cultivation_sessions WHERE session_id = 1');
+    const statusNotifications = await db.query(
+      `SELECT title FROM notifications
+       WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+       ORDER BY notification_id`,
+    );
     const trays = await db.query("SELECT status FROM cultivation_trays ORDER BY tray_id");
     const assignments = await db.query('SELECT COUNT(*)::int AS count FROM cultivation_session_trays');
     const progress = await db.query(
       'SELECT current_stage FROM cultivation_progress ORDER BY progress_id',
     );
     assert.equal(session.rows[0].status, 'READY_FOR_CULTIVATION');
+    assert.deepEqual(statusNotifications.rows.map((row) => row.title), [
+      'Phôi nấm đang được ủ',
+      'Phôi nấm đã sẵn sàng',
+    ]);
     assert.deepEqual(trays.rows.map((row) => row.status), ['AVAILABLE', 'AVAILABLE']);
     assert.equal(assignments.rows[0].count, 0);
     assert.deepEqual(progress.rows.map((row) => row.current_stage), [
