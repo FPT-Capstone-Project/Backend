@@ -59,7 +59,7 @@ async function findByIdForUser(orderId, userId) {
           o.total_amount, o.status, o.payment_status, o.created_at, o.updated_at,
             oi.order_item_id, oi.rental_package_id,
             oi.mushroom_type_id, oi.quantity, oi.unit_price, oi.total_price,
-            rp.package_name, mt.name AS mushroom_name,
+            rp.package_name, mt.name AS mushroom_name, mt.image_url,
             cs.session_id, cs.status AS cultivation_status,
             cs.start_at AS cultivation_start_at, cs.harvest_date
      FROM orders o
@@ -100,6 +100,7 @@ async function findByIdForUser(orderId, userId) {
         mushroom_type_id: row.mushroom_type_id,
         package_name: row.package_name,
         mushroom_name: row.mushroom_name,
+        image_url: row.image_url,
         session_id: row.session_id,
         cultivation_status: row.cultivation_status,
         cultivation_start_at: row.cultivation_start_at,
