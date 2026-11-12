@@ -166,7 +166,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *   post:
  *     tags: [Cultivation Audit]
  *     summary: Record a daily tray inspection with optional images
- *     description: Records tray observations and up to 10 optional images in one request. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
+ *     description: Records at most one inspection per assigned tray per Vietnam calendar day, with up to 10 optional images. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -216,7 +216,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *       404:
  *         description: Session tray not found
  *       409:
- *         description: Session tray is not active
+ *         description: Session tray is not active or already has an inspection today
  */
 router.post(
   '/admin/session-trays/:sessionTrayId/inspections',

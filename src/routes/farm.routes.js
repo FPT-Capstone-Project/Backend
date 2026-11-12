@@ -63,7 +63,7 @@ router.get('/sessions/:id', farmOperator, spawnInspectionController.farmGetSessi
  *       201:
  *         description: Inspection saved; replacement stock is deducted transactionally
  *       409:
- *         description: Session is not in an inspectable stage or replacement stock is insufficient
+ *         description: Session is not in an inspectable stage, already has a spawn inspection today, or replacement stock is insufficient
  */
 router.post('/sessions/:id/spawn-inspections', farmOperator, spawnInspectionController.farmCreateInspection);
 router.get('/sessions/:id/spawn-inspections', farmOperator, spawnInspectionController.farmListInspections);

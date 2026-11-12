@@ -704,6 +704,29 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
       throw new AppError('Only active session trays can be inspected', 409);
     }
 
+    const existingInspection = await client.query(
+      `SELECT inspection_id
+       FROM cultivation_inspections
+       WHERE session_tray_id = $1
+         AND inspection_date >= (
+           date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+         AND inspection_date < (
+           (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') + INTERVAL '1 day')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+       LIMIT 1`,
+      [sessionTrayId],
+    );
+    if (existingInspection.rows.length > 0) {
+      throw new AppError(
+        'A daily inspection has already been recorded for this tray today',
+        409,
+        'DUPLICATE_DAILY_INSPECTION',
+      );
+    }
+
     const inspectionResult = await client.query(
       `INSERT INTO cultivation_inspections (
          session_tray_id, inspected_by, growth_stage, tray_condition,

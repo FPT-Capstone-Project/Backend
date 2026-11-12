@@ -131,6 +131,28 @@ async function createInspection(sessionId, inspectedBy, data) {
     if (data.totalChecked > Number(session.spawn_quantity)) {
       throw new AppError('totalChecked cannot exceed the spawn quantity in this session', 400);
     }
+    const existingInspection = await client.query(
+      `SELECT inspection_id
+       FROM spawn_inspections
+       WHERE session_id = $1
+         AND inspected_at >= (
+           date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+         AND inspected_at < (
+           (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') + INTERVAL '1 day')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+       LIMIT 1`,
+      [sessionId],
+    );
+    if (existingInspection.rows.length > 0) {
+      throw new AppError(
+        'A spawn inspection has already been recorded for this session today',
+        409,
+        'DUPLICATE_DAILY_INSPECTION',
+      );
+    }
 
     const inserted = await client.query(
       `INSERT INTO spawn_inspections (
