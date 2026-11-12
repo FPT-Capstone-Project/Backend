@@ -357,6 +357,28 @@ async function changeStage(sessionId, nextStage) {
        VALUES ($1, $2, 0, CURRENT_DATE, $3, $4)`,
       [sessionId, nextStage, updated.rows[0].harvest_date, `Spawn stage changed to ${nextStage}`],
     );
+    const stageMessages = {
+       SPAWN_RESTING: {
+         title: 'Phôi nấm đang được ủ',
+         message: 'Phôi nấm của bạn đã chuyển sang giai đoạn ủ.',
+       },
+       MYCELIAL_DEVELOPMENT: {
+         title: 'Tơ nấm đang phát triển',
+         message: 'Phôi nấm đang phát triển tơ trước khi đưa vào khu nuôi trồng.',
+       },
+       READY_FOR_CULTIVATION: {
+         title: 'Phôi nấm đã sẵn sàng',
+         message: 'Phôi nấm đã sẵn sàng để bố trí vào khay nuôi trồng.',
+       },
+    };
+    const notification = stageMessages[nextStage];
+    await client.query(
+       `INSERT INTO notifications (
+          user_id, notification_type, title, message, reference_type, reference_id
+        )
+        VALUES ($1, 'CULTIVATION_STATUS', $2, $3, 'CULTIVATION_SESSION', $4)`,
+       [session.user_id, notification.title, notification.message, sessionId],
+    );
     await client.query('COMMIT');
     return updated.rows[0];
   } catch (error) {
@@ -379,6 +401,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
             mt.name AS mushroom_name, o.order_id,
             latest_progress.current_stage, latest_progress.progress_percent,
             latest_progress.updated_at AS progress_updated_at,
+            hr.harvest_method, hr.status AS harvest_request_status, hr.scheduled_at,
             COALESCE((
               SELECT json_agg(json_build_object(
                 'session_tray_id', st.session_tray_id,
@@ -399,6 +422,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
        ORDER BY cp.progress_id DESC
        LIMIT 1
      )
+     LEFT JOIN harvest_requests hr ON hr.session_id = s.session_id
      WHERE o.order_id = $1 ${ownerFilter}
      ORDER BY s.session_id`,
     values,

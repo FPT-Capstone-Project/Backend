@@ -442,6 +442,15 @@ async function assignTraysForAdmin(sessionId, data) {
        ) VALUES ($1, 'FRUITING_INITIATION', 0, CURRENT_DATE, $2::date, 'Cultivation started after tray assignment')`,
       [sessionId, started.rows[0].harvest_date],
     );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, reference_type, reference_id
+       )
+       VALUES ($1, 'CULTIVATION_STATUS', 'Vụ trồng đã bắt đầu',
+               'Khay đã được bố trí và quá trình nuôi trồng đang diễn ra.',
+               'CULTIVATION_SESSION', $2)`,
+      [session.user_id, sessionId],
+    );
     await client.query('COMMIT');
     return {
       session_id: sessionId,
@@ -600,6 +609,47 @@ async function updateGrowthForAdmin(sessionId, data) {
       [sessionId, data.currentStage, data.progressPercent, session.start_at,
         session.harvest_date, data.condition, data.notes ?? null],
     );
+    if (latest?.current_stage !== data.currentStage) {
+      const stageMessages = {
+        FRUITING_INITIATION: {
+          title: 'Nấm bắt đầu hình thành quả thể',
+          message: 'Nấm đã bước sang giai đoạn hình thành quả thể.',
+        },
+        PINNING: {
+          title: 'Nấm bắt đầu ra nụ',
+          message: 'Các nụ nấm đang hình thành và phát triển.',
+        },
+        YOUNG_FRUITING: {
+          title: 'Nấm non đang phát triển',
+          message: 'Nấm non đang tiếp tục phát triển trong khay của bạn.',
+        },
+        MATURATION: {
+          title: 'Nấm đã bước vào giai đoạn trưởng thành',
+          message: 'Trang trại sẽ đánh giá tình trạng nấm trước khi xác nhận có thể thu hoạch.',
+        },
+      };
+      const notification = stageMessages[data.currentStage];
+      if (notification) {
+        await client.query(
+          `INSERT INTO notifications (
+             user_id, notification_type, title, message, reference_type, reference_id
+           )
+           VALUES ($1, 'CULTIVATION_STATUS', $2, $3, 'CULTIVATION_SESSION', $4)`,
+          [session.user_id, notification.title, notification.message, sessionId],
+        );
+      }
+    }
+    if (session.harvest_status === 'HARVEST_READY') {
+      await client.query(
+        `INSERT INTO notifications (
+           user_id, notification_type, title, message, reference_type, reference_id
+         )
+         VALUES ($1, 'CULTIVATION_STATUS', 'Đã cập nhật tình trạng thu hoạch',
+                 'Nấm hiện chưa đủ điều kiện để thu hoạch. Trang trại sẽ tiếp tục theo dõi.',
+                 'CULTIVATION_SESSION', $2)`,
+        [session.user_id, sessionId],
+      );
+    }
     await client.query('COMMIT');
     return { ...result.rows[0], growth_status: data.currentStage,
       status: session.status, harvest_status: 'NOT_READY', harvest_ready: false };
@@ -667,11 +717,21 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
         session.harvest_date, latest.condition,
         data.notes ?? (data.harvestReady ? 'Harvest readiness confirmed' : 'Not ready for harvest')],
     );
-    if (data.harvestReady) {
+    if (data.harvestReady && session.harvest_status !== 'HARVEST_READY') {
       await client.query(
         `INSERT INTO notifications (user_id, notification_type, title, message, reference_type, reference_id)
          VALUES ($1, 'OPERATOR_MESSAGE', 'Mushrooms ready for harvest',
            'Please choose pickup at the farm or external delivery.', 'CULTIVATION_SESSION', $2)`,
+        [session.user_id, sessionId],
+      );
+    } else if (!data.harvestReady && session.harvest_status === 'HARVEST_READY') {
+      await client.query(
+        `INSERT INTO notifications (
+           user_id, notification_type, title, message, reference_type, reference_id
+         )
+         VALUES ($1, 'CULTIVATION_STATUS', 'Đã cập nhật tình trạng thu hoạch',
+                 'Nấm hiện chưa đủ điều kiện để thu hoạch. Trang trại sẽ tiếp tục theo dõi.',
+                 'CULTIVATION_SESSION', $2)`,
         [session.user_id, sessionId],
       );
     }

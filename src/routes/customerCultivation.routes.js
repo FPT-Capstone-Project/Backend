@@ -21,7 +21,7 @@ const router = express.Router();
  *           type: integer
  *     responses:
  *       200:
- *         description: Customer-visible session status, harvest readiness, latest growth progress, and assigned trays
+ *          description: Customer-visible session status, harvest readiness, latest growth progress, assigned trays, and receiving method/status/schedule when selected
  *       404:
  *         description: Order not found or not accessible to this user
  */

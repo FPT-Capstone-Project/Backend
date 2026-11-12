@@ -78,6 +78,15 @@ async function setupDatabase() {
       order_id INTEGER NOT NULL REFERENCES orders(order_id),
       status TEXT NOT NULL
     );
+    CREATE TABLE notifications (
+      notification_id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL,
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      reference_type TEXT,
+      reference_id INTEGER
+    );
 
     INSERT INTO users (user_id, full_name) VALUES (1, 'Farm Operator'), (3, 'Customer');
     INSERT INTO mushroom_types (mushroom_type_id, name) VALUES (1, 'Oyster Mushroom');
@@ -156,6 +165,13 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
       customerNote: 'Please prepare a basket.',
     }, customer);
     assert.equal(request.status, 'SCHEDULED');
+    assert.equal(
+      (await db.query(
+        `SELECT title FROM notifications
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1`,
+      )).rows[0].title,
+      'Đã ghi nhận yêu cầu khách đến hái',
+    );
     await assert.rejects(
       () => harvestRequest.complete(request.harvest_request_id, customer),
       { statusCode: 409, message: 'Harvest must be completed before receiving can be completed' },
@@ -171,6 +187,13 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     assert.equal(
       (await db.query('SELECT status FROM cultivation_sessions WHERE session_id = 1')).rows[0].status,
       'HARVESTING',
+    );
+    assert.equal(
+      (await db.query(
+        `SELECT COUNT(*)::int AS count FROM notifications
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1`,
+      )).rows[0].count,
+      2,
     );
     await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
     await assert.rejects(() => harvest.complete(planned.harvest_id, 1), {
@@ -195,6 +218,13 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     }, 1);
     const completed = await harvest.complete(planned.harvest_id, 1);
     assert.equal(completed.status, 'COMPLETED');
+    assert.equal(
+      (await db.query(
+        `SELECT COUNT(*)::int AS count FROM notifications
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1`,
+      )).rows[0].count,
+      3,
+    );
     assert.deepEqual(
       (await db.query(`
         SELECT s.status AS session_status, st.status AS assignment_status, t.status AS tray_status
@@ -217,6 +247,14 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     const pickupCompleted = await harvestRequest.complete(request.harvest_request_id, customer);
     assert.equal(pickupCompleted.status, 'COMPLETED');
     assert.equal(pickupCompleted.confirmed_by, 3);
+    assert.equal(
+      (await db.query(
+        `SELECT notification_type FROM notifications
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+         ORDER BY notification_id DESC LIMIT 1`,
+      )).rows[0].notification_type,
+      'CULTIVATION_COMPLETED',
+    );
     const after = (await db.query(`SELECT s.status, st.status AS assignment_status, t.status AS tray_status
       FROM cultivation_sessions s JOIN cultivation_session_trays st USING(session_id)
       JOIN cultivation_trays t USING(tray_id) WHERE s.session_id=1`)).rows[0];
