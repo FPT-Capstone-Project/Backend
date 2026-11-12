@@ -19,6 +19,15 @@ async function farmCreateInspection(req, res) {
   res.status(201).json({ message: 'Spawn inspection recorded successfully', data: inspection });
 }
 
+async function farmUpdateInspection(req, res) {
+  const inspection = await spawnInspectionService.updateFarmInspection(
+    req.params.id,
+    req.params.inspectionId,
+    req.body || {},
+  );
+  res.json({ message: 'Spawn inspection updated successfully', data: inspection });
+}
+
 async function farmListInspections(req, res) {
   const inspections = await spawnInspectionService.listFarmInspections(req.params.id);
   res.json({ data: inspections });
@@ -85,6 +94,7 @@ module.exports = {
   farmListSessions,
   farmGetSession,
   farmCreateInspection,
+  farmUpdateInspection,
   farmListInspections,
   farmAddImage,
   farmReplaceSpawn,

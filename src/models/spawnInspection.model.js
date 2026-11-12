@@ -131,6 +131,28 @@ async function createInspection(sessionId, inspectedBy, data) {
     if (data.totalChecked > Number(session.spawn_quantity)) {
       throw new AppError('totalChecked cannot exceed the spawn quantity in this session', 400);
     }
+    const existingInspection = await client.query(
+      `SELECT inspection_id
+       FROM spawn_inspections
+       WHERE session_id = $1
+         AND inspected_at >= (
+           date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+         AND inspected_at < (
+           (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') + INTERVAL '1 day')
+           AT TIME ZONE 'Asia/Ho_Chi_Minh'
+         )
+       LIMIT 1`,
+      [sessionId],
+    );
+    if (existingInspection.rows.length > 0) {
+      throw new AppError(
+        'A spawn inspection has already been recorded for this session today',
+        409,
+        'DUPLICATE_DAILY_INSPECTION',
+      );
+    }
 
     const inserted = await client.query(
       `INSERT INTO spawn_inspections (
@@ -167,6 +189,102 @@ async function createInspection(sessionId, inspectedBy, data) {
 
     await client.query('COMMIT');
     return inspection;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function updateInspection(sessionId, inspectionId, data) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const session = await lockSession(client, sessionId);
+    if (!session) throw new AppError('Cultivation session not found', 404);
+    if (session.payment_status !== 'PAID') {
+      throw new AppError('Only paid sessions can be inspected', 409);
+    }
+
+    const inspectionResult = await client.query(
+      `SELECT inspection_id, abnormal_quantity, replacement_quantity
+       FROM spawn_inspections
+       WHERE inspection_id = $1 AND session_id = $2
+       FOR UPDATE`,
+      [inspectionId, sessionId],
+    );
+    const inspection = inspectionResult.rows[0];
+    if (!inspection) throw new AppError('Spawn inspection not found for this session', 404);
+    if (data.totalChecked > Number(session.spawn_quantity)) {
+      throw new AppError('totalChecked cannot exceed the spawn quantity in this session', 400);
+    }
+
+    const replacementDifference = data.replacementQuantity - Number(inspection.replacement_quantity);
+    if (replacementDifference > 0) {
+      await issueReplacementStock(
+        client,
+        session,
+        replacementDifference,
+        `Corrected spawn replacement for inspection ${inspectionId}`,
+      );
+    } else if (replacementDifference < 0) {
+      const quantity = Math.abs(replacementDifference);
+      const inventoryResult = await client.query(
+        `SELECT inventory_id, quantity
+         FROM spawn_inventory
+         WHERE mushroom_type_id = $1
+         FOR UPDATE`,
+        [session.mushroom_type_id],
+      );
+      const inventory = inventoryResult.rows[0];
+      if (!inventory) throw new AppError('Spawn inventory not found', 409);
+      const updatedInventory = await client.query(
+        `UPDATE spawn_inventory
+         SET quantity = quantity + $2, updated_at = CURRENT_TIMESTAMP
+         WHERE inventory_id = $1
+         RETURNING quantity`,
+        [inventory.inventory_id, quantity],
+      );
+      await client.query(
+        `INSERT INTO inventory_transactions (
+           inventory_id, session_id, transaction_type, quantity,
+           quantity_before, quantity_after, notes
+         )
+         VALUES ($1, $2, 'IN', $3, $4, $5, $6)`,
+        [
+          inventory.inventory_id,
+          session.session_id,
+          quantity,
+          Number(inventory.quantity),
+          Number(updatedInventory.rows[0].quantity),
+          `Reversed spawn replacement correction for inspection ${inspectionId}`,
+        ],
+      );
+    }
+
+    const updated = await client.query(
+      `UPDATE spawn_inspections
+       SET total_checked = $3, normal_quantity = $4, warning_quantity = $5,
+           abnormal_quantity = $6, condition = $7, notes = $8,
+           replacement_quantity = $9, next_check_at = $10::timestamptz
+       WHERE inspection_id = $1 AND session_id = $2
+       RETURNING *`,
+      [
+        inspectionId,
+        sessionId,
+        data.totalChecked,
+        data.normalQuantity,
+        data.warningQuantity,
+        data.abnormalQuantity,
+        data.condition,
+        data.notes ?? null,
+        data.replacementQuantity,
+        data.nextCheckAt ?? null,
+      ],
+    );
+    await client.query('COMMIT');
+    return updated.rows[0];
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -474,6 +592,7 @@ module.exports = {
   findAllForFarm,
   findByIdForFarm,
   createInspection,
+  updateInspection,
   replaceAbnormalSpawn,
   findInspectionHistory,
   findInspectionForImage,

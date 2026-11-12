@@ -166,7 +166,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *   post:
  *     tags: [Cultivation Audit]
  *     summary: Record a daily tray inspection with optional images
- *     description: Records tray observations and up to 10 optional images in one request. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
+ *     description: Records at most one inspection per assigned tray per Vietnam calendar day, with up to 10 optional images. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -216,13 +216,56 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *       404:
  *         description: Session tray not found
  *       409:
- *         description: Session tray is not active
+ *         description: Session tray is not active or already has an inspection today
  */
 router.post(
   '/admin/session-trays/:sessionTrayId/inspections',
   adminOrFarmOperator,
   upload.array('images', 10),
   cultivationSessionController.adminCreateInspection,
+);
+
+/**
+ * @openapi
+ * /api/cultivation-sessions/admin/session-trays/{sessionTrayId}/inspections/{inspectionId}:
+ *   put:
+ *     tags: [Cultivation Audit]
+ *     summary: Update an existing daily tray inspection
+ *     description: Replaces the observation fields for an inspection belonging to this assigned tray. The inspection date and existing images are unchanged. Historical observations can be edited even after the session is no longer active.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: sessionTrayId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *       - in: path
+ *         name: inspectionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [growthStage, growthProgress]
+ *             properties:
+ *               growthStage:
+ *                 type: string
+ *                 enum: [FRUITING_INITIATION, PINNING, YOUNG_FRUITING, MATURATION]
+ *               growthProgress: { type: number, minimum: 0, maximum: 100 }
+ *               trayCondition: { type: string, maxLength: 500 }
+ *               mushroomCondition: { type: string, maxLength: 500 }
+ *               notes: { type: string }
+ *     responses:
+ *       200: { description: Daily tray inspection updated }
+ *       400: { description: Invalid inspection data }
+ *       404: { description: Session tray or inspection not found for that tray }
+ */
+router.put(
+  '/admin/session-trays/:sessionTrayId/inspections/:inspectionId',
+  adminOrFarmOperator,
+  cultivationSessionController.adminUpdateInspection,
 );
 
 /**

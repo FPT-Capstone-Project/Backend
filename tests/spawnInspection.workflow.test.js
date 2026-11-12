@@ -215,12 +215,23 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
       notes: 'One spawn unit requires replacement',
     });
     assert.equal(restingInspection.stage, 'RESTING');
+    await assert.rejects(
+      () => model.createInspection(1, 1, {
+        totalChecked: 6,
+        normalQuantity: 6,
+        condition: 'NORMAL',
+      }),
+      { code: 'DUPLICATE_DAILY_INSPECTION' },
+    );
     const replacement = await model.replaceAbnormalSpawn(restingInspection.inspection_id, 1);
     assert.equal(replacement.replacement_quantity, 1);
     await model.createImage(restingInspection.inspection_id, 'https://images.example.test/spawn.jpg', 'Day 1');
     assert.equal(Number((await db.query('SELECT quantity FROM spawn_inventory')).rows[0].quantity), 7);
     assert.equal((await db.query("SELECT COUNT(*)::int AS count FROM inventory_transactions WHERE transaction_type = 'OUT'")).rows[0].count, 2);
 
+    await db.exec(
+      'UPDATE spawn_inspections SET inspected_at = inspected_at - INTERVAL \'1 day\'',
+    );
     await model.createInspection(1, 1, {
       totalChecked: 6,
       normalQuantity: 6,
@@ -290,6 +301,68 @@ test('farm workflow qualifies spawn without assigning trays or activating cultiv
   }
 });
 
+test('updating a spawn inspection corrects replacement inventory transactionally', async () => {
+  const db = await setupWorkflowDatabase();
+  try {
+    const model = loadModel(db);
+    await model.changeStage(1, 'SPAWN_RESTING');
+    const inspection = await model.createInspection(1, 1, {
+      totalChecked: 6,
+      normalQuantity: 6,
+      warningQuantity: 0,
+      abnormalQuantity: 0,
+      condition: 'NORMAL',
+    });
+
+    const corrected = await model.updateInspection(1, inspection.inspection_id, {
+      totalChecked: 6,
+      normalQuantity: 5,
+      warningQuantity: 0,
+      abnormalQuantity: 1,
+      condition: 'ABNORMAL',
+      replacementQuantity: 1,
+    });
+    assert.equal(corrected.replacement_quantity, 1);
+    assert.equal(Number((await db.query('SELECT quantity FROM spawn_inventory')).rows[0].quantity), 7);
+    assert.equal(
+      (await db.query(
+        "SELECT transaction_type FROM inventory_transactions ORDER BY transaction_id DESC LIMIT 1",
+      )).rows[0].transaction_type,
+      'OUT',
+    );
+
+    const restored = await model.updateInspection(1, inspection.inspection_id, {
+      totalChecked: 6,
+      normalQuantity: 6,
+      warningQuantity: 0,
+      abnormalQuantity: 0,
+      condition: 'NORMAL',
+      replacementQuantity: 0,
+    });
+    assert.equal(restored.replacement_quantity, 0);
+    assert.equal(Number((await db.query('SELECT quantity FROM spawn_inventory')).rows[0].quantity), 8);
+    assert.equal(
+      (await db.query(
+        "SELECT transaction_type FROM inventory_transactions ORDER BY transaction_id DESC LIMIT 1",
+      )).rows[0].transaction_type,
+      'IN',
+    );
+    await assert.rejects(
+      () => model.updateInspection(1, 999, {
+        totalChecked: 6,
+        normalQuantity: 6,
+        warningQuantity: 0,
+        abnormalQuantity: 0,
+        condition: 'NORMAL',
+        replacementQuantity: 0,
+      }),
+      { statusCode: 404 },
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test('new two-spawn trays require inspection of exactly the allocated spawn', async () => {
   const db = await setupWorkflowDatabase();
   try {
@@ -333,6 +406,9 @@ test('combined resting/incubation requires a complete NORMAL inspection before r
       abnormalQuantity: 0,
       condition: 'NORMAL',
     });
+    await db.exec(
+      'UPDATE spawn_inspections SET inspected_at = inspected_at - INTERVAL \'1 day\'',
+    );
     await assert.rejects(
       () => model.changeStage(1, 'READY_FOR_CULTIVATION'),
       { statusCode: 409 },
@@ -341,6 +417,9 @@ test('combined resting/incubation requires a complete NORMAL inspection before r
       totalChecked: 6, normalQuantity: 5, warningQuantity: 1,
       abnormalQuantity: 0, condition: 'WARNING',
     });
+    await db.exec(
+      'UPDATE spawn_inspections SET inspected_at = inspected_at - INTERVAL \'1 day\'',
+    );
     await assert.rejects(() => model.changeStage(1, 'READY_FOR_CULTIVATION'), { statusCode: 409 });
     await model.createInspection(1, 1, {
       totalChecked: 6, normalQuantity: 6, warningQuantity: 0,

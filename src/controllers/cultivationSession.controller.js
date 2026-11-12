@@ -72,6 +72,15 @@ async function adminCreateInspection(req, res) {
   res.status(201).json({ message: 'Daily tray inspection recorded successfully', data: result });
 }
 
+async function adminUpdateInspection(req, res) {
+  const result = await cultivationSessionService.updateInspectionForAdmin(
+    req.params.sessionTrayId,
+    req.params.inspectionId,
+    req.body || {},
+  );
+  res.json({ message: 'Daily tray inspection updated successfully', data: result });
+}
+
 async function adminAddInspectionImage(req, res) {
   const image = await cultivationSessionService.addInspectionImageForAdmin(
     req.params.inspectionId,
@@ -123,6 +132,7 @@ module.exports = {
   adminUpdateGrowth,
   adminUpdateHarvestReadiness,
   adminCreateInspection,
+  adminUpdateInspection,
   adminAddInspectionImage,
   adminCreateIncident,
   adminListIncidents,

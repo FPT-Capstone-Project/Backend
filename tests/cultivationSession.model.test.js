@@ -23,6 +23,9 @@ function loadInspectionModel({
       if (statement.startsWith('SELECT st.session_tray_id, st.session_id')) {
         return { rows: assignment ? [assignment] : [] };
       }
+      if (statement.startsWith('SELECT inspection_id FROM cultivation_inspections')) {
+        return { rows: [] };
+      }
       if (statement.startsWith('SELECT progress_id, current_stage, progress_percent')) {
         return { rows: latestProgress ? [latestProgress] : [] };
       }

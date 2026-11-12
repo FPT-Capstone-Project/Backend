@@ -10,6 +10,10 @@ function loadService() {
       calls.push(args);
       return { inspection_id: 12, stage: 'RESTING' };
     },
+    updateInspection: async (...args) => {
+      calls.push(args);
+      return { inspection_id: args[1] };
+    },
   };
   delete require.cache[modelPath];
   delete require.cache[servicePath];
@@ -71,6 +75,42 @@ test('validates spawn inspection counts, condition, and replacement quantities',
       condition: 'ABNORMAL',
     }),
     { statusCode: 400, message: 'replacementQuantity cannot exceed abnormalQuantity' },
+  );
+});
+
+test('validates and updates a spawn inspection', async () => {
+  const { service, calls } = loadService();
+  const inspection = await service.updateFarmInspection('7', '12', {
+    totalChecked: 6,
+    normalQuantity: 4,
+    warningQuantity: 1,
+    abnormalQuantity: 1,
+    replacementQuantity: 1,
+    condition: 'abnormal',
+    notes: 'Corrected count',
+  });
+
+  assert.equal(inspection.inspection_id, 12);
+  assert.deepEqual(calls, [[7, 12, {
+    totalChecked: 6,
+    normalQuantity: 4,
+    warningQuantity: 1,
+    abnormalQuantity: 1,
+    replacementQuantity: 1,
+    condition: 'ABNORMAL',
+    notes: 'Corrected count',
+    nextCheckAt: undefined,
+  }]]);
+  await assert.rejects(
+    () => service.updateFarmInspection(7, 12, {
+      totalChecked: 2,
+      normalQuantity: 1,
+      warningQuantity: 1,
+      abnormalQuantity: 0,
+      replacementQuantity: 0,
+      condition: 'NORMAL',
+    }),
+    { statusCode: 400 },
   );
 });
 
