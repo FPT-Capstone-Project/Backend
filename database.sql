@@ -488,10 +488,8 @@ CREATE TABLE public.cultivation_inspections (
   session_tray_id    INTEGER NOT NULL REFERENCES public.cultivation_session_trays(session_tray_id),
   inspected_by       INTEGER NOT NULL REFERENCES public.users(user_id),
   inspection_date    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  growth_stage       VARCHAR,
   tray_condition     VARCHAR,
   mushroom_condition VARCHAR,
-  growth_progress    NUMERIC CHECK (growth_progress >= 0 AND growth_progress <= 100),
   notes              TEXT
 );
 

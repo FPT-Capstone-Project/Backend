@@ -202,12 +202,6 @@ function parseGrowthStage(value, fieldName) {
 
 function parseDailyInspectionPayload(payload = {}) {
   return {
-    growthStage: parseGrowthStage(payload.growthStage ?? payload.growth_stage, 'growthStage'),
-    growthProgress: parseDecimal(
-      payload.growthProgress ?? payload.growth_progress,
-      'growthProgress',
-      { min: 0, max: 100 },
-    ),
     trayCondition: parseText(payload.trayCondition ?? payload.tray_condition, 'trayCondition', { maxLength: 500 }),
     mushroomCondition: parseText(
       payload.mushroomCondition ?? payload.mushroom_condition,

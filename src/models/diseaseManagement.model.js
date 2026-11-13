@@ -195,7 +195,6 @@ async function findIssue(issueId) {
             (SELECT ec.expert_id FROM expert_consultations ec
              WHERE ec.issue_id = ci.issue_id
              ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS assigned_expert_id,
-            tray_inspection.growth_stage, tray_inspection.growth_progress,
             spawn_inspection.stage AS spawn_stage
      FROM cultivation_issues ci
      LEFT JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
@@ -209,8 +208,6 @@ async function findIssue(issueId) {
      LEFT JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
      LEFT JOIN users reporter ON reporter.user_id = ci.reported_by
-     LEFT JOIN cultivation_inspections tray_inspection
-       ON tray_inspection.inspection_id = ci.inspection_id
      WHERE ci.issue_id = $1`,
     [issueId],
   );

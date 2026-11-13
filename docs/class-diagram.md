@@ -732,8 +732,6 @@ classDiagram
         +int inspection_id
         +int session_tray_id
         +int inspected_by
-        +string growth_stage
-        +decimal growth_progress
         +string tray_condition
         +string mushroom_condition
         +datetime inspection_date

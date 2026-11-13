@@ -6,6 +6,7 @@ async function setupDatabase() {
   const db = new PGlite();
   await db.exec(`
     CREATE TABLE notifications (user_id INTEGER, notification_type TEXT, title TEXT, message TEXT, reference_type TEXT, reference_id INTEGER);
+    CREATE TABLE users (user_id INTEGER PRIMARY KEY, full_name TEXT NOT NULL);
     CREATE TABLE orders (
       order_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -79,10 +80,8 @@ async function setupDatabase() {
       session_tray_id INTEGER NOT NULL,
       inspected_by INTEGER NOT NULL,
       inspection_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-      growth_stage TEXT,
       tray_condition TEXT,
       mushroom_condition TEXT,
-      growth_progress NUMERIC,
       notes TEXT
     );
     CREATE TABLE cultivation_issues (
@@ -105,6 +104,7 @@ async function setupDatabase() {
       session_tray_id INTEGER
     );
 
+    INSERT INTO users (user_id, full_name) VALUES (1, 'Farm Operator');
     INSERT INTO orders (user_id) VALUES (2);
     INSERT INTO order_items (order_id, quantity) VALUES (1, 2), (1, 2);
     INSERT INTO cultivation_sessions (
@@ -163,6 +163,39 @@ function loadModel(db) {
 function isConflictOrInputError(error) {
   return [400, 404, 409].includes(error?.statusCode);
 }
+
+test('daily tray histories use session growth progress recorded at each inspection time', async () => {
+  const db = await setupDatabase();
+  try {
+    const model = loadModel(db);
+    await db.exec(`
+      INSERT INTO cultivation_session_trays (session_id, tray_id, status)
+      VALUES (1, 1, 'ACTIVE');
+      INSERT INTO cultivation_progress
+        (session_id, current_stage, progress_percent, updated_at)
+      VALUES
+        (1, 'PINNING', 25, '2026-10-01T08:00:00Z'),
+        (1, 'YOUNG_FRUITING', 60, '2026-10-03T08:00:00Z');
+      INSERT INTO cultivation_inspections
+        (session_tray_id, inspected_by, inspection_date, tray_condition)
+      VALUES
+        (1, 1, '2026-10-02T08:00:00Z', 'First check'),
+        (1, 1, '2026-10-04T08:00:00Z', 'Second check');
+    `);
+
+    const sessionHistory = await model.findDailyInspectionHistoryForAdmin(1, { limit: 10, offset: 0 });
+    const trayHistory = await model.findDailyInspectionHistoryForTray(1, 1, { limit: 10, offset: 0 });
+
+    for (const inspections of [sessionHistory.inspections, trayHistory.inspections]) {
+      assert.deepEqual(
+        inspections.map(({ growthStage, growthProgress }) => [growthStage, Number(growthProgress)]),
+        [['YOUNG_FRUITING', 60], ['PINNING', 25]],
+      );
+    }
+  } finally {
+    await db.close();
+  }
+});
 
 test('WF-03 lets the Farm Operator assign trays without an approved matching profile', async () => {
   for (const change of [
@@ -291,11 +324,7 @@ test('WF-03 assigns only Farm Operator selected trays, activates cultivation, re
       ['YOUNG_FRUITING', 65],
       ['MATURATION', 100],
     ]) {
-      await model.createInspectionForAdmin(sessionTrayId, {
-        growthStage,
-        growthProgress,
-        mushroomCondition: 'NORMAL',
-      }, 1);
+      await model.createInspectionForAdmin(sessionTrayId, { mushroomCondition: 'NORMAL' }, 1);
       await db.exec(
         'UPDATE cultivation_inspections SET inspection_date = inspection_date - INTERVAL \'1 day\'',
       );
@@ -354,12 +383,12 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
     const beforeInspection = (await model.findProgressForAdmin(1)).length;
     const sessionTrayId = assignment.assigned_trays[0].session_tray_id;
     const dailyInspection = await model.createInspectionForAdmin(sessionTrayId,
-      { growthStage: 'MATURATION', growthProgress: 100 }, 1);
+      { trayCondition: 'Clean', mushroomCondition: 'Healthy' }, 1);
     const originalInspectionDate = dailyInspection.inspection.inspection_date;
     const updatedInspection = await model.updateInspectionForAdmin(sessionTrayId,
       dailyInspection.inspection.inspection_id,
-      { growthStage: 'MATURATION', growthProgress: 95, mushroomCondition: 'Corrected observation' });
-    assert.equal(updatedInspection.inspection.growth_progress, '95');
+      { trayCondition: 'Needs cleaning', mushroomCondition: 'Corrected observation' });
+    assert.equal(updatedInspection.inspection.tray_condition, 'Needs cleaning');
     assert.equal(updatedInspection.inspection.mushroom_condition, 'Corrected observation');
     assert.equal(
       new Date(updatedInspection.inspection.inspection_date).toISOString(),
@@ -367,18 +396,18 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
     );
     await assert.rejects(
       () => model.createInspectionForAdmin(sessionTrayId,
-        { growthStage: 'MATURATION', growthProgress: 100 }, 1),
+        { mushroomCondition: 'Healthy' }, 1),
       { code: 'DUPLICATE_DAILY_INSPECTION' },
     );
     await assert.rejects(
       () => model.updateInspectionForAdmin(assignment.assigned_trays[1].session_tray_id,
         dailyInspection.inspection.inspection_id,
-        { growthStage: 'MATURATION', growthProgress: 95 }),
+        { mushroomCondition: 'Healthy' }),
       { statusCode: 404 },
     );
     const otherTraySessionId = assignment.assigned_trays[1].session_tray_id;
     await model.createInspectionForAdmin(otherTraySessionId,
-      { growthStage: 'MATURATION', growthProgress: 100 }, 1);
+      { mushroomCondition: 'Healthy' }, 1);
     assert.equal((await model.findProgressForAdmin(1)).length, beforeInspection);
     for (const mutation of [
       "UPDATE cultivation_session_trays SET status='RELEASED' WHERE tray_id=1",

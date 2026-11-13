@@ -35,9 +35,9 @@ function loadInspectionModel({
             inspection_id: 20,
             session_tray_id: values[0],
             inspected_by: values[1],
-            growth_stage: values[2],
-            growth_progress: values[5],
-            notes: values[6],
+            tray_condition: values[2],
+            mushroom_condition: values[3],
+            notes: values[4],
           }],
         };
       }
@@ -169,8 +169,6 @@ function loadWorkflowModel({
 test('daily tray inspection records observations without updating session progress', async () => {
   const { model, statements } = loadInspectionModel();
   const result = await model.createInspectionForAdmin(14, {
-    growthStage: 'PINNING',
-    growthProgress: 65,
     trayCondition: 'Clean',
     mushroomCondition: 'Healthy',
     notes: 'Pins are developing normally.',
@@ -178,29 +176,15 @@ test('daily tray inspection records observations without updating session progre
 
   assert.equal(result.inspection.session_tray_id, 14);
   assert.equal(result.inspection.inspected_by, 3);
-  assert.equal(result.inspection.growth_stage, 'PINNING');
+  assert.equal(result.inspection.tray_condition, 'Clean');
+  assert.equal(result.inspection.mushroom_condition, 'Healthy');
   assert.equal(result.progress, undefined);
-  assert.ok(statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));
+  const insert = statements.find(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections'));
+  assert.ok(insert);
+  assert.ok(!insert.statement.includes('growth_stage'));
+  assert.ok(!insert.statement.includes('growth_progress'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_progress')));
   assert.equal(statements.at(-1).statement, 'COMMIT');
-});
-
-test('allows the remaining forward cultivation growth-stage transitions', async () => {
-  const transitions = [
-    ['PINNING', 'YOUNG_FRUITING', 75],
-    ['YOUNG_FRUITING', 'MATURATION', 100],
-  ];
-
-  for (const [previousStage, nextStage, progress] of transitions) {
-    const { model } = loadInspectionModel({
-      latestProgress: { progress_id: 9, current_stage: previousStage, progress_percent: '60' },
-    });
-    const result = await model.createInspectionForAdmin(14, {
-      growthStage: nextStage,
-      growthProgress: progress,
-    }, 3);
-    assert.equal(result.inspection.growth_stage, nextStage);
-  }
 });
 
 test('does not record inspections for a released or completed tray assignment', async () => {
@@ -215,10 +199,31 @@ test('does not record inspections for a released or completed tray assignment', 
 
   await assert.rejects(
     () => model.createInspectionForAdmin(14, {
-      growthStage: 'MATURATION',
-      growthProgress: 100,
+      trayCondition: 'Clean',
     }, 3),
-    { statusCode: 409, message: 'Only active session trays can be inspected' },
+    { statusCode: 409, code: 'SESSION_TRAY_NOT_ACTIVE', message: 'Only active session trays can be inspected' },
+  );
+  assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));
+});
+
+test('does not record inspections when the tray is active but its session is not cultivating', async () => {
+  const { model, statements } = loadInspectionModel({
+    assignment: {
+      session_tray_id: 14,
+      session_id: 77,
+      assignment_status: 'ACTIVE',
+      session_status: 'COMPLETED',
+    },
+  });
+
+  await assert.rejects(
+    () => model.createInspectionForAdmin(14, { trayCondition: 'Clean' }, 3),
+    {
+      statusCode: 409,
+      code: 'INVALID_SESSION_STATUS',
+      message: 'Daily inspections can only be created while the session is CULTIVATING',
+    },
   );
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));

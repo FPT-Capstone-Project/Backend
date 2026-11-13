@@ -195,8 +195,8 @@ async function findDailyInspectionHistoryForAdmin(sessionId, { limit, offset }) 
               t.tray_code AS "trayCode", t.tray_name AS "trayName",
               st.status AS "assignmentStatus",
               i.inspection_date AS "inspectionDate",
-              i.growth_stage AS "growthStage",
-              i.growth_progress AS "growthProgress",
+              progress.current_stage AS "growthStage",
+              progress.progress_percent AS "growthProgress",
               i.tray_condition AS "trayCondition",
               i.mushroom_condition AS "mushroomCondition",
               i.notes, i.inspected_by AS "inspectedBy",
@@ -215,6 +215,14 @@ async function findDailyInspectionHistoryForAdmin(sessionId, { limit, offset }) 
        INNER JOIN cultivation_session_trays st ON st.session_tray_id = i.session_tray_id
        INNER JOIN cultivation_trays t ON t.tray_id = st.tray_id
        INNER JOIN users u ON u.user_id = i.inspected_by
+       LEFT JOIN LATERAL (
+         SELECT cp.current_stage, cp.progress_percent
+         FROM cultivation_progress cp
+         WHERE cp.session_id = st.session_id
+           AND cp.updated_at <= i.inspection_date
+         ORDER BY cp.updated_at DESC, cp.progress_id DESC
+         LIMIT 1
+       ) progress ON TRUE
        WHERE st.session_id = $1
        ORDER BY i.inspection_date DESC, i.inspection_id DESC
        LIMIT $2 OFFSET $3`,
@@ -248,8 +256,8 @@ async function findDailyInspectionHistoryForTray(sessionId, sessionTrayId, { lim
       `SELECT i.inspection_id AS "inspectionId",
               i.session_tray_id AS "sessionTrayId",
               i.inspection_date AS "inspectionDate",
-              i.growth_stage AS "growthStage",
-              i.growth_progress AS "growthProgress",
+              progress.current_stage AS "growthStage",
+              progress.progress_percent AS "growthProgress",
               i.tray_condition AS "trayCondition",
               i.mushroom_condition AS "mushroomCondition",
               i.notes, i.inspected_by AS "inspectedBy",
@@ -266,6 +274,15 @@ async function findDailyInspectionHistoryForTray(sessionId, sessionTrayId, { lim
               ), '[]'::json) AS images
        FROM cultivation_inspections i
        INNER JOIN users u ON u.user_id = i.inspected_by
+       INNER JOIN cultivation_session_trays st ON st.session_tray_id = i.session_tray_id
+       LEFT JOIN LATERAL (
+         SELECT cp.current_stage, cp.progress_percent
+         FROM cultivation_progress cp
+         WHERE cp.session_id = st.session_id
+           AND cp.updated_at <= i.inspection_date
+         ORDER BY cp.updated_at DESC, cp.progress_id DESC
+         LIMIT 1
+       ) progress ON TRUE
        WHERE i.session_tray_id = $1
        ORDER BY i.inspection_date DESC, i.inspection_id DESC
        LIMIT $2 OFFSET $3`,
@@ -535,8 +552,7 @@ async function createIncidentForAdmin(sessionId, data, reportedBy) {
 
 async function findIncidentsForAdmin(sessionId) {
   const result = await pool.query(
-    `SELECT ci.*, st.session_id, st.tray_id, cins.inspection_date,
-            cins.growth_stage, cins.growth_progress
+    `SELECT ci.*, st.session_id, st.tray_id, cins.inspection_date
      FROM cultivation_issues ci
      INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
      LEFT JOIN cultivation_inspections cins ON cins.inspection_id = ci.inspection_id
@@ -760,8 +776,15 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
     );
     const assignment = assignmentResult.rows[0];
     if (!assignment) throw new AppError('Cultivation session tray not found', 404);
-    if (assignment.assignment_status !== 'ACTIVE' || assignment.session_status !== 'CULTIVATING') {
-      throw new AppError('Only active session trays can be inspected', 409);
+    if (assignment.assignment_status !== 'ACTIVE') {
+      throw new AppError('Only active session trays can be inspected', 409, 'SESSION_TRAY_NOT_ACTIVE');
+    }
+    if (assignment.session_status !== 'CULTIVATING') {
+      throw new AppError(
+        'Daily inspections can only be created while the session is CULTIVATING',
+        409,
+        'INVALID_SESSION_STATUS',
+      );
     }
 
     const existingInspection = await client.query(
@@ -789,18 +812,16 @@ async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
 
     const inspectionResult = await client.query(
       `INSERT INTO cultivation_inspections (
-         session_tray_id, inspected_by, growth_stage, tray_condition,
-         mushroom_condition, growth_progress, notes
+         session_tray_id, inspected_by, tray_condition,
+         mushroom_condition, notes
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       VALUES ($1, $2, $3, $4, $5)
        RETURNING *`,
       [
         sessionTrayId,
         inspectedBy,
-        data.growthStage,
         data.trayCondition ?? null,
         data.mushroomCondition ?? null,
-        data.growthProgress,
         data.notes ?? null,
       ],
     );
@@ -845,15 +866,12 @@ async function updateInspectionForAdmin(sessionTrayId, inspectionId, data) {
 
     const updated = await client.query(
       `UPDATE cultivation_inspections
-       SET growth_stage = $3, growth_progress = $4, tray_condition = $5,
-           mushroom_condition = $6, notes = $7
+       SET tray_condition = $3, mushroom_condition = $4, notes = $5
        WHERE inspection_id = $1 AND session_tray_id = $2
        RETURNING *`,
       [
         inspectionId,
         sessionTrayId,
-        data.growthStage,
-        data.growthProgress,
         data.trayCondition ?? null,
         data.mushroomCondition ?? null,
         data.notes ?? null,
