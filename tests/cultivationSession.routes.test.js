@@ -121,15 +121,14 @@ test('session management allows operator inspections and restricts cancellation 
           authorization: `Bearer ${operatorToken}`,
           'content-type': 'application/json',
         },
-        body: JSON.stringify({ growthStage: 'FRUITING_INITIATION', growthProgress: 60 }),
+        body: JSON.stringify({ trayCondition: 'Clean', mushroomCondition: 'Healthy' }),
       },
     );
     assert.equal(inspectionResponse.status, 204);
     assert.equal(inspectionCalls, 1);
 
     const inspectionForm = new FormData();
-    inspectionForm.append('growthStage', 'PINNING');
-    inspectionForm.append('growthProgress', '65');
+    inspectionForm.append('trayCondition', 'Clean');
     inspectionForm.append('images', new Blob(['image one'], { type: 'image/jpeg' }), 'one.jpg');
     inspectionForm.append('images', new Blob(['image two'], { type: 'image/jpeg' }), 'two.jpg');
     const inspectionWithImagesResponse = await fetch(

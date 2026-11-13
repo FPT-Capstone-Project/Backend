@@ -182,17 +182,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *         multipart/form-data:
  *           schema:
  *             type: object
- *             required: [growthStage, growthProgress]
  *             properties:
- *               growthStage:
- *                 type: string
- *                 enum: [FRUITING_INITIATION, PINNING, YOUNG_FRUITING, MATURATION]
- *                 example: PINNING
- *               growthProgress:
- *                 type: number
- *                 minimum: 0
- *                 maximum: 100
- *                 example: 60
  *               trayCondition:
  *                 type: string
  *               mushroomCondition:
@@ -212,7 +202,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *       201:
  *         description: Tray inspection recorded
  *       400:
- *         description: Invalid stage or inspection input
+ *         description: Invalid inspection input
  *       404:
  *         description: Session tray not found
  *       409:
@@ -248,12 +238,7 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
- *             required: [growthStage, growthProgress]
  *             properties:
- *               growthStage:
- *                 type: string
- *                 enum: [FRUITING_INITIATION, PINNING, YOUNG_FRUITING, MATURATION]
- *               growthProgress: { type: number, minimum: 0, maximum: 100 }
  *               trayCondition: { type: string, maxLength: 500 }
  *               mushroomCondition: { type: string, maxLength: 500 }
  *               notes: { type: string }
