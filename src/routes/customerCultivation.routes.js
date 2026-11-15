@@ -2,10 +2,13 @@ const express = require('express');
 const spawnInspectionController = require('../controllers/spawnInspection.controller');
 const diseaseManagementController = require('../controllers/diseaseManagement.controller');
 const customerIotHistoryController = require('../controllers/customerIotHistory.controller');
+const orderController = require('../controllers/order.controller');
 const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
 const customerHistoryAccess = [authenticate, authorizeRoles(1, 2, 3)];
+
+router.get('/orders/:orderId/harvest-history', authenticate, orderController.customerHarvestHistory);
 
 /**
  * @openapi

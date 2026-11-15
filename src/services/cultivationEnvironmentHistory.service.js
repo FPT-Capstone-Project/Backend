@@ -69,6 +69,63 @@ async function getLatestSessionHistory(rawSessionId, user) {
   return model.findLatestSessionHistory(sessionId);
 }
 
+async function getSessionReport(rawSessionId, user) {
+  const sessionId = parseId(rawSessionId, 'sessionId');
+  await assertSessionAccess(sessionId, user);
+  const { session, records } = await model.findSessionReport(sessionId);
+  if (!session) throw new AppError('Cultivation session not found', 404);
+
+  const thresholds = {
+    temperatureMin: session.temperature_min == null ? null : Number(session.temperature_min),
+    temperatureMax: session.temperature_max == null ? null : Number(session.temperature_max),
+    humidityMin: session.humidity_min == null ? null : Number(session.humidity_min),
+    humidityMax: session.humidity_max == null ? null : Number(session.humidity_max),
+  };
+  const points = records.map((record) => ({
+    period_start: record.period_start,
+    period_end: record.period_end,
+    growth_stage: record.growth_stage,
+    temperature_avg: record.temperature_avg == null ? null : Number(record.temperature_avg),
+    humidity_avg: record.humidity_avg == null ? null : Number(record.humidity_avg),
+  }));
+  const average = (key) => {
+    const values = points.map((point) => point[key]).filter(Number.isFinite);
+    return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
+  };
+  const hasTemperatureThresholds = thresholds.temperatureMin != null && thresholds.temperatureMax != null;
+  const hasHumidityThresholds = thresholds.humidityMin != null && thresholds.humidityMax != null;
+  const temperatureExceedanceCount = hasTemperatureThresholds
+    ? points.filter((point) => point.temperature_avg != null
+      && (point.temperature_avg < thresholds.temperatureMin || point.temperature_avg > thresholds.temperatureMax)).length
+    : null;
+  const humidityExceedanceCount = hasHumidityThresholds
+    ? points.filter((point) => point.humidity_avg != null
+      && (point.humidity_avg < thresholds.humidityMin || point.humidity_avg > thresholds.humidityMax)).length
+    : null;
+  const exceededBuckets = points.filter((point) => (
+    (hasTemperatureThresholds && point.temperature_avg != null
+      && (point.temperature_avg < thresholds.temperatureMin || point.temperature_avg > thresholds.temperatureMax))
+    || (hasHumidityThresholds && point.humidity_avg != null
+      && (point.humidity_avg < thresholds.humidityMin || point.humidity_avg > thresholds.humidityMax))
+  )).length;
+
+  return {
+    sessionId,
+    startAt: session.start_at,
+    endAt: session.end_at,
+    thresholds,
+    summary: {
+      averageTemperature: average('temperature_avg'),
+      averageHumidity: average('humidity_avg'),
+      temperatureExceedanceCount,
+      humidityExceedanceCount,
+      exceededBucketCount: hasTemperatureThresholds || hasHumidityThresholds ? exceededBuckets : null,
+      bucketCount: points.length,
+    },
+    points,
+  };
+}
+
 async function getFloorHistory(rawFloorId, user, query = {}) {
   const floorId = parseId(rawFloorId, 'floorId');
   const roleId = Number(user?.role_id);
@@ -87,5 +144,6 @@ async function getFloorHistory(rawFloorId, user, query = {}) {
 module.exports = {
   getSessionHistory,
   getLatestSessionHistory,
+  getSessionReport,
   getFloorHistory,
 };
