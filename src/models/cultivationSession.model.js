@@ -715,7 +715,7 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
            AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
          FOR UPDATE OF ci`, [sessionId],
       );
-      if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvest readiness', 409, 'UNRESOLVED_QUALITY_ISSUES');
+      if (issues.rows.length) throw new AppError('Vui lòng xử lý hết sự cố chất lượng hoặc sự cố nghiêm trọng trước khi xác nhận phiên sẵn sàng thu hoạch.', 409, 'UNRESOLVED_QUALITY_ISSUES');
     }
     const result = await client.query(
       `UPDATE cultivation_sessions SET harvest_status = $2::varchar,
