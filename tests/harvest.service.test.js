@@ -168,12 +168,12 @@ test('validates and normalizes pickup and delivery receiving requests', async ()
 
   assert.deepEqual(calls, [
     ['update', [6, {
-      harvestMethod: 'PICKUP',
+      harvestMethod: 'PICKUP', deliveryAddress: undefined,
       scheduledAt: '2026-10-26T09:00:00+07:00',
       customerNote: 'Please prepare a basket.',
     }, customer]],
     ['update', [6, {
-      harvestMethod: 'DELIVERY',
+      harvestMethod: 'DELIVERY', deliveryAddress: undefined,
       scheduledAt: undefined,
       customerNote: undefined,
     }, customer]],
@@ -187,4 +187,11 @@ test('validates and normalizes pickup and delivery receiving requests', async ()
     () => service.updateHarvestRequest('6', { harvestMethod: 'COURIER' }, customer),
     { statusCode: 400, message: 'harvestMethod must be one of: PICKUP, DELIVERY' },
   );
+});
+
+test('validates and trims delivery address input', async () => {
+  const { service, calls } = loadHarvestRequestService();
+  await service.updateHarvestRequest(6, { harvestMethod: 'DELIVERY', deliveryAddress: '  Custom address  ' }, {});
+  assert.equal(calls[0][1][1].deliveryAddress, 'Custom address');
+  await assert.rejects(() => service.updateHarvestRequest(6, { harvestMethod: 'DELIVERY', deliveryAddress: 123 }, {}), { statusCode: 400 });
 });

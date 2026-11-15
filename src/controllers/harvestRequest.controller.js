@@ -19,4 +19,9 @@ async function complete(req, res) {
   res.json({ message: 'Harvest receiving completed successfully', data: request });
 }
 
-module.exports = { create, update, complete };
+async function adminList(req, res) {
+  const result = await harvestRequestService.listHarvestRequests();
+  res.json({ data: result.requests, total: result.total });
+}
+
+module.exports = { create, update, complete, adminList };
