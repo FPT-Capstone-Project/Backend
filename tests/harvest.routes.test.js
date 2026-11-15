@@ -37,6 +37,7 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
   };
   require.cache[harvestRequestControllerPath] = {
     exports: {
+      adminList: handler('listRequests'),
       create: handler('createRequest'),
       update: handler('updateRequest'),
       complete: handler('completeRequest'),
@@ -71,6 +72,14 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
     const operatorToken = jwt.sign({ sub: '1' }, env.jwtSecret);
     const customerToken = jwt.sign({ sub: '3' }, env.jwtSecret);
     const headers = (token) => ({ authorization: `Bearer ${token}`, 'content-type': 'application/json' });
+
+    for (const role of [1, 2, 3, null]) {
+      const response = await fetch(
+        `http://127.0.0.1:${server.address().port}/api/harvest-requests/admin`,
+        { headers: role ? headers(jwt.sign({ sub: String(role) }, env.jwtSecret)) : {} },
+      );
+      assert.equal(response.status, role === null ? 401 : role === 3 ? 403 : 204);
+    }
 
     const created = await fetch(`http://127.0.0.1:${server.address().port}/api/harvests`, {
       method: 'POST', headers: headers(operatorToken), body: JSON.stringify({ sessionId: 15 }),
@@ -110,10 +119,10 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
     assert.equal(forbiddenHistory.status, 403);
 
     assert.deepEqual(calls.map((call) => call.name), [
-      'createHarvest', 'recordYield', 'createRequest', 'harvestHistory',
+      'listRequests', 'listRequests', 'createHarvest', 'recordYield', 'createRequest', 'harvestHistory',
     ]);
     assert.equal(calls[0].user.role_id, 1);
-    assert.equal(calls[2].user.role_id, 3);
+    assert.equal(calls[4].user.role_id, 3);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }

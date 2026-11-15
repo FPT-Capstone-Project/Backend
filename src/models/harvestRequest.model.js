@@ -52,6 +52,17 @@ async function lockRequest(client, harvestRequestId) {
   return result.rows[0] || null;
 }
 
+async function resolveDeliveryAddress(client, data, customerId) {
+  if (data.harvestMethod !== 'DELIVERY') return null;
+  if (data.deliveryAddress?.trim()) return data.deliveryAddress.trim();
+  const result = await client.query('SELECT address FROM users WHERE user_id = $1', [customerId]);
+  const address = result.rows[0]?.address?.trim();
+  if (!address) {
+    throw new AppError('deliveryAddress is required when the customer profile has no address', 400);
+  }
+  return address;
+}
+
 async function create(sessionId, data, actor) {
   const client = await pool.connect();
   try {
@@ -72,11 +83,12 @@ async function create(sessionId, data, actor) {
       throw new AppError('Cultivation session must be harvest ready before choosing a receiving method', 409);
     }
 
+    const deliveryAddress = await resolveDeliveryAddress(client, data, session.customer_id);
     const result = await client.query(
       `INSERT INTO harvest_requests (
-         session_id, harvest_method, scheduled_at, status, customer_note
+         session_id, harvest_method, scheduled_at, status, customer_note, delivery_address
        )
-       VALUES ($1, $2, $3, $4, $5)
+       VALUES ($1, $2, $3, $4, $5, $6)
        RETURNING *`,
       [
         sessionId,
@@ -84,6 +96,7 @@ async function create(sessionId, data, actor) {
         data.scheduledAt ?? null,
         data.harvestMethod === 'PICKUP' ? 'SCHEDULED' : 'PENDING',
         data.customerNote ?? null,
+        deliveryAddress,
       ],
     );
     await client.query(
@@ -125,12 +138,14 @@ async function update(harvestRequestId, data, actor) {
       throw new AppError('Receiving method can no longer be changed for this cultivation session', 409);
     }
 
+    const deliveryAddress = await resolveDeliveryAddress(client, data, request.customer_id);
     const result = await client.query(
       `UPDATE harvest_requests
        SET harvest_method = $2,
            scheduled_at = $3,
            status = $4,
-           customer_note = COALESCE($5, customer_note)
+           customer_note = COALESCE($5, customer_note),
+           delivery_address = $6
        WHERE harvest_request_id = $1
        RETURNING *`,
       [
@@ -139,6 +154,7 @@ async function update(harvestRequestId, data, actor) {
         data.scheduledAt ?? null,
         data.harvestMethod === 'PICKUP' ? 'SCHEDULED' : 'PENDING',
         data.customerNote,
+        deliveryAddress,
       ],
     );
     await client.query(
@@ -252,4 +268,20 @@ async function complete(harvestRequestId, actor) {
   }
 }
 
-module.exports = { create, update, complete };
+async function findAllForAdmin() {
+  const result = await pool.query(
+    `SELECT hr.*, oi.order_id, CONCAT('ORD-', oi.order_id) AS order_code,
+            o.user_id AS customer_id, u.full_name AS customer_name,
+            u.phone AS customer_phone, u.email AS customer_email,
+            s.status AS session_status
+     FROM harvest_requests hr
+     INNER JOIN cultivation_sessions s ON s.session_id = hr.session_id
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     INNER JOIN orders o ON o.order_id = oi.order_id
+     INNER JOIN users u ON u.user_id = o.user_id
+     ORDER BY hr.harvest_request_id DESC`,
+  );
+  return { requests: result.rows, total: result.rows.length };
+}
+
+module.exports = { create, update, complete, findAllForAdmin };

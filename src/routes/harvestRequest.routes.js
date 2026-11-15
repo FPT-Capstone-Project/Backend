@@ -1,8 +1,23 @@
 const express = require('express');
 const harvestRequestController = require('../controllers/harvestRequest.controller');
-const { authenticate } = require('../middlewares/auth.middleware');
+const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
+
+/**
+ * @openapi
+ * /api/harvest-requests/admin:
+ *   get:
+ *     tags: [Harvest Requests]
+ *     summary: List customer receiving requests for Admin and Farm Operators
+ *     description: Returns requests newest first, including order ID and code, customer ID, name, phone and email, receiving method, saved delivery address, pickup schedule, note, and request and session status. Includes requests even when a harvest record has not been created.
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Receiving requests in data array and total count }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ */
+router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestController.adminList);
 
 /**
  * @openapi
@@ -10,7 +25,7 @@ const router = express.Router();
  *   post:
  *     tags: [Harvest Requests]
  *     summary: Choose a receiving method for a harvest-ready cultivation session
- *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. PICKUP requires scheduledAt; DELIVERY does not. customerNote is optional. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
+ *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. PICKUP requires scheduledAt; DELIVERY does not. customerNote is optional. For DELIVERY, blank or omitted deliveryAddress uses the customer profile address. If the profile has no address, enter deliveryAddress. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -23,6 +38,7 @@ const router = express.Router();
  *               sessionId: { type: integer, minimum: 1, description: Your harvest-ready cultivation session ID }
  *               harvestMethod: { type: string, enum: [PICKUP, DELIVERY], description: PICKUP for customer self-harvest at the farm; DELIVERY for external delivery arranged by staff }
  *               scheduledAt: { type: string, format: date-time, description: Required for PICKUP; optional for DELIVERY }
+ *               deliveryAddress: { type: string, description: Optional for DELIVERY; blank or omitted uses the customer profile address. Saved on this request only. }
  *               customerNote: { type: string, maxLength: 2000, description: Optional receiving instructions }
  *           examples:
  *             PICKUP:
@@ -37,6 +53,7 @@ const router = express.Router();
  *               value:
  *                 sessionId: 15
  *                 harvestMethod: DELIVERY
+ *                 deliveryAddress: ''
  *                 customerNote: Please contact me before delivery.
  *     responses:
  *       201: { description: Receiving request created }
@@ -70,6 +87,7 @@ router.post('/', authenticate, harvestRequestController.create);
  *             properties:
  *               harvestMethod: { type: string, enum: [PICKUP, DELIVERY] }
  *               scheduledAt: { type: string, format: date-time }
+ *               deliveryAddress: { type: string, description: Optional for DELIVERY; blank or omitted uses the customer profile address. Saved on this request only. }
  *               customerNote: { type: string, maxLength: 2000 }
  *     responses:
  *       200: { description: Receiving request updated }

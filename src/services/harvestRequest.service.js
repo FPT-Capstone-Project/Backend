@@ -40,8 +40,13 @@ function parseNote(value) {
 
 function normalize(payload = {}) {
   const harvestMethod = parseMethod(payload.harvestMethod ?? payload.harvest_method);
+  const address = payload.deliveryAddress ?? payload.delivery_address;
+  if (address != null && typeof address !== 'string') {
+    throw new AppError('deliveryAddress must be a string', 400);
+  }
   return {
     harvestMethod,
+    deliveryAddress: typeof address === 'string' ? address.trim() : undefined,
     scheduledAt: parseScheduledAt(payload.scheduledAt ?? payload.scheduled_at, harvestMethod),
     customerNote: parseNote(payload.customerNote ?? payload.customer_note),
   };
@@ -71,6 +76,7 @@ async function completeHarvestRequest(harvestRequestId, actor) {
 }
 
 module.exports = {
+  listHarvestRequests: harvestRequestModel.findAllForAdmin,
   createHarvestRequest,
   updateHarvestRequest,
   completeHarvestRequest,

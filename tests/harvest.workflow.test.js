@@ -7,7 +7,7 @@ async function setupDatabase() {
   await db.exec(`
     CREATE TABLE users (
       user_id SERIAL PRIMARY KEY,
-      full_name TEXT NOT NULL
+      full_name TEXT NOT NULL, address TEXT DEFAULT 'Profile address', phone TEXT, email TEXT
     );
     CREATE TABLE mushroom_types (
       mushroom_type_id SERIAL PRIMARY KEY,
@@ -101,6 +101,7 @@ async function setupDatabase() {
     INSERT INTO cultivation_trays (tray_id, status) VALUES (1, 'OCCUPIED');
     INSERT INTO cultivation_session_trays (session_id, tray_id, status) VALUES (1, 1, 'ACTIVE');
   `);
+  await db.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '../migrations/029_harvest_request_delivery_address.sql'), 'utf8'));
   return db;
 }
 
@@ -322,5 +323,33 @@ test('WF-04 start requires receiving choice, pickup schedule and resolved qualit
     assert.equal(completed.confirmed_by, 1);
     assert.ok(completed.confirmed_at);
     assert.equal((await db.query('SELECT status FROM cultivation_trays WHERE tray_id=1')).rows[0].status, 'MAINTENANCE');
+  } finally { await db.close(); }
+});
+
+test('delivery saves profile snapshots, accepts overrides and requires an address', async () => {
+  const db = await setupDatabase();
+  try {
+    const { harvestRequest } = loadModels(db);
+    const customer = { user_id: 3, role_id: 3 };
+    const first = await harvestRequest.create(1, { harvestMethod: 'DELIVERY', deliveryAddress: ' ' }, { user_id: 1, role_id: 1 });
+    assert.equal(first.delivery_address, 'Profile address');
+    await db.query('UPDATE users SET address = NULL WHERE user_id = 3');
+    assert.equal((await db.query('SELECT delivery_address FROM harvest_requests WHERE session_id = 1')).rows[0].delivery_address, 'Profile address');
+    await assert.rejects(() => harvestRequest.create(2, { harvestMethod: 'DELIVERY' }, customer), { statusCode: 400 });
+    const second = await harvestRequest.create(2, { harvestMethod: 'DELIVERY', deliveryAddress: '  Other address  ' }, customer);
+    assert.equal(second.delivery_address, 'Other address');
+    const listed = await harvestRequest.findAllForAdmin();
+    assert.equal(listed.total, 2);
+    assert.deepEqual(listed.requests.map(r => r.harvest_request_id), [second.harvest_request_id, first.harvest_request_id]);
+    assert.equal(listed.requests[0].customer_id, 3);
+    assert.equal(listed.requests[0].customer_name, 'Customer');
+    assert.equal(listed.requests[0].order_id, 1);
+    assert.equal(listed.requests[0].order_code, 'ORD-1');
+    assert.equal(listed.requests[0].delivery_address, 'Other address');
+    assert.equal(listed.requests[0].harvest_method, 'DELIVERY');
+    assert.equal((await db.query('SELECT address FROM users WHERE user_id = 3')).rows[0].address, null);
+    await db.query("UPDATE users SET address = 'New profile' WHERE user_id = 3");
+    assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'DELIVERY' }, customer)).delivery_address, 'New profile');
+    assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: '2026-12-15T09:00:00+07:00' }, customer)).delivery_address, null);
   } finally { await db.close(); }
 });
