@@ -16,7 +16,64 @@ function sessionCanReceive(session) {
   return ['HARVEST_READY', 'HARVESTING'].includes(session.status)
     || (session.status === 'CULTIVATING' && session.harvest_status === 'HARVEST_READY');
 }
+function vietnamDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (!Number.isFinite(date.getTime())) return null;
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
 
+function addCalendarDays(dateKey, days) {
+  const date = new Date(`${dateKey}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function assertCustomerPickupSchedule(scheduledAt, harvestReadyAt) {
+  const scheduled = new Date(scheduledAt);
+  const readyDate = vietnamDateKey(harvestReadyAt);
+  const scheduledDate = vietnamDateKey(scheduled);
+  const today = vietnamDateKey(new Date());
+  if (!readyDate || !scheduledDate || !today) {
+    throw new AppError('Harvest readiness time or pickup schedule is invalid', 400);
+  }
+
+  const firstAllowedDate = today > readyDate ? today : readyDate;
+  const lastAllowedDate = addCalendarDays(readyDate, 3);
+  if (scheduledDate < firstAllowedDate || scheduledDate > lastAllowedDate) {
+    throw new AppError('Customer pickup must be scheduled from today through three days after harvest readiness', 400);
+  }
+
+  const timeParts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Ho_Chi_Minh',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(scheduled);
+  const timeValues = Object.fromEntries(timeParts.map((part) => [part.type, part.value]));
+  const hour = Number(timeValues.hour);
+  const minute = Number(timeValues.minute);
+  if (hour < 7 || hour > 17 || (hour === 17 && minute > 0)) {
+    throw new AppError('Customer pickup time must be between 07:00 and 17:00 Vietnam time', 400);
+  }
+  if (scheduled.getTime() <= Date.now()) {
+    throw new AppError('Customer pickup schedule must be in the future', 400);
+  }
+}
+
+function assertCustomerCanChangeMethod(harvestReadyAt) {
+  const readyDate = vietnamDateKey(harvestReadyAt);
+  const today = vietnamDateKey(new Date());
+  if (!readyDate || !today || today < readyDate || today > addCalendarDays(readyDate, 1)) {
+    throw new AppError('Customers may update the receiving method only on the harvest-ready day and the following day', 409);
+  }
+}
 async function notifyReceivingMethod(client, userId, sessionId, harvestMethod) {
   const isPickup = harvestMethod === 'PICKUP';
   await client.query(
@@ -39,7 +96,7 @@ async function lockRequest(client, harvestRequestId) {
   const result = await client.query(
     `SELECT hr.harvest_request_id, hr.session_id, hr.harvest_method,
             hr.scheduled_at, hr.status, hr.customer_note, hr.confirmed_at,
-            hr.completed_at, s.status AS session_status, s.harvest_status,
+            hr.completed_at, s.status AS session_status, s.harvest_status, s.harvest_ready_at,
             oi.order_id, o.user_id AS customer_id
      FROM harvest_requests hr
      INNER JOIN cultivation_sessions s ON s.session_id = hr.session_id
@@ -68,7 +125,7 @@ async function create(sessionId, data, actor) {
   try {
     await client.query('BEGIN');
     const sessionResult = await client.query(
-      `SELECT s.session_id, s.status, s.harvest_status, o.user_id AS customer_id
+       `SELECT s.session_id, s.status, s.harvest_status, s.harvest_ready_at, o.user_id AS customer_id
        FROM cultivation_sessions s
        INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
        INNER JOIN orders o ON o.order_id = oi.order_id
@@ -82,7 +139,9 @@ async function create(sessionId, data, actor) {
     if (!sessionCanReceive({ status: session.status, harvest_status: session.harvest_status })) {
       throw new AppError('Cultivation session must be harvest ready before choosing a receiving method', 409);
     }
-
+if (!isStaff(actor) && data.harvestMethod === 'PICKUP') {
+      assertCustomerPickupSchedule(data.scheduledAt, session.harvest_ready_at);
+    }
     const deliveryAddress = await resolveDeliveryAddress(client, data, session.customer_id);
     const result = await client.query(
       `INSERT INTO harvest_requests (

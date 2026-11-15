@@ -489,7 +489,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
   const ownerFilter = isAdmin ? '' : 'AND o.user_id = $2';
   const values = isAdmin ? [orderId] : [orderId, userId];
   const result = await pool.query(
-    `SELECT s.session_id, s.mushroom_type_id, s.status, s.harvest_status, s.start_at, s.end_at, s.harvest_date,
+    `SELECT s.session_id, s.mushroom_type_id, s.status, s.harvest_status, s.harvest_ready_at, s.start_at, s.end_at, s.harvest_date,
             s.harvest_date AS expected_harvest_date, s.duration_days,
             oi.order_item_id, oi.quantity AS tray_quantity, COALESCE((SELECT it.quantity::int FROM inventory_transactions it
              WHERE it.session_id = s.session_id AND it.transaction_type = 'OUT'
@@ -497,7 +497,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
             mt.name AS mushroom_name, o.order_id,
             latest_progress.current_stage, latest_progress.progress_percent,
             latest_progress.updated_at AS progress_updated_at,
-            hr.harvest_request_id, hr.harvest_method, hr.status AS harvest_request_status, hr.scheduled_at,
+            hr.harvest_request_id, hr.harvest_method, hr.status AS harvest_request_status, hr.scheduled_at, hr.delivery_address,
             COALESCE((
               SELECT json_agg(json_build_object(
                 'session_tray_id', st.session_tray_id,
