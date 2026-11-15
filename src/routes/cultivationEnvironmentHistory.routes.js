@@ -7,6 +7,27 @@ const allowedUsers = [authenticate, authorizeRoles(1, 2, 3)];
 
 /**
  * @openapi
+ * /api/environment-history/sessions/{sessionId}/report:
+ *   get:
+ *     tags: [Environment History]
+ *     summary: Get full-session environment chart, averages, and threshold exceedance counts
+ *     description: Returns grouped 10-minute buckets from tray assignment (start_at) through session end. Buckets shared by multiple floors are averaged into one point. Thresholds use the mushroom type's configured temperature and humidity ranges. Customers may access only their own session.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Full-session points, means, configured thresholds, and exceedance bucket counts }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Unsupported role }
+ *       404: { description: Session not found or not accessible }
+ */
+router.get('/sessions/:sessionId/report', ...allowedUsers, controller.sessionReport);
+
+/**
+ * @openapi
  * /api/environment-history/sessions/{sessionId}:
  *   get:
  *     tags: [Environment History]

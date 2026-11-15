@@ -1,5 +1,6 @@
 const orderService = require('../services/order.service');
 const harvestService = require('../services/harvest.service');
+const AppError = require('../utils/app-error');
 
 async function create(req, res) {
   const order = await orderService.createCultivationOrder(req.user.user_id, req.body || {});
@@ -27,8 +28,20 @@ async function cancel(req, res) {
 }
 
 async function harvestHistory(req, res) {
+  const roleId = Number(req.user?.role_id);
+  if (roleId === 3) {
+    await orderService.getCustomerOrderDetails(req.user.user_id, req.params.orderId);
+  } else if (![1, 2].includes(roleId)) {
+    throw new AppError('You do not have permission to access this order history', 403);
+  }
   const history = await harvestService.getOrderHarvestHistory(req.params.orderId);
   res.json({ data: history });
 }
 
-module.exports = { create, list, adminList, getById, cancel, harvestHistory };
+async function customerHarvestHistory(req, res) {
+  await orderService.getCustomerOrderDetails(req.user.user_id, req.params.orderId);
+  const history = await harvestService.getOrderHarvestHistory(req.params.orderId);
+  res.json({ data: history });
+}
+
+module.exports = { create, list, adminList, getById, cancel, harvestHistory, customerHarvestHistory };
