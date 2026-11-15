@@ -239,6 +239,23 @@ async function complete(harvestRequestId, actor) {
       `UPDATE cultivation_sessions SET status = 'COMPLETED', harvest_status = 'NOT_READY',
          end_at = CURRENT_TIMESTAMP WHERE session_id = $1`, [request.session_id],
     );
+    const remainingSessions = await client.query(
+      `SELECT COUNT(*)::int AS total
+       FROM cultivation_sessions
+       WHERE order_item_id IN (
+         SELECT order_item_id FROM order_items WHERE order_id = $1
+       )
+         AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+      [request.order_id],
+    );
+    if (Number(remainingSessions.rows[0]?.total || 0) === 0) {
+      await client.query(
+        `UPDATE orders
+         SET status = 'COMPLETED'
+         WHERE order_id = $1 AND status IN ('CONFIRMED', 'PROCESSING')`,
+        [request.order_id],
+      );
+    }
     // Handover queues trays for WF-05; it never makes dirty trays AVAILABLE.
     await client.query(
       `UPDATE cultivation_trays SET status = 'MAINTENANCE'
