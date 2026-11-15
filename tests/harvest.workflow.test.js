@@ -260,6 +260,7 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
       FROM cultivation_sessions s JOIN cultivation_session_trays st USING(session_id)
       JOIN cultivation_trays t USING(tray_id) WHERE s.session_id=1`)).rows[0];
     assert.deepEqual(after, { status: 'COMPLETED', assignment_status: 'RELEASED', tray_status: 'MAINTENANCE' });
+    assert.equal((await db.query('SELECT status FROM orders WHERE order_id = 1')).rows[0].status, 'PROCESSING');
     await assert.rejects(() => harvestRequest.complete(request.harvest_request_id, customer), { statusCode: 409 });
 
     const detail = await harvest.findById(planned.harvest_id);
@@ -275,6 +276,30 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     assert.equal(history.order_code, 'ORD-1');
     assert.equal(history.harvests[0].harvest.status, 'COMPLETED');
     assert.equal(Number(history.harvests[0].harvest.usable_weight_kg), 4.8);
+  } finally {
+    await db.close();
+  }
+});
+
+test('WF-04 completes an order after the last cultivation session is handed over', async () => {
+  const db = await setupDatabase();
+  try {
+    const { harvest, harvestRequest } = loadModels(db);
+    const customer = { user_id: 3, role_id: 3 };
+    const request = await harvestRequest.create(1, {
+      harvestMethod: 'PICKUP',
+      scheduledAt: '2026-10-26T09:00:00+07:00',
+    }, customer);
+    const planned = await harvest.create(1);
+    await completeHarvest(harvest, planned.harvest_id);
+
+    await db.query(
+      `UPDATE cultivation_sessions SET status = 'COMPLETED'
+       WHERE session_id IN (2, 3)`,
+    );
+    await harvestRequest.complete(request.harvest_request_id, customer);
+
+    assert.equal((await db.query('SELECT status FROM orders WHERE order_id = 1')).rows[0].status, 'COMPLETED');
   } finally {
     await db.close();
   }
