@@ -25,6 +25,7 @@ const options = {
       { name: 'Cultivation Rooms', description: 'Manage cultivation rooms' },
       { name: 'Cultivation Trays', description: 'Manage cultivation trays' },
       { name: 'Orders', description: 'Customer cultivation orders for packages, mushroom types, and tray quantities' },
+      { name: 'Shipments', description: 'View order shipments and update shipment status' },
       { name: 'Cultivation Sessions', description: 'WF-03: assign floor and trays, monitor growth, then confirm harvest readiness separately' },
       { name: 'Cultivation Audit', description: 'Supporting tray inspections, images, incidents, and immutable growth history; not required lifecycle steps' },
       { name: 'Environment History', description: 'Stored 10-minute cultivation temperature and humidity averages' },
