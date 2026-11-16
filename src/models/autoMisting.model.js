@@ -100,7 +100,7 @@ function createRepository(db = pool) {
    const trays=await rows(`SELECT t.tray_id,t.tray_code,t.status AS tray_status,
     t.position_id,p.row_number,p.column_number,p.status AS position_status,
     s.session_id,st.session_tray_id,s.mushroom_type_id,
-    s.status AS cultivation_status,m.name AS mushroom_name
+    s.status AS cultivation_status,m.name AS mushroom_name,m.image_url AS mushroom_image_url
     FROM cultivation_trays t LEFT JOIN (
      cultivation_sessions s
      JOIN cultivation_session_trays st ON st.session_id=s.session_id AND st.status='ACTIVE'

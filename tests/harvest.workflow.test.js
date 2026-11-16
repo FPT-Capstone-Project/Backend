@@ -2,6 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const { PGlite } = require('@electric-sql/pglite');
 
+function nextPickup(days = 1) {
+  const date = new Date(Date.now() + 7 * 3600000);
+  date.setUTCDate(date.getUTCDate() + days);
+  return `${date.toISOString().slice(0, 10)}T09:00:00+07:00`;
+}
+
 async function setupDatabase() {
   const db = new PGlite();
   await db.exec(`
@@ -28,7 +34,8 @@ async function setupDatabase() {
       mushroom_type_id INTEGER NOT NULL REFERENCES mushroom_types(mushroom_type_id),
       status TEXT NOT NULL,
       harvest_status TEXT NOT NULL DEFAULT 'NOT_READY',
-      end_at TIMESTAMPTZ
+      end_at TIMESTAMPTZ,
+      harvest_ready_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE TABLE cultivation_trays (
       tray_id SERIAL PRIMARY KEY,
@@ -155,14 +162,14 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     await assert.rejects(
       () => harvestRequest.create(1, {
         harvestMethod: 'PICKUP',
-        scheduledAt: '2026-10-26T09:00:00+07:00',
+        scheduledAt: nextPickup(),
       }, { user_id: 99, role_id: 3 }),
       { statusCode: 403 },
     );
 
     const request = await harvestRequest.create(1, {
       harvestMethod: 'PICKUP',
-      scheduledAt: '2026-10-26T09:00:00+07:00',
+      scheduledAt: nextPickup(),
       customerNote: 'Please prepare a basket.',
     }, customer);
     assert.equal(request.status, 'SCHEDULED');
@@ -281,6 +288,28 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
   }
 });
 
+test('staff saves receiving before planning and limits pickup to the next three days', async () => {
+  const db = await setupDatabase();
+  try {
+    const { harvestRequest } = loadModels(db);
+    const staff = { user_id: 1, role_id: 1 };
+    await assert.rejects(() => harvestRequest.create(1, {
+      harvestMethod: 'PICKUP', scheduledAt: nextPickup(4),
+    }, staff), { statusCode: 400 });
+    const request = await harvestRequest.create(1, {
+      harvestMethod: 'PICKUP', scheduledAt: nextPickup(3),
+    }, staff);
+    assert.equal((await db.query('SELECT * FROM harvests')).rows.length, 0);
+    await assert.rejects(() => harvestRequest.update(request.harvest_request_id, {
+      harvestMethod: 'PICKUP', scheduledAt: nextPickup(4),
+    }, { user_id: 2, role_id: 2 }), { statusCode: 400 });
+    const updated = await harvestRequest.update(request.harvest_request_id, {
+      harvestMethod: 'DELIVERY', deliveryAddress: 'New delivery address',
+    }, staff);
+    assert.equal(updated.delivery_address, 'New delivery address');
+  } finally { await db.close(); }
+});
+
 test('WF-04 completes an order after the last cultivation session is handed over', async () => {
   const db = await setupDatabase();
   try {
@@ -288,7 +317,7 @@ test('WF-04 completes an order after the last cultivation session is handed over
     const customer = { user_id: 3, role_id: 3 };
     const request = await harvestRequest.create(1, {
       harvestMethod: 'PICKUP',
-      scheduledAt: '2026-10-26T09:00:00+07:00',
+      scheduledAt: nextPickup(),
     }, customer);
     const planned = await harvest.create(1);
     await completeHarvest(harvest, planned.harvest_id);
@@ -336,9 +365,11 @@ test('WF-04 start requires receiving choice, pickup schedule and resolved qualit
     const planned = await harvest.create(1);
     await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
     assert.equal((await db.query('SELECT status FROM harvests WHERE harvest_id=$1', [planned.harvest_id])).rows[0].status, 'PLANNED');
-    const request = await harvestRequest.create(1, { harvestMethod: 'PICKUP' }, { user_id: 3, role_id: 3 });
+    const request = await harvestRequest.create(1, { harvestMethod: 'PICKUP', scheduledAt: nextPickup() }, { user_id: 3, role_id: 3 });
+    // Simulate a legacy request without a schedule to verify the start guard.
+    await db.query('UPDATE harvest_requests SET scheduled_at = NULL WHERE harvest_request_id = $1', [request.harvest_request_id]);
     await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
-    await harvestRequest.update(request.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: '2026-12-15T09:00:00+07:00' }, { user_id: 3, role_id: 3 });
+    await harvestRequest.update(request.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: nextPickup() }, { user_id: 3, role_id: 3 });
     await db.exec("INSERT INTO cultivation_issues(session_tray_id, issue_type, severity, status) VALUES (1, 'DISEASE', 'LOW', 'OPEN')");
     await assert.rejects(() => harvest.start(planned.harvest_id, 1), { statusCode: 409 });
     await db.exec("UPDATE cultivation_issues SET status='RESOLVED'");
@@ -375,6 +406,6 @@ test('delivery saves profile snapshots, accepts overrides and requires an addres
     assert.equal((await db.query('SELECT address FROM users WHERE user_id = 3')).rows[0].address, null);
     await db.query("UPDATE users SET address = 'New profile' WHERE user_id = 3");
     assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'DELIVERY' }, customer)).delivery_address, 'New profile');
-    assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: '2026-12-15T09:00:00+07:00' }, customer)).delivery_address, null);
+    assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: nextPickup() }, customer)).delivery_address, null);
   } finally { await db.close(); }
 });

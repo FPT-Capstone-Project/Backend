@@ -159,7 +159,7 @@ async function setupDatabase() {
     INSERT INTO cultivation_floors VALUES (1, 10, 4);
     INSERT INTO cultivation_trays VALUES (1, 1);
     INSERT INTO cultivation_session_trays VALUES (1, 1, 1, 'ACTIVE');
-    INSERT INTO cultivation_inspections VALUES (1, 1, 2, 'PINNING', 50);
+    INSERT INTO cultivation_inspections VALUES (1, 1, 2);
     INSERT INTO cultivation_inspection_images VALUES (1, 1, 'https://media.example/tray.jpg', 'Tray photo', now());
     INSERT INTO spawn_inspections VALUES (1, 3, 2, 'RESTING');
     INSERT INTO spawn_inspection_images VALUES (1, 1, 'https://media.example/spawn.jpg', 'Spawn photo', now());
@@ -249,6 +249,9 @@ test('WF-06 validates issue sources and enforces customer ownership through trea
       question: 'Please diagnose the discoloration.',
     });
     assert.equal(consultation.status, 'PENDING');
+    const operatorIssues = await service.listIssues(user(2, 2), { sessionId: 1 });
+    assert.equal(operatorIssues.issues.find(row => row.issue_id === issue.issue_id).latest_consultation_id, consultation.consultation_id);
+    assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).latest_consultation_id, consultation.consultation_id);
     const assigned = await service.assignConsultation(user(4, 4), consultation.consultation_id);
     assert.equal(assigned.expert_id, 4);
     const response = await service.respondToConsultation(user(4, 4), consultation.consultation_id, {

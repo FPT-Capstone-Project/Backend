@@ -7,7 +7,7 @@ const config={mushroom_type_id:1,humidity_min:85,humidity_max:95,humidity_start_
 const now=Date.now();
 const readings=()=>[82,84,86].map((humidity,i)=>({sensor_address:i+1,humidity,temperature:25,is_valid:true,retained:false,last_received_at:new Date(now)}));
 test('configuration uses no cultivation defaults and rejects mode, unsafe ranges and malformed values',()=>{
- assert.deepEqual(validateConfig(config),{...config,profile_name:null,profile_approved:false});
+ assert.deepEqual(validateConfig(config),{...config,profile_name:null,profile_approved:false,fan_enabled:false,fan_run_minutes:null,fan_rest_minutes:null});
  for(const c of [{},{...config,mode:'AUTO'},{...config,humidity_min:null},{...config,humidity_start_threshold:90},
   {...config,humidity_max:Infinity},{...config,misting_pulse_ms:60001},{...config,required_valid_sensors:2.5},
   {...config,max_cumulative_on_ms_per_hour:1000},{...config,profile_approved:'true'}])assert.throws(()=>validateConfig(c));

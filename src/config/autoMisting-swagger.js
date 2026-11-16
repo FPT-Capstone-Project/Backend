@@ -6,6 +6,9 @@ Object.assign(config.properties,{profile_name:{type:'string',maxLength:200,nulla
 Object.assign(config.properties,{
  mushroom_type_ids:{type:'array',minItems:1,uniqueItems:true,items:{type:'integer',minimum:1,maximum:2147483647},description:'FLOOR only: approve crop types before assigning sessions. Server reads conditions and stores source_profiles. Must include all crops currently on the floor.'},
  config_source:{type:'string',enum:['LEGACY','FLOOR'],default:'LEGACY',description:'FLOOR derives crop types from assigned tray sessions; requires a reviewed named profile. LEGACY requires mushroom_type_id.'},
+ fan_enabled:{type:'boolean',default:false,description:'Run fan cycles within the same AUTO run and start/stop controls.'},
+ fan_run_minutes:{type:'integer',minimum:1,maximum:1440,nullable:true},
+ fan_rest_minutes:{type:'integer',minimum:1,maximum:1440,nullable:true},
  cooling_enabled:{type:'boolean',default:false,description:'When true all temperature fields and cooling_humidity_limit are required.'},
  ...Object.fromEntries(Object.entries(coolingRanges).map(([k,[minimum,maximum]])=>[k,{type:'number',minimum,maximum}]))
 });
@@ -20,7 +23,7 @@ const paths={};
 const environmentSchema={type:'object',properties:{masterId:{type:'string'},nodeId:{type:'integer'},
  averageHumidity:{type:'number',nullable:true},averageTemperature:{type:'number',nullable:true},temperatureSpread:{type:'number',nullable:true},healthy:{type:'boolean'},reason:{type:'string',nullable:true},
  sensors:{type:'array',items:{type:'object',properties:{sensorId:{type:'integer'},humidity:{type:'number',nullable:true},valid:{type:'boolean'},ageMs:{type:'number',nullable:true},retained:{type:'boolean'}}}},thresholds:config}};
-const statusSchema={type:'object',properties:{mode:{type:'string',enum:['MANUAL','AUTO']},run:{type:'object',nullable:true,properties:{status:{type:'string',enum:['RUNNING','STOPPED','FAULT']},dry_run:{type:'boolean'},started_by:{type:'integer',nullable:true}}},
+const statusSchema={type:'object',properties:{fan:{type:'object',properties:{state:{type:'string',enum:['STOPPED','OFF_PENDING','READY','ON_PENDING','RUNNING','RESTING']},enabled:{type:'boolean'},channel:{type:'integer',nullable:true},runMinutes:{type:'integer',nullable:true},restMinutes:{type:'integer',nullable:true},remainingMs:{type:'number'},deadlineAt:{type:'string',format:'date-time',nullable:true},lastError:{type:'string',nullable:true}}},mode:{type:'string',enum:['MANUAL','AUTO']},run:{type:'object',nullable:true,properties:{status:{type:'string',enum:['RUNNING','STOPPED','FAULT']},dry_run:{type:'boolean'},started_by:{type:'integer',nullable:true}}},
  autoStatus:{type:'string',enum:['RUNNING','PAUSED','STOPPED'],description:'AUTO intent stays enabled while waiting for OFF or valid sensors. RUNNING does not mean the valve is ON.'},pauseReason:{type:'string',nullable:true},
  runtime:{type:'object',properties:{demand:{type:'boolean'},cooling_demand:{type:'boolean'},last_reason:{type:'string',nullable:true},control_state:{type:'string',enum:['DISABLED','IDLE','ON_REQUESTED','MISTING','OFF_PENDING','COOLDOWN','SENSOR_FAULT','DEVICE_OFFLINE','FAULT']},pulse_started_at:{type:'string',format:'date-time',nullable:true},pulse_deadline_at:{type:'string',format:'date-time',nullable:true},last_error:{type:'string',nullable:true}}},
  environment:environmentSchema,ssr:{type:'object',nullable:true,properties:{desired_state:{type:'string',enum:['ON','OFF'],nullable:true},reported_state:{type:'string',enum:['ON','OFF'],nullable:true}}},cooldownRemainingMs:{type:'number'},lastDecision:{type:'object',nullable:true}}};
