@@ -1,8 +1,31 @@
 const express = require('express');
 const cultivationTrayController = require('../controllers/cultivationTray.controller');
-const { authenticate } = require('../middlewares/auth.middleware');
+const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
+
+/**
+ * @openapi
+ * /api/cultivation-trays/{id}/complete-sanitation:
+ *   post:
+ *     tags: [Cultivation Trays]
+ *     summary: Confirm tray sanitation completed
+ *     description: Admin or Farm Operator only. Requires MAINTENANCE with no ACTIVE tray assignment. Sets AVAILABLE and records last_cleaned_at and last_cleaned_by. Does not reactivate an inactive floor or position.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Tray ready; confirmation recorded }
+ *       401: { description: Authentication required }
+ *       403: { description: Staff role required }
+ *       404: { description: Tray not found }
+ *       409: { description: Tray not in maintenance or active assignment exists }
+ */
+router.post('/:id/complete-sanitation', authenticate, authorizeRoles(1, 2), cultivationTrayController.completeSanitation);
 
 /**
  * @openapi

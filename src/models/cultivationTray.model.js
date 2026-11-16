@@ -1,4 +1,25 @@
 const pool = require('../config/db');
+const AppError = require('../utils/app-error');
+
+async function completeSanitation(trayId, userId, db = pool) {
+  const client = db.connect ? await db.connect() : db;
+  try {
+    await client.query('BEGIN');
+    const tray = (await client.query('SELECT * FROM cultivation_trays WHERE tray_id=$1 FOR UPDATE', [trayId])).rows[0];
+    if (!tray) throw new AppError('Không tìm thấy khay', 404);
+    if (tray.status !== 'MAINTENANCE') throw new AppError('Khay không còn ở trạng thái bảo trì / vệ sinh. Hãy tải lại danh sách.', 409);
+    const active = await client.query("SELECT 1 FROM cultivation_session_trays WHERE tray_id=$1 AND status='ACTIVE' LIMIT 1", [trayId]);
+    if (active.rows.length) throw new AppError('Không thể hoàn tất vệ sinh khi khay còn phiên trồng hoạt động', 409);
+    const result = await client.query(`UPDATE cultivation_trays SET status='AVAILABLE',
+      last_cleaned_at=CURRENT_TIMESTAMP,last_cleaned_by=$2,updated_at=CURRENT_TIMESTAMP
+      WHERE tray_id=$1 RETURNING *`, [trayId, userId]);
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { if (db.connect) client.release(); }
+}
 
 const trayColumns = `
   t.tray_id,
@@ -108,4 +129,4 @@ async function removeById(trayId) {
   return result.rows[0] || null;
 }
 
-module.exports = { findAll, findById, findFloorById, create, updateById, removeById };
+module.exports = { findAll, findById, findFloorById, create, updateById, removeById, completeSanitation };

@@ -28,4 +28,9 @@ async function remove(req, res) {
   res.json({ message: 'Cultivation tray deleted successfully', data: tray });
 }
 
-module.exports = { list, listByRoom, getById, create, update, remove };
+async function completeSanitation(req, res) {
+  const tray = await cultivationTrayService.completeSanitation(req.params.id, req.user);
+  res.json({ message: 'Đã xác nhận vệ sinh xong. Khay đã sẵn sàng sử dụng.', data: tray });
+}
+
+module.exports = { list, listByRoom, getById, create, update, remove, completeSanitation };
