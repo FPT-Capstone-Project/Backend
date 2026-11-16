@@ -25,7 +25,7 @@ router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestControlle
  *   post:
  *     tags: [Harvest Requests]
  *     summary: Choose a receiving method for a harvest-ready cultivation session
- *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. Customer PICKUP requires scheduledAt from the harvest-ready date through three calendar days later, between 07:00 and 17:00 Vietnam time. DELIVERY does not require a schedule. For DELIVERY, blank or omitted deliveryAddress uses the customer profile address. If the profile has no address, enter deliveryAddress. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
+ *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. Customer PICKUP requires scheduledAt from the harvest-ready date through three calendar days later, between 07:00 and 17:00 Vietnam time. DELIVERY does not require a schedule. For DELIVERY, blank or omitted deliveryAddress uses the customer profile address. If the profile has no address, enter deliveryAddress. A shipment is created or reused at the order level and requires a phone number on the customer profile. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true

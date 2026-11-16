@@ -97,11 +97,13 @@ async function lockRequest(client, harvestRequestId) {
     `SELECT hr.harvest_request_id, hr.session_id, hr.harvest_method,
             hr.scheduled_at, hr.status, hr.customer_note, hr.confirmed_at,
             hr.completed_at, s.status AS session_status, s.harvest_status, s.harvest_ready_at,
-            oi.order_id, o.user_id AS customer_id
+            oi.order_id, o.user_id AS customer_id,
+            u.full_name AS customer_name, u.phone AS customer_phone
      FROM harvest_requests hr
      INNER JOIN cultivation_sessions s ON s.session_id = hr.session_id
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN orders o ON o.order_id = oi.order_id
+     INNER JOIN users u ON u.user_id = o.user_id
      WHERE hr.harvest_request_id = $1
      FOR UPDATE OF hr, s, o`,
     [harvestRequestId],
@@ -120,15 +122,89 @@ async function resolveDeliveryAddress(client, data, customerId) {
   return address;
 }
 
+async function syncDeliveryShipment(
+  client,
+  request,
+  harvestMethod,
+  deliveryAddress,
+  previousMethod = null,
+) {
+  const activeShipments = await client.query(
+    `SELECT shipment_id, address, recipient_name, recipient_phone, status
+     FROM shipments
+     WHERE order_id = $1 AND status IN ('PENDING', 'SHIPPED', 'IN_TRANSIT')
+     ORDER BY shipment_id DESC
+     FOR UPDATE`,
+    [request.order_id],
+  );
+  if (activeShipments.rows.length > 1) {
+    throw new AppError('Order has multiple active shipments and cannot be synchronized automatically', 409);
+  }
+  const shipment = activeShipments.rows[0];
+  const deliveryRequests = await client.query(
+    `SELECT COUNT(*)::int AS total
+     FROM harvest_requests hr
+     INNER JOIN cultivation_sessions s ON s.session_id = hr.session_id
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     WHERE oi.order_id = $1 AND hr.harvest_method = 'DELIVERY'`,
+    [request.order_id],
+  );
+
+  if (harvestMethod === 'DELIVERY') {
+    const recipientPhone = request.customer_phone?.trim();
+    if (!recipientPhone) {
+      throw new AppError('Customer profile phone is required for delivery', 400);
+    }
+
+    if (shipment) {
+      const detailsChanged = shipment.address !== deliveryAddress
+        || shipment.recipient_name !== request.customer_name
+        || shipment.recipient_phone !== recipientPhone;
+      if (!detailsChanged) return;
+      if (shipment.status !== 'PENDING' || Number(deliveryRequests.rows[0]?.total) > 1) {
+        throw new AppError('Order already has an active shipment with different delivery details', 409);
+      }
+      await client.query(
+        `UPDATE shipments
+         SET address = $2, recipient_name = $3, recipient_phone = $4
+         WHERE shipment_id = $1`,
+        [shipment.shipment_id, deliveryAddress, request.customer_name, recipientPhone],
+      );
+      return;
+    }
+
+    await client.query(
+      `INSERT INTO shipments (order_id, address, recipient_name, recipient_phone)
+       VALUES ($1, $2, $3, $4)`,
+      [request.order_id, deliveryAddress, request.customer_name, recipientPhone],
+    );
+    return;
+  }
+
+  if (previousMethod !== 'DELIVERY'
+    || Number(deliveryRequests.rows[0]?.total) > 0
+    || !shipment) return;
+  if (shipment.status !== 'PENDING') {
+    throw new AppError('Receiving method cannot be changed after shipment has started', 409);
+  }
+  await client.query(
+    `UPDATE shipments SET status = 'CANCELLED' WHERE shipment_id = $1`,
+    [shipment.shipment_id],
+  );
+}
+
 async function create(sessionId, data, actor) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const sessionResult = await client.query(
-       `SELECT s.session_id, s.status, s.harvest_status, s.harvest_ready_at, o.user_id AS customer_id
+       `SELECT s.session_id, s.status, s.harvest_status, s.harvest_ready_at,
+               oi.order_id, o.user_id AS customer_id,
+               u.full_name AS customer_name, u.phone AS customer_phone
        FROM cultivation_sessions s
        INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
        INNER JOIN orders o ON o.order_id = oi.order_id
+       INNER JOIN users u ON u.user_id = o.user_id
        WHERE s.session_id = $1
        FOR UPDATE OF s, o`,
       [sessionId],
@@ -158,6 +234,9 @@ async function create(sessionId, data, actor) {
         deliveryAddress,
       ],
     );
+    if (data.harvestMethod === 'DELIVERY') {
+      await syncDeliveryShipment(client, session, data.harvestMethod, deliveryAddress);
+    }
     await client.query(
       `UPDATE harvests
        SET harvest_request_id = $2, updated_at = CURRENT_TIMESTAMP
@@ -218,6 +297,13 @@ async function update(harvestRequestId, data, actor) {
         data.customerNote,
         deliveryAddress,
       ],
+    );
+    await syncDeliveryShipment(
+      client,
+      request,
+      data.harvestMethod,
+      deliveryAddress,
+      request.harvest_method,
     );
     await client.query(
       `UPDATE harvests

@@ -283,16 +283,21 @@ CREATE TABLE public.shipments (
   shipment_id     SERIAL PRIMARY KEY,
   order_id        INTEGER NOT NULL,
   address         TEXT NOT NULL,
-  recipient_name  VARCHAR NOT NULL,
-  recipient_phone VARCHAR NOT NULL,
-  shipping_fee    NUMERIC NOT NULL DEFAULT 0 CHECK (shipping_fee >= 0),
-  carrier         VARCHAR,
-  tracking_code   VARCHAR,
-  status          VARCHAR NOT NULL DEFAULT 'PENDING'
-    CHECK (status IN ('PENDING', 'SHIPPED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED')),
+  recipient_name  VARCHAR(150) NOT NULL,
+  recipient_phone VARCHAR(30) NOT NULL,
+  shipping_fee    NUMERIC(12, 2) NOT NULL DEFAULT 0,
+  carrier         VARCHAR(100),
+  tracking_code   VARCHAR(150),
+  status          VARCHAR(30) NOT NULL DEFAULT 'PENDING',
   shipped_at      TIMESTAMPTZ,
   delivered_at    TIMESTAMPTZ,
-  CONSTRAINT fk_shipments_order FOREIGN KEY (order_id) REFERENCES public.orders(order_id)
+  CONSTRAINT fk_shipments_order FOREIGN KEY (order_id) REFERENCES public.orders(order_id),
+  CONSTRAINT chk_shipment_dates CHECK (
+    delivered_at IS NULL OR shipped_at IS NULL OR delivered_at >= shipped_at
+  ),
+  CONSTRAINT chk_shipping_fee CHECK (shipping_fee >= 0),
+  CONSTRAINT shipments_status_check
+    CHECK (status IN ('PENDING', 'SHIPPED', 'IN_TRANSIT', 'DELIVERED', 'CANCELLED', 'RETURNED'))
 );
 
 -- ---------- CULTIVATION ----------
@@ -479,6 +484,7 @@ CREATE TABLE public.harvest_requests (
   scheduled_at       TIMESTAMPTZ,
   status             VARCHAR NOT NULL DEFAULT 'PENDING',
   customer_note      TEXT,
+  delivery_address   TEXT,
   confirmed_at       TIMESTAMPTZ,
   completed_at       TIMESTAMPTZ
 );

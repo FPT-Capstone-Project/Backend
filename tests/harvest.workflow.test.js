@@ -83,7 +83,15 @@ async function setupDatabase() {
     CREATE TABLE shipments (
       shipment_id SERIAL PRIMARY KEY,
       order_id INTEGER NOT NULL REFERENCES orders(order_id),
-      status TEXT NOT NULL
+      address TEXT NOT NULL,
+      recipient_name TEXT NOT NULL,
+      recipient_phone TEXT NOT NULL,
+      shipping_fee NUMERIC NOT NULL DEFAULT 0,
+      carrier TEXT,
+      tracking_code TEXT,
+      status TEXT NOT NULL DEFAULT 'PENDING',
+      shipped_at TIMESTAMPTZ,
+      delivered_at TIMESTAMPTZ
     );
     CREATE TABLE notifications (
       notification_id SERIAL PRIMARY KEY,
@@ -95,7 +103,8 @@ async function setupDatabase() {
       reference_id INTEGER
     );
 
-    INSERT INTO users (user_id, full_name) VALUES (1, 'Farm Operator'), (3, 'Customer');
+    INSERT INTO users (user_id, full_name, phone)
+    VALUES (1, 'Farm Operator', '0900000001'), (3, 'Customer', '0900000003');
     INSERT INTO mushroom_types (mushroom_type_id, name) VALUES (1, 'Oyster Mushroom');
     INSERT INTO orders (order_id, user_id, status) VALUES (1, 3, 'PROCESSING');
     INSERT INTO order_items (order_item_id, order_id) VALUES (1, 1), (2, 1), (3, 1);
@@ -334,7 +343,7 @@ test('WF-04 completes an order after the last cultivation session is handed over
   }
 });
 
-test('WF-04 external delivery is confirmed by staff without any shipment', async () => {
+test('WF-04 delivery requests create a shipment linked to the order', async () => {
   const db = await setupDatabase();
   try {
     const { harvest, harvestRequest } = loadModels(db);
@@ -343,12 +352,18 @@ test('WF-04 external delivery is confirmed by staff without any shipment', async
 
     const request = await harvestRequest.create(2, { harvestMethod: 'DELIVERY' }, customer);
     assert.equal(request.status, 'PENDING');
+    const shipment = (await db.query('SELECT * FROM shipments WHERE order_id = 1')).rows[0];
+    assert.equal(shipment.order_id, 1);
+    assert.equal(shipment.address, 'Profile address');
+    assert.equal(shipment.recipient_name, 'Customer');
+    assert.equal(shipment.recipient_phone, '0900000003');
+    assert.equal(shipment.status, 'PENDING');
     const planned = await harvest.create(2);
     await completeHarvest(harvest, planned.harvest_id);
 
     await assert.rejects(() => harvestRequest.complete(request.harvest_request_id, customer),
       { statusCode: 403, message: 'Farm Operator must confirm external delivery' });
-    assert.equal((await db.query('SELECT count(*)::int AS n FROM shipments')).rows[0].n, 0);
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM shipments')).rows[0].n, 1);
     const completed = await harvestRequest.complete(request.harvest_request_id, operator);
     assert.equal(completed.status, 'COMPLETED');
     assert.ok(completed.completed_at);
@@ -392,6 +407,10 @@ test('delivery saves profile snapshots, accepts overrides and requires an addres
     await db.query('UPDATE users SET address = NULL WHERE user_id = 3');
     assert.equal((await db.query('SELECT delivery_address FROM harvest_requests WHERE session_id = 1')).rows[0].delivery_address, 'Profile address');
     await assert.rejects(() => harvestRequest.create(2, { harvestMethod: 'DELIVERY' }, customer), { statusCode: 400 });
+    await harvestRequest.update(first.harvest_request_id, {
+      harvestMethod: 'PICKUP',
+      scheduledAt: nextPickup(),
+    }, customer);
     const second = await harvestRequest.create(2, { harvestMethod: 'DELIVERY', deliveryAddress: '  Other address  ' }, customer);
     assert.equal(second.delivery_address, 'Other address');
     const listed = await harvestRequest.findAllForAdmin();
@@ -406,6 +425,14 @@ test('delivery saves profile snapshots, accepts overrides and requires an addres
     assert.equal((await db.query('SELECT address FROM users WHERE user_id = 3')).rows[0].address, null);
     await db.query("UPDATE users SET address = 'New profile' WHERE user_id = 3");
     assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'DELIVERY' }, customer)).delivery_address, 'New profile');
+    assert.equal(
+      (await db.query('SELECT address FROM shipments WHERE order_id = 1 AND status = $1', ['PENDING'])).rows[0].address,
+      'New profile',
+    );
     assert.equal((await harvestRequest.update(second.harvest_request_id, { harvestMethod: 'PICKUP', scheduledAt: nextPickup() }, customer)).delivery_address, null);
+    assert.equal(
+      (await db.query('SELECT status FROM shipments WHERE order_id = 1 ORDER BY shipment_id DESC LIMIT 1')).rows[0].status,
+      'CANCELLED',
+    );
   } finally { await db.close(); }
 });
