@@ -139,8 +139,8 @@ async function create(sessionId, data, actor) {
     if (!sessionCanReceive({ status: session.status, harvest_status: session.harvest_status })) {
       throw new AppError('Cultivation session must be harvest ready before choosing a receiving method', 409);
     }
-if (!isStaff(actor) && data.harvestMethod === 'PICKUP') {
-      assertCustomerPickupSchedule(data.scheduledAt, session.harvest_ready_at);
+    if (data.harvestMethod === 'PICKUP') {
+      assertCustomerPickupSchedule(data.scheduledAt, isStaff(actor) ? new Date() : session.harvest_ready_at);
     }
     const deliveryAddress = await resolveDeliveryAddress(client, data, session.customer_id);
     const result = await client.query(
@@ -197,6 +197,9 @@ async function update(harvestRequestId, data, actor) {
       throw new AppError('Receiving method can no longer be changed for this cultivation session', 409);
     }
 
+    if (isStaff(actor) && data.harvestMethod === 'PICKUP') {
+      assertCustomerPickupSchedule(data.scheduledAt, new Date());
+    }
     const deliveryAddress = await resolveDeliveryAddress(client, data, request.customer_id);
     const result = await client.query(
       `UPDATE harvest_requests

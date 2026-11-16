@@ -4,6 +4,29 @@ const {EventEmitter}=require('node:events');
 const {createWorker}=require('../src/services/autoMisting.worker');
 const {createRepository}=require('../src/models/autoMisting.model');
 
+test('elected AUTO worker recovers and evaluates fan cycles, then reconciles them on shutdown',async()=>{
+ const events=[];
+ const leader=new EventEmitter();leader.query=async()=>({rows:[]});leader.release=()=>events.push('release');
+ const fan={candidates:async()=>[{floor_id:8}],recover:async()=>events.push('fan-recover'),
+  evaluate:async(id,guard)=>{assert.equal(id,8);assert.equal(guard(),true);events.push('fan-tick');}};
+ const worker=createWorker({acquireLeader:async()=>leader,candidates:async()=>[]},
+  {recover:async()=>events.push('mist-recover')},{error(){}},{getDisconnectVersion:()=>0},fan);
+ await worker.tick();await worker.stop();
+ assert.deepEqual(events,['mist-recover','fan-recover','fan-tick','mist-recover','fan-recover','release']);
+});
+
+test('fan database failure closes sibling ON gates and forces worker recovery',async()=>{
+ let siblingAllowed=true,released=false;
+ const leader=new EventEmitter();leader.query=async()=>({rows:[]});leader.release=()=>{released=true;};
+ const fan={candidates:async()=>[{floor_id:1},{floor_id:2}],recover:async()=>{},evaluate:async(id,guard)=>{
+  if(id===1)throw new Error('Fan database unavailable');
+  await new Promise(resolve=>setImmediate(resolve));siblingAllowed=guard();
+ }};
+ const worker=createWorker({acquireLeader:async()=>leader,candidates:async()=>[]},
+  {recover:async()=>{}},{error(){}},{getDisconnectVersion:()=>0},fan);
+ await worker.tick();assert.equal(siblingAllowed,false);assert.equal(released,true);await worker.stop();
+});
+
 test('heartbeat stays fresh while a floor evaluation exceeds the Start readiness window',async()=>{
  let finish,entered,guard,lastHeartbeat=0,heartbeats=0;
  const blocked=new Promise(resolve=>finish=resolve);

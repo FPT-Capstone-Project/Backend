@@ -15,7 +15,7 @@ const coolingRanges={
 function validateConfig(input = {}) {
  if(!input || typeof input!=='object' || Array.isArray(input))throw new AppError('Cấu hình không hợp lệ',400);
  const c = { sensor_max_age_ms: 20000, required_valid_sensors: 3, ...input };
- const allowed = [...Object.keys(ranges),...Object.keys(coolingRanges),'cooling_enabled','config_source','profile_name','profile_approved','mushroom_type_ids'];
+ const allowed = [...Object.keys(ranges),...Object.keys(coolingRanges),'fan_enabled','fan_run_minutes','fan_rest_minutes','cooling_enabled','config_source','profile_name','profile_approved','mushroom_type_ids'];
  if (Object.keys(c).some(k => !allowed.includes(k))) throw new AppError('Trường cấu hình không được hỗ trợ; hãy dùng chức năng khởi động để bật chế độ tự động (AUTO)',400);
  if(c.config_source!==undefined && !['LEGACY','FLOOR'].includes(c.config_source))throw new AppError('Nguồn cấu hình (config_source) không hợp lệ',400);
  if(c.config_source==='FLOOR' && c.mushroom_type_id!=null)throw new AppError('Cấu hình tầng xác định loại nấm từ các phiên trồng trong khay',400);
@@ -48,6 +48,12 @@ function validateConfig(input = {}) {
   && c.max_cumulative_on_ms_per_hour>=c.misting_pulse_ms)) throw new AppError('Ngưỡng độ ẩm hoặc giới hạn thời gian phun sương không nhất quán',400);
  if (c.profile_name != null && (typeof c.profile_name!=='string' || !c.profile_name.trim() || c.profile_name.length>200)) throw new AppError('Tên cấu hình (profile_name) không hợp lệ',400);
  if (c.profile_approved !== undefined && typeof c.profile_approved!=='boolean') throw new AppError('profile_approved phải là true hoặc false',400);
+ c.fan_enabled=c.fan_enabled ?? false;
+ if(typeof c.fan_enabled!=='boolean')throw new AppError('fan_enabled must be boolean',400);
+ for(const key of ['fan_run_minutes','fan_rest_minutes']) {
+  if(c[key]==null && !c.fan_enabled){c[key]=null;continue;}
+  if(!Number.isInteger(c[key]) || c[key]<1 || c[key]>1440)throw new AppError(`${key}: 1-1440 minutes`,400);
+ }
  return { ...c, profile_name:c.profile_name || null, profile_approved:c.profile_approved ?? false };
 }
 function aggregate(rows, c, now = Date.now()) {

@@ -170,7 +170,11 @@ async function findIssues({ status, severity, sessionId, limit, offset } = {}) {
   );
   const pageValues = [...values, limit, offset];
   const result = await pool.query(
-    `SELECT ci.*, COALESCE(st.session_id, spawn_session.session_id) AS session_id,
+    `SELECT ci.*,
+            (SELECT ec.consultation_id FROM expert_consultations ec
+             WHERE ec.issue_id = ci.issue_id
+             ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS latest_consultation_id,
+            COALESCE(st.session_id, spawn_session.session_id) AS session_id,
             st.tray_id, mt.name AS mushroom_name, reporter.full_name AS reported_by_name
      FROM cultivation_issues ci
      LEFT JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
@@ -189,7 +193,11 @@ async function findIssues({ status, severity, sessionId, limit, offset } = {}) {
 
 async function findIssue(issueId) {
   const result = await pool.query(
-    `SELECT ci.*, COALESCE(st.session_id, spawn_session.session_id) AS session_id,
+    `SELECT ci.*,
+            (SELECT ec.consultation_id FROM expert_consultations ec
+             WHERE ec.issue_id = ci.issue_id
+             ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS latest_consultation_id,
+            COALESCE(st.session_id, spawn_session.session_id) AS session_id,
             st.tray_id, st.session_tray_id, s.order_item_id, o.order_id, o.user_id AS customer_id,
             mt.name AS mushroom_name, reporter.full_name AS reported_by_name,
             (SELECT ec.expert_id FROM expert_consultations ec

@@ -11,6 +11,7 @@ function positive(value,name='floorId') {
  return Number(value);
 }
 function createService(repo=repository, publisher=mqtt, command=(...args)=>require('./iot.service').control(...args), now=()=>Date.now(), wait=ms=>new Promise(resolve=>setTimeout(resolve,ms))) {
+ const fan=require('./fanAuto.service').createService(require('../models/fanAuto.model').createRepository(repo),publisher,command,now);
  const online=f=>publisher.isReady() && f.reported_status!=='offline';
  function retryable(reason,state,environment) {
   const error=new AppError(reason,409);
@@ -57,7 +58,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
  }
  async function editable(id) {
   const run=await repo.run(id); const rt=await repo.runtime(id);
-  if (run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)) throw new AppError('Dừng chế độ tự động và hoàn tất xác nhận tắt (OFF) trước khi thay đổi cấu hình hoặc gán thiết bị',409);
+  if ((rt.fan_state && rt.fan_state!=='STOPPED') || run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state)) throw new AppError('Dừng chế độ tự động và hoàn tất xác nhận tắt (OFF) trước khi thay đổi cấu hình hoặc gán thiết bị',409);
  }
  async function env(id,c) {const f=await repo.floor(id);return {masterId:f.master_identifier,nodeId:f.node_address,thresholds:c,...aggregate(await repo.sensors(f),c,now())};}
  async function verifyProfile(id,c) {
@@ -72,7 +73,8 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   await repo.endRun(id,user,reason,status);
   const rt=await repo.runtime(id);
   const active=['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state);
-  await repo.runtimeSet(id,{control_state:active?'OFF_PENDING':'DISABLED',last_error:status==='FAULT'?reason:null});
+  await repo.runtimeSet(id,{control_state:active?'OFF_PENDING':'DISABLED',last_error:status==='FAULT'?reason:null,
+   ...(rt.fan_state && rt.fan_state!=='STOPPED'?{fan_state:'OFF_PENDING',fan_after_off:'STOP',fan_requested_at:new Date(now()),fan_deadline_at:null,fan_retry_at:null}:{})});
   return active;
   });
  }
@@ -121,6 +123,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   await requestOffLocked(f,run,reason);
  }
  const api={
+  fan,
   list:()=>repo.list(),
   async configureFan(value,body) {
    const id=positive(value);
@@ -157,6 +160,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
    return repo.lockFloor(id,async()=>{await repo.floor(id);await editable(id);
     c.config_source=c.config_source || 'LEGACY';
     c.cooling_enabled=c.cooling_enabled ?? false;
+    fan.validateStart(await repo.floor(id),c,true);
     c.source_profiles=null;
     if(c.config_source==='FLOOR') {
      if(!c.profile_approved || !c.profile_name)throw new AppError('Kiểm tra, đặt tên và phê duyệt cấu hình tầng trước khi lưu',409);
@@ -295,6 +299,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      } else if((cultivation.requiresApproval || cultivation.profiles.some(p=>p.mushroom_type_id!==c.mushroom_type_id)) && !(c.profile_approved && c.profile_name))throw new AppError('Các khay có cấu hình khác nhau hoặc chưa được gán cần có cấu hình tầng đã đặt tên và được phê duyệt rõ ràng',409);
      const e=await env(id,c);if(!e.healthy && !e.spreadBlocked)throw new AppError(e.reason,409);
      await verifyProfile(id,c);
+     fan.validateStart(f,c,dry);
      if(!dry) {
       if(!hardware(f,c))throw new AppError('Chưa cho phép điều khiển tự động thiết bị thực: cần xác minh bộ giám sát an toàn (watchdog) của thiết bị',409);
       if(!online(f))throw new AppError('MQTT hoặc bộ điều khiển trung tâm mất kết nối',503);
@@ -308,7 +313,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      }
      return repo.transaction(async()=>{
      const run=await repo.createRun(id,c,user,dry);
-     await repo.runtimeSet(id,{run_id:run.id,control_state:'IDLE',demand:false,cooling_demand:false,last_reason:null,cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,cooldown_until:null,off_requested_at:null,last_error:null,last_evaluated_at:null});
+     await repo.runtimeSet(id,{...fan.initialRuntime(f,c),run_id:run.id,control_state:'IDLE',demand:false,cooling_demand:false,last_reason:null,cycle_id:null,pulse_started_at:null,pulse_deadline_at:null,cooldown_until:null,off_requested_at:null,last_error:null,last_evaluated_at:null});
      await log(id,run,'START',dry?'Người vận hành đã bắt đầu chạy mô phỏng':'Người vận hành đã chủ động bật chế độ tự động điều khiển thiết bị thực');
      return {mode:'AUTO',run};
      });
@@ -317,19 +322,22 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   },
   async stop(value,user,reason='Người vận hành yêu cầu dừng') {
    const id=positive(value);
-   return repo.lockFloor(id,async()=>{
+   await repo.lockFloor(id,async()=>{
     const f=await repo.floor(id),run=await repo.run(id);
     await repo.lockChannel(f.master_id,f.misting_ssr_channel,()=>stopRecord(id,user,reason));
     if(run) {await log(id,run,'STOP',reason);if((await repo.runtime(id)).control_state==='OFF_PENDING')await requestOff(f,run,reason);}
-    return api.status(id);
+    await fan.stop(id,reason,true);
    });
+   return api.status(id);
   },
   // Called by the existing manual command service INSIDE its channel lock.
   async manual(master,channel,action,user) {
-   const f=await repo.one('SELECT * FROM cultivation_floors WHERE master_id=$1 AND misting_ssr_channel=$2',[master,channel]);
+   const f=await repo.one('SELECT * FROM cultivation_floors WHERE master_id=$1 AND (misting_ssr_channel=$2 OR fan_ssr_channel=$2)',[master,channel]);
    if(!f)return;
    const run=await repo.run(f.floor_id),rt=await repo.runtime(f.floor_id);
-   const owned=run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state);
+   const owned=channel===f.fan_ssr_channel
+    ? (run?.status==='RUNNING' && run.config_snapshot.fan_enabled) || (rt.fan_state && rt.fan_state!=='STOPPED')
+    : run?.status==='RUNNING' || ['ON_REQUESTED','MISTING','OFF_PENDING'].includes(rt.control_state);
    if(!owned)return;
    if(action==='ON')throw new AppError('Chế độ tự động (AUTO) đang quản lý kênh này; hãy dừng và xác nhận tắt (OFF) trước khi bật (ON) thủ công',409);
    const allowed=await repo.one(`SELECT 1 FROM users u JOIN role_permissions rp ON rp.role_id=u.role_id
@@ -341,7 +349,7 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
   async status(value) {
    const id=positive(value),f=await repo.floor(id),run=await repo.run(id),runtime=await repo.runtime(id);
    const paused=run?.status==='RUNNING' && ['OFF_PENDING','SENSOR_FAULT','DEVICE_OFFLINE'].includes(runtime.control_state);
-   return {mode:run?.status==='RUNNING'?'AUTO':'MANUAL',run:run || null,runtime,
+   return {mode:run?.status==='RUNNING'?'AUTO':'MANUAL',run:run || null,runtime,fan:await fan.status(id),
     autoStatus:run?.status!=='RUNNING'?'STOPPED':paused?'PAUSED':'RUNNING',
     pauseReason:paused?(runtime.last_error || runtime.last_reason):null,
     environment:await api.environment(id),ssr:await repo.ssr(f) || null,

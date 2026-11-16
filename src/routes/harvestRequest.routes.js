@@ -71,7 +71,7 @@ router.post('/', authenticate, harvestRequestController.create);
  *   patch:
  *     tags: [Harvest Requests]
  *     summary: Update receiving method or pickup schedule
- *     description: Customers may update the receiving method only on the harvest-ready date and the following calendar day. Customer PICKUP schedules must be from the current Vietnam date through three calendar days after readiness, between 07:00 and 17:00 Vietnam time. Farm staff may adjust the schedule while the session remains eligible.
+ *     description: Customers may update the receiving method only on the harvest-ready date and the following calendar day. Customer PICKUP schedules must be from the current Vietnam date through three calendar days after readiness, between 07:00 and 17:00 Vietnam time. Farm staff may adjust the schedule while the session remains eligible; staff pickup must be in the future, from today through three calendar days later, between 07:00 and 17:00 Vietnam time.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path

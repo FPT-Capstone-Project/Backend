@@ -3,9 +3,10 @@ const service=require('./autoMisting.service');
 const mqtt=require('./iotMqtt.service');
 const {randomUUID}=require('node:crypto');
 
+
 // A dedicated session elects one worker. Losing that session closes the local
 // actuation gate; a replacement pauses interrupted runs and reconciles OFF.
-function createWorker(repo=repository,control=service,logger=console,transport=mqtt) {
+function createWorker(repo=repository,control=service,logger=console,transport=mqtt,fanControl=control.fan ?? null) {
  let timer,heartbeatTimer,heartbeatPending,leader,busy=false,stopping=false,healthy=false;
  const transportVersion=()=>transport.getDisconnectVersion?.() ?? 0;
  let observedTransportVersion=transportVersion();
@@ -68,6 +69,7 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
     stage='khôi phục';
     logger.info?.('Đã nhận quyền điều khiển phun sương chính; đang xác nhận OFF trước khi tiếp tục AUTO bị gián đoạn',{...diagnostics(stage),reason:recoveryReason});
     await control.recover(recoveryReason);
+    if(fanControl)await fanControl.recover(recoveryReason);
    }
    if(observedTransportVersion!==transportVersion()) {
     stopHeartbeat();
@@ -75,6 +77,7 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
     const version=transportVersion();
     stage='tạm chờ AUTO sau mất kết nối MQTT';
     await control.recover('Mất kết nối MQTT; AUTO tạm chờ xác nhận OFF và kiểm tra điều kiện để tiếp tục');
+    if(fanControl)await fanControl.recover('Mất kết nối MQTT; đang yêu cầu tắt quạt trước khi khôi phục chu kỳ');
     observedTransportVersion=version;
    }
    stage='kiểm tra hoạt động của tiến trình điều khiển chính';
@@ -98,6 +101,18 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
     if(failure)throw failure.reason;
     if(!healthy)throw new Error('Tiến trình đã mất quyền điều khiển chính');
    }
+   if(fanControl) {
+    stage='điều khiển chu kỳ quạt';
+    const fanFloors=await fanControl.candidates();
+    for(let i=0;i<fanFloors.length;i+=2) {
+     const results=await Promise.allSettled(fanFloors.slice(i,i+2).map(async f=>{
+      try {await fanControl.evaluate(f.floor_id,()=>healthy && !stopping && observedTransportVersion===transportVersion());}
+      catch(error){healthy=false;throw error;}
+     }));
+     const failure=results.find(result=>result.status==='rejected');
+     if(failure)throw failure.reason;
+    }
+   }
   } catch(error) {
    healthy=false;
    stopHeartbeat();
@@ -118,7 +133,12 @@ function createWorker(repo=repository,control=service,logger=console,transport=m
    while(busy)await new Promise(resolve=>setTimeout(resolve,25));
    if(heartbeatPending)await heartbeatPending.catch(()=>{});
    if(leader) {
-    try {await leader.query('DELETE FROM iot_auto_control_worker');await control.recover('Tắt máy chủ');await leader.query('SELECT pg_advisory_unlock(62003,1)');}
+    try {
+     await leader.query('DELETE FROM iot_auto_control_worker');
+     await control.recover('Tắt máy chủ');
+     if(fanControl)await fanControl.recover('Tắt máy chủ; chu kỳ quạt sẽ khôi phục sau khi xác nhận tắt');
+     await leader.query('SELECT pg_advisory_unlock(62003,1)');
+    }
     // Destroy the session even if recovery/unlock fails, releasing its lock.
     finally{leader.release(true);leader=null;healthy=false;}
    }
