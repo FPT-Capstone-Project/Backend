@@ -1237,3 +1237,9 @@ END $$;
 DROP TRIGGER IF EXISTS running_fan_mapping_guard ON cultivation_floors;
 CREATE TRIGGER running_fan_mapping_guard BEFORE UPDATE ON cultivation_floors FOR EACH ROW EXECUTE FUNCTION protect_running_fan_mapping();
 COMMIT;
+
+BEGIN;
+ALTER TABLE cultivation_trays
+ ADD COLUMN IF NOT EXISTS last_cleaned_at TIMESTAMPTZ,
+ ADD COLUMN IF NOT EXISTS last_cleaned_by INTEGER REFERENCES users(user_id);
+COMMIT;

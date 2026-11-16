@@ -4,6 +4,11 @@ const AppError = require('../utils/app-error');
 
 const VALID_STATUSES = ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'];
 
+async function completeSanitation(trayId, actor) {
+  if (!actor || ![1, 2].includes(Number(actor.role_id))) throw new AppError('Chỉ Admin hoặc Farm Operator được xác nhận vệ sinh khay', 403);
+  return cultivationTrayModel.completeSanitation(parseId(trayId, 'trayId'), actor.user_id);
+}
+
 function parseId(value, fieldName) {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new AppError(`${fieldName} must be a positive integer`, 400);
@@ -121,6 +126,9 @@ async function updateCultivationTray(trayId, payload = {}) {
     data.tray_name = trayName == null || trayName === '' ? null : String(trayName).trim();
   }
   if (payload.status !== undefined) data.status = normalizeStatus(payload.status);
+  if (existing.status === 'MAINTENANCE' && data.status === 'AVAILABLE') {
+    throw new AppError('Hãy dùng thao tác xác nhận đã vệ sinh xong để trả khay về sẵn sàng', 409);
+  }
   if (Object.keys(data).length === 0) throw new AppError('No valid fields provided for update', 400);
 
   try {
@@ -144,6 +152,7 @@ async function deleteCultivationTray(trayId) {
 }
 
 module.exports = {
+  completeSanitation,
   getAllCultivationTrays,
   getCultivationTraysByRoomId,
   getCultivationTrayById,

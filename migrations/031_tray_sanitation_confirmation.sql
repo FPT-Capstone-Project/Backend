@@ -1,0 +1,5 @@
+BEGIN;
+ALTER TABLE cultivation_trays
+ ADD COLUMN IF NOT EXISTS last_cleaned_at TIMESTAMPTZ,
+ ADD COLUMN IF NOT EXISTS last_cleaned_by INTEGER REFERENCES users(user_id);
+COMMIT;
