@@ -12,6 +12,7 @@ const cultivationSessionRoutes = require('./cultivationSession.routes');
 const notificationRoutes = require('./notification.routes');
 
 const rootRouter = express.Router();
+rootRouter.use('/inventory/admin', require('./inventory.routes'));
 
 rootRouter.use('/auth', authRoutes);
 rootRouter.use('/users', userRoutes);
