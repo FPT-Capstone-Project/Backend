@@ -28,7 +28,7 @@ module.exports = {
   mushroom: async (client, id) => (await client.query('SELECT mushroom_type_id, status FROM mushroom_types WHERE mushroom_type_id = $1 FOR SHARE', [id])).rows[0],
   lock: async (client, id) => (await client.query('SELECT inventory_id, mushroom_type_id, quantity, updated_at FROM spawn_inventory WHERE inventory_id = $1 FOR UPDATE', [id])).rows[0],
   create: async (client, id, quantity) => (await client.query('INSERT INTO spawn_inventory (mushroom_type_id, quantity) VALUES ($1, $2) RETURNING *', [id, quantity])).rows[0],
-  update: async (client, id, quantity) => (await client.query('UPDATE spawn_inventory SET quantity = $2, updated_at = CURRENT_TIMESTAMP WHERE inventory_id = $1 RETURNING *', [id, quantity])).rows[0],
+  update: async (client, id, quantity) => (await client.query('UPDATE spawn_inventory SET quantity = quantity + $2, updated_at = CURRENT_TIMESTAMP WHERE inventory_id = $1 RETURNING *', [id, quantity])).rows[0],
   // Calculate the delta in PostgreSQL to preserve the numeric column precision.
   record: (client, id, type, before, after, notes) => client.query(`INSERT INTO inventory_transactions
     (inventory_id, transaction_type, quantity, quantity_before, quantity_after, notes)
