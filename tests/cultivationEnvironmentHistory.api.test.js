@@ -76,6 +76,23 @@ test('environment-history APIs return summarized records with role and ownership
     assert.deepEqual(history.body.pagination, { page: 1, pageSize: 5, total: 1, totalPages: 1 });
     assert.equal((await request('/sessions/1/latest', 3)).body.data.temperature_avg, 25);
 
+    await db.exec(`
+      INSERT INTO cultivation_environment_history
+        (session_id, floor_id, period_start, period_end, growth_stage, temperature_avg, humidity_avg)
+        VALUES (1, 1, '2026-01-01T10:10:00Z', '2026-01-01T10:20:00Z', 'PINNING', 27, 84),
+               (1, 1, '2026-01-02T18:00:00Z', '2026-01-02T18:10:00Z', 'MATURATION', 29, 86);
+    `);
+    const daily = await request('/sessions/1/daily-averages', 3);
+    assert.equal(daily.status, 200);
+    assert.equal(daily.body.data.timezone, 'Asia/Ho_Chi_Minh');
+    assert.deepEqual(daily.body.data.points, [
+      { date: '2026-01-01', temperature_avg: 26, humidity_avg: 83, bucket_count: 2 },
+      { date: '2026-01-02', temperature_avg: null, humidity_avg: null, bucket_count: 0 },
+      { date: '2026-01-03', temperature_avg: 29, humidity_avg: 86, bucket_count: 1 },
+    ]);
+    assert.equal((await request('/sessions/1/daily-averages', 4)).status, 404);
+    assert.equal((await request('/sessions/not-an-id/daily-averages', 3)).status, 400);
+
     const customerFloor = await request('/floors/1', 3);
     assert.equal(customerFloor.status, 200);
     assert.deepEqual(customerFloor.body.data.map((record) => record.session_id), [1]);
