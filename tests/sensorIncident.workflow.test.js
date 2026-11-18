@@ -48,6 +48,7 @@ test('sensor fault notification and repair workflow uses actual floor owners and
     assert.deepEqual(alerts.map(n => n.user_id), [1,2,3,5]);
     assert.match(alerts[2].message, /Nhân viên đã được thông báo/);
     assert.match(alerts[1].message, /Farm Operator cần kiểm tra/);
+    assert.match(alerts[1].message, /cảm biến 1 của Tầng 1/);
     const operatorAlert = alerts[1].notification_id;
     const app = express();
     app.use(express.json());
@@ -70,6 +71,7 @@ test('sensor fault notification and repair workflow uses actual floor owners and
     assert.equal((await request('PATCH', endpoint, 2, { repairNote: 42 })).status, 400);
     const listing = await request('GET', '', 2);
     assert.equal(listing.body.data[0].device_incident.can_confirm_repair, false);
+    assert.equal(listing.body.data[0].device_incident.floor_name, 'Tầng 1');
     assert.equal((await request('GET', '', 3)).body.data[0].device_incident.can_confirm_repair, false);
     await db.exec(`UPDATE iot_sensor_latest SET is_valid=true,retained=true WHERE node_address=1 AND sensor_address=1`);
     await model.scan();
