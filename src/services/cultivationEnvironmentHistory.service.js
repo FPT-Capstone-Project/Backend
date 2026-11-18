@@ -126,6 +126,22 @@ async function getSessionReport(rawSessionId, user) {
   };
 }
 
+async function getSessionDailyAverages(rawSessionId, user) {
+  const sessionId = parseId(rawSessionId, 'sessionId');
+  await assertSessionAccess(sessionId, user);
+  const records = await model.findSessionDailyAverages(sessionId);
+  return {
+    sessionId,
+    timezone: 'Asia/Ho_Chi_Minh',
+    points: records.map((record) => ({
+      date: record.date,
+      temperature_avg: record.temperature_avg == null ? null : Number(record.temperature_avg),
+      humidity_avg: record.humidity_avg == null ? null : Number(record.humidity_avg),
+      bucket_count: Number(record.bucket_count),
+    })),
+  };
+}
+
 async function getFloorHistory(rawFloorId, user, query = {}) {
   const floorId = parseId(rawFloorId, 'floorId');
   const roleId = Number(user?.role_id);
@@ -145,5 +161,6 @@ module.exports = {
   getSessionHistory,
   getLatestSessionHistory,
   getSessionReport,
+  getSessionDailyAverages,
   getFloorHistory,
 };

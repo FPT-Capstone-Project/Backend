@@ -188,6 +188,48 @@ async function findSessionReport(sessionId) {
   return { session: sessionResult.rows[0] || null, records: historyResult.rows };
 }
 
+async function findSessionDailyAverages(sessionId) {
+  const result = await pool.query(
+    `WITH period_averages AS (
+       SELECT period_start,
+              AVG(temperature_avg) FILTER (WHERE temperature_avg IS NOT NULL) AS temperature_avg,
+              AVG(humidity_avg) FILTER (WHERE humidity_avg IS NOT NULL) AS humidity_avg
+       FROM cultivation_environment_history
+       WHERE session_id = $1
+       GROUP BY period_start
+     ),
+     daily_averages AS (
+       SELECT (period_start AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS date,
+              AVG(temperature_avg) FILTER (WHERE temperature_avg IS NOT NULL) AS temperature_avg,
+              AVG(humidity_avg) FILTER (WHERE humidity_avg IS NOT NULL) AS humidity_avg,
+              COUNT(*) FILTER (
+                WHERE temperature_avg IS NOT NULL OR humidity_avg IS NOT NULL
+              )::int AS bucket_count
+       FROM period_averages
+       GROUP BY (period_start AT TIME ZONE 'Asia/Ho_Chi_Minh')::date
+     ),
+     date_range AS (
+       SELECT MIN(date) AS first_day, MAX(date) AS last_day
+       FROM daily_averages
+     ),
+     calendar_days AS (
+       SELECT days.day::date AS date
+       FROM date_range
+       CROSS JOIN LATERAL generate_series(
+         first_day::timestamp, last_day::timestamp, INTERVAL '1 day'
+       ) AS days(day)
+       WHERE first_day IS NOT NULL
+     )
+     SELECT calendar_days.date, daily_averages.temperature_avg, daily_averages.humidity_avg,
+            COALESCE(daily_averages.bucket_count, 0)::int AS bucket_count
+     FROM calendar_days
+     LEFT JOIN daily_averages USING (date)
+     ORDER BY calendar_days.date ASC`,
+    [sessionId],
+  );
+  return result.rows;
+}
+
 async function findFloorHistory(floorId, { from, to, limit, offset }, userId) {
   const values = [floorId, from ?? null, to ?? null, userId ?? null, limit, offset];
   const filter = `floor_id = $1
@@ -234,6 +276,7 @@ module.exports = {
   findSessionHistory,
   findLatestSessionHistory,
   findSessionReport,
+  findSessionDailyAverages,
   findFloorHistory,
   aggregatePeriod,
   aggregatePeriodSql,

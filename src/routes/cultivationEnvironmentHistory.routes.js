@@ -28,6 +28,27 @@ router.get('/sessions/:sessionId/report', ...allowedUsers, controller.sessionRep
 
 /**
  * @openapi
+ * /api/environment-history/sessions/{sessionId}/daily-averages:
+ *   get:
+ *     tags: [Environment History]
+ *     summary: Get daily temperature and humidity averages for a cultivation session
+ *     description: Groups the stored 10-minute averages by Vietnam calendar day (Asia/Ho_Chi_Minh). Periods shared by multiple floors are averaged before computing the daily average. Customers may access only their own session.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Daily average chart points and contributing 10-minute bucket counts }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Unsupported role }
+ *       404: { description: Session not found or not accessible }
+ */
+router.get('/sessions/:sessionId/daily-averages', ...allowedUsers, controller.sessionDailyAverages);
+
+/**
+ * @openapi
  * /api/environment-history/sessions/{sessionId}:
  *   get:
  *     tags: [Environment History]
