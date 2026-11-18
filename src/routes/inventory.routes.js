@@ -405,8 +405,8 @@ router.use(authenticate, authorizeRoles(1, 2));
  *       "tags": [
  *         "Inventory"
  *       ],
- *       "summary": "Adjust inventory balance",
- *       "description": "Admin (role_id 1) and Farm Operator (role_id 2) only.",
+ *       "summary": "Add quantity to inventory",
+ *       "description": "Adds quantity to the existing balance for inventoryId and records an IN transaction. Only quantity is required in the body. Admin (role_id 1) and Farm Operator (role_id 2) only.",
  *       "security": [
  *         {
  *           "bearerAuth": []
@@ -485,13 +485,14 @@ router.use(authenticate, authorizeRoles(1, 2));
  *               "type": "object",
  *               "additionalProperties": false,
  *               "required": [
- *                 "quantity",
- *                 "notes"
+ *                 "quantity"
  *               ],
  *               "properties": {
  *                 "quantity": {
  *                   "type": "number",
  *                   "minimum": 0,
+ *                   "exclusiveMinimum": true,
+ *                   "description": "Quantity to add to the current inventory balance",
  *                   "example": 50
  *                 },
  *                 "notes": {

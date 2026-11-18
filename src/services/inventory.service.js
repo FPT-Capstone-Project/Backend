@@ -12,10 +12,10 @@ function body(payload, create) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload) || Object.keys(payload).some(key => !(create ? ['mushroomTypeId', 'quantity', 'notes'] : ['quantity', 'notes']).includes(key))) {
     throw new AppError('Invalid inventory fields', 400);
   }
-  if (typeof payload.quantity !== 'number' || !Number.isFinite(payload.quantity) || payload.quantity < 0 || (create && payload.quantity === 0)) {
-    throw new AppError(`quantity must be a ${create ? 'positive' : 'non-negative'} number`, 400);
+  if (typeof payload.quantity !== 'number' || !Number.isFinite(payload.quantity) || payload.quantity <= 0) {
+    throw new AppError('quantity must be a positive number', 400);
   }
-  if ((payload.notes !== undefined && typeof payload.notes !== 'string') || (!create && !payload.notes?.trim())) {
+  if (payload.notes !== undefined && typeof payload.notes !== 'string') {
     throw new AppError('notes must contain an adjustment reason', 400);
   }
   return { ...payload, notes: payload.notes?.trim() || null };
@@ -76,9 +76,8 @@ module.exports = {
     const data = body(payload, false);
     return transaction(async client => {
       const row = await existing(client, inventory);
-      if (Number(row.quantity) === data.quantity) return row;
       const updated = await model.update(client, inventory, data.quantity);
-      await model.record(client, inventory, 'ADJUST', row.quantity, updated.quantity, data.notes);
+      await model.record(client, inventory, 'IN', row.quantity, updated.quantity, data.notes);
       return updated;
     });
   },
