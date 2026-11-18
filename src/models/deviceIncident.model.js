@@ -15,8 +15,9 @@ const nodeHealthy = `EXISTS (SELECT 1 FROM iot_sensor_latest ns
 
 function deviceLabel(incident) {
   if (incident.device_type === 'MASTER') return `Mạch master ${incident.master_id}`;
-  if (incident.device_type === 'NODE') return `Node ${incident.node_address} của tầng ID ${incident.floor_id}`;
-  return `Cảm biến ${incident.sensor_address} của tầng ID ${incident.floor_id}`;
+  const floor = incident.floor_name || `tầng ID ${incident.floor_id}`;
+  if (incident.device_type === 'NODE') return `Node ${incident.node_address} của ${floor}`;
+  return `Cảm biến ${incident.sensor_address} của ${floor}`;
 }
 
 function deviceName(incident) {
@@ -53,6 +54,8 @@ async function recover(db) {
             AND (i.device_type='NODE' OR (s.sensor_address=i.sensor_address AND s.is_valid))
         ))) RETURNING i.*`, [MAX_AGE_SECONDS]);
   for (const incident of rows) {
+    const floor = incident.floor_id == null ? null
+      : (await db.query('SELECT floor_name FROM cultivation_floors WHERE floor_id=$1', [incident.floor_id])).rows[0];
     await db.query(`INSERT INTO notifications
       (user_id,notification_type,title,message,reference_type,reference_id)
       SELECT DISTINCT u.user_id,'DEVICE_ISSUE',$2::text,$3::text,'DEVICE_INCIDENT',$1::integer
@@ -60,7 +63,7 @@ async function recover(db) {
         SELECT 1 FROM notifications n WHERE n.user_id=u.user_id
           AND n.reference_type='DEVICE_INCIDENT' AND n.reference_id=$1))`,
     [incident.incident_id, `${deviceName(incident)} đã phục hồi`,
-      `${deviceLabel(incident)} đã hoạt động trở lại. Hệ thống đã tự động xác nhận sự cố được giải quyết, không cần xác nhận thủ công.`]);
+      `${deviceLabel({ ...incident, floor_name: floor?.floor_name })} đã hoạt động trở lại. Hệ thống đã tự động xác nhận sự cố được giải quyết, không cần xác nhận thủ công.`]);
   }
 }
 
@@ -74,14 +77,15 @@ async function scan() {
         FROM cultivation_floors f JOIN iot_masters m ON m.id=f.master_id
         WHERE f.status='ACTIVE' AND f.updated_at < now() - make_interval(secs => $1)
       )
-      SELECT DISTINCT NULL::integer AS floor_id, master_id, NULL::integer AS node_address,
-        NULL::integer AS sensor_address, 'MASTER' AS device_type, 'MASTER_OFFLINE' AS reason
+      SELECT DISTINCT NULL::integer AS floor_id, NULL::text AS floor_name, master_id,
+        NULL::integer AS node_address, NULL::integer AS sensor_address,
+        'MASTER' AS device_type, 'MASTER_OFFLINE' AS reason
       FROM floors WHERE NOT master_healthy
       UNION ALL
-      SELECT floor_id, master_id, node_address, NULL::integer, 'NODE', 'NODE_NO_TELEMETRY'
+      SELECT floor_id, floor_name, master_id, node_address, NULL::integer, 'NODE', 'NODE_NO_TELEMETRY'
       FROM floors WHERE master_healthy AND NOT node_healthy
       UNION ALL
-      SELECT f.floor_id, f.master_id, f.node_address, a.sensor_address, 'SENSOR',
+      SELECT f.floor_id, f.floor_name, f.master_id, f.node_address, a.sensor_address, 'SENSOR',
         CASE WHEN s.master_id IS NULL THEN 'MISSING'
           WHEN NOT s.is_valid THEN 'INVALID' ELSE 'STALE' END AS reason
       FROM floors f CROSS JOIN generate_series(1,3) a(sensor_address)
@@ -98,7 +102,7 @@ async function scan() {
       [sensor.floor_id, sensor.master_id, sensor.node_address, sensor.sensor_address, sensor.reason, sensor.device_type]);
       const incident = result.rows[0];
       if (!incident) continue;
-      const location = deviceLabel(incident);
+      const location = deviceLabel({ ...incident, floor_name: sensor.floor_name });
       await db.query(`INSERT INTO notifications
         (user_id,notification_type,title,message,reference_type,reference_id)
         SELECT DISTINCT u.user_id,'DEVICE_ISSUE',$6::text,
@@ -146,8 +150,10 @@ async function resolve(userId, notificationId, note) {
 
 async function details(userId, ids) {
   const { rows } = await pool.query(`SELECT i.*,
-    false AS can_confirm_repair
-    FROM device_incidents i CROSS JOIN users u
+    f.floor_name, false AS can_confirm_repair
+    FROM device_incidents i
+    LEFT JOIN cultivation_floors f ON f.floor_id=i.floor_id
+    CROSS JOIN users u
     WHERE u.user_id=$1 AND i.incident_id=ANY($2::integer[])
       AND EXISTS (SELECT 1 FROM notifications n WHERE n.user_id=u.user_id
         AND n.reference_type='DEVICE_INCIDENT' AND n.reference_id=i.incident_id)`, [userId, ids]);
