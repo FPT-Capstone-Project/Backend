@@ -3,6 +3,9 @@ const orderController = require('../controllers/order.controller');
 const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 
 const router = express.Router();
+router.post('/:orderId/complaints', authenticate, authorizeRoles(3),
+  require('../middlewares/upload.middleware').array('images', 10),
+  require('../controllers/complaint.controller').create);
 const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
 
 /**

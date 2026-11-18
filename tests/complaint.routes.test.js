@@ -1,0 +1,65 @@
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const express = require('express');
+const jwt = require('jsonwebtoken');
+
+test('complaint routes validate inputs and enforce authenticated role access', async () => {
+  const paths = ['../src/models/user.model', '../src/services/auth.service', '../src/models/complaint.model'];
+  const saved = paths.map((path) => [require.resolve(path), require.cache[require.resolve(path)]]);
+  const calls = [];
+  require.cache[saved[0][0]] = { exports: { findById: async (id) => ({ user_id: id, role_id: id, status: 'ACTIVE' }) } };
+  require.cache[saved[1][0]] = { exports: { sanitizeUser: (user) => user } };
+  require.cache[saved[2][0]] = { exports: {
+    create: async (data, actor, images) => { calls.push({ data, actor }); return { ...data, image_urls: await images() }; },
+    list: async () => ({ data: [], total: 0 }),
+    detail: async (id) => ({ complaint_id: id }),
+    reply: async (id, message, actor) => ({ complaint_id: id, message, sender_id: actor.user_id }),
+    update: async (id, data) => ({ complaint_id: id, ...data }),
+  } };
+  const app = express();
+  app.use(express.json());
+  app.use('/api/orders', require('../src/routes/order.routes'));
+  app.use('/api/complaints', require('../src/routes/complaint.routes'));
+  app.use((error, req, res, next) => res.status(error.statusCode || 500).json({ message: error.message }));
+  const server = app.listen(0, '127.0.0.1');
+  await new Promise((resolve) => server.once('listening', resolve));
+  const request = (path, role, method = 'GET', body) => fetch(`http://127.0.0.1:${server.address().port}${path.startsWith('/orders/') ? '/api' + path : '/api/complaints' + path}`, {
+    method, headers: { 'content-type': 'application/json', ...(role ? { authorization: `Bearer ${jwt.sign({ sub: String(role) }, require('../src/config/env').jwtSecret)}` } : {}) },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  try {
+    assert.equal((await request('', null)).status, 401);
+    assert.equal((await request('', 3)).status, 403);
+    assert.equal((await request('', 1)).status, 200);
+    assert.equal((await request('', 2)).status, 200);
+    assert.equal((await request('/my/1', 3)).status, 200);
+    assert.equal((await request('/my/1', 1)).status, 403);
+    assert.equal((await request('/bad', 3)).status, 400);
+    assert.equal((await request('/my?page=0', 3)).status, 400);
+    assert.equal((await request('/1/assign', 3, 'PATCH', { assignedTo: 1 })).status, 403);
+    assert.equal((await request('/1/assign', 2, 'PATCH', { assignedTo: 1 })).status, 200);
+    assert.equal((await request('/1/assign', 1, 'PATCH', { assignedTo: 'bad' })).status, 400);
+    assert.equal((await request('/1/status', 1, 'PATCH', { status: 'PENDING' })).status, 400);
+    assert.equal((await request('/1/replies', 3, 'POST', { message: '' })).status, 400);
+    assert.equal((await request('/1/replies', 2, 'POST', { message: 'Staff response' })).status, 201);
+    const payload = { complaintType: 'DAMAGED', description: 'Damaged mushrooms', imageUrls: ['https://example.test/image.jpg'], customer_id: 99, status: 'RESOLVED' };
+    assert.equal((await request('/orders/1/complaints', 1, 'POST', payload)).status, 403);
+    assert.equal((await request('/orders/1/complaints', 3, 'POST', { ...payload, imageUrls: ['javascript:alert(1)'] })).status, 400);
+    assert.equal((await request('/orders/bad/complaints', 3, 'POST', payload)).status, 400);
+    assert.equal((await request('/orders/1/complaints', 3, 'POST', { ...payload, imageUrls: 'https://example.test' })).status, 400);
+    const response = await request('/orders/1/complaints', 3, 'POST', payload);
+    assert.equal(response.status, 201);
+    assert.deepEqual((await response.json()).data.image_urls, payload.imageUrls);
+    assert.equal(calls[0].actor.user_id, 3);
+    assert.equal(calls[0].data.orderId, 1);
+    assert.equal(calls[0].data.shipmentId, undefined);
+    assert.equal((await request('/orders/1/complaints', null, 'POST', payload)).status, 401);
+    assert.equal((await request('', 3, 'POST', payload)).status, 404);
+    assert.equal(calls[0].data.status, undefined);
+    assert.equal(calls[0].data.customer_id, undefined);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve) => server.close(resolve));
+    saved.forEach(([path, previous]) => { if (previous) require.cache[path] = previous; else delete require.cache[path]; });
+  }
+});
