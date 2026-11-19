@@ -95,11 +95,15 @@ async function setupDatabase() {
       next_action TEXT,
       reported_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       resolved_at TIMESTAMPTZ,
+      resolved_by INTEGER,
       CHECK (
         (session_tray_id IS NOT NULL AND spawn_inspection_id IS NULL)
         OR (session_tray_id IS NULL AND spawn_inspection_id IS NOT NULL)
       ),
-      CHECK (status IN ('OPEN', 'WAITING_EXPERT', 'IN_PROGRESS', 'MONITORING', 'RESOLVED'))
+      CHECK (status IN (
+        'OPEN', 'WAITING_EXPERT', 'IN_PROGRESS', 'MONITORING',
+        'WAITING_REVIEW', 'RESOLVED'
+      ))
     );
     CREATE TABLE expert_consultations (
       consultation_id SERIAL PRIMARY KEY,
@@ -111,6 +115,7 @@ async function setupDatabase() {
       status TEXT NOT NULL DEFAULT 'PENDING',
       created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
       responded_at TIMESTAMPTZ,
+      closed_at TIMESTAMPTZ,
       CHECK (status IN ('PENDING', 'IN_PROGRESS', 'ANSWERED', 'CLOSED'))
     );
     CREATE TABLE disease_treatment_logs (
@@ -131,6 +136,18 @@ async function setupDatabase() {
       uploaded_by INTEGER NOT NULL,
       uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE TABLE expert_treatment_reviews (
+      review_id BIGSERIAL PRIMARY KEY,
+      issue_id INTEGER NOT NULL,
+      treatment_log_id BIGINT,
+      reviewed_by INTEGER NOT NULL,
+      review_result TEXT NOT NULL CHECK (review_result IN (
+        'APPROVED', 'NEEDS_MORE_ACTION', 'NEEDS_MORE_INFORMATION', 'RESOLVED'
+      )),
+      review_comment TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      CHECK (review_result = 'RESOLVED' OR treatment_log_id IS NOT NULL)
+    );
     CREATE TABLE notifications (
       notification_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL,
@@ -149,7 +166,7 @@ async function setupDatabase() {
       (1, 'Admin'), (2, 'Farm Operator'), (3, 'Customer'), (4, 'Mushroom Expert');
     INSERT INTO users (user_id, role_id, full_name) VALUES
       (1, 1, 'Admin'), (2, 2, 'Operator'), (3, 3, 'Customer'),
-      (4, 4, 'Expert'), (5, 3, 'Other Customer');
+      (4, 4, 'Expert'), (5, 3, 'Other Customer'), (6, 4, 'Other Expert');
     INSERT INTO orders (user_id, payment_status) VALUES (3, 'PAID'), (5, 'PAID');
     INSERT INTO mushroom_types VALUES (1, 'Oyster');
     INSERT INTO order_items (order_id, mushroom_type_id) VALUES (1, 1), (2, 1);
@@ -249,23 +266,52 @@ test('WF-06 validates issue sources and enforces customer ownership through trea
       question: 'Please diagnose the discoloration.',
     });
     assert.equal(consultation.status, 'PENDING');
+    assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).status, 'WAITING_EXPERT');
+    assert.equal(
+      (await service.getConsultation(user(6, 4), consultation.consultation_id)).status,
+      'PENDING',
+    );
+    assert.equal(
+      (await service.listConsultations(user(6, 4))).consultations
+        .some(row => row.consultation_id === consultation.consultation_id),
+      true,
+    );
+    await assert.rejects(
+      service.respondToConsultation(user(2, 2), consultation.consultation_id, {
+        diagnosis: 'Not an expert.',
+        solution: 'This should be rejected.',
+      }),
+      { statusCode: 403 },
+    );
     const operatorIssues = await service.listIssues(user(2, 2), { sessionId: 1 });
     assert.equal(operatorIssues.issues.find(row => row.issue_id === issue.issue_id).latest_consultation_id, consultation.consultation_id);
     assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).latest_consultation_id, consultation.consultation_id);
-    const assigned = await service.assignConsultation(user(4, 4), consultation.consultation_id);
-    assert.equal(assigned.expert_id, 4);
-    const response = await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
+    const response = await service.respondToConsultation(user(6, 4), consultation.consultation_id, {
       diagnosis: 'Likely surface contamination.',
       solution: 'Isolate the tray and improve ventilation.',
     });
     assert.equal(response.status, 'ANSWERED');
-    await service.closeConsultation(user(4, 4), consultation.consultation_id);
+    const issueAfterResponse = await service.getIssue(user(2, 2), issue.issue_id);
+    assert.equal(issueAfterResponse.status, 'IN_PROGRESS');
+    assert.equal(issueAfterResponse.responding_expert_id, 6);
+    assert.equal(
+      (await service.getConsultation(user(4, 4), consultation.consultation_id)).status,
+      'ANSWERED',
+    );
+    await assert.rejects(
+      service.resolveIssue(user(4, 4), issue.issue_id),
+      { statusCode: 409 },
+    );
 
+    const treatmentCreatedAt = Date.now();
     const treatment = await service.createTreatment(user(2, 2), consultation.consultation_id, {
       actionDescription: 'Isolated tray and adjusted ventilation.',
       resultDescription: 'No further spread observed; requesting review.',
+      performedAt: '2000-01-01T00:00:00.000Z',
     });
     assert.equal(treatment.action_description, 'Isolated tray and adjusted ventilation.');
+    assert.ok(Math.abs(Date.parse(treatment.performed_at) - treatmentCreatedAt) < 5000);
+    assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).status, 'WAITING_REVIEW');
     const media = await service.addTreatmentMedia(user(2, 2), treatment.treatment_log_id, {
       originalname: 'after.mp4',
       mimetype: 'video/mp4',
@@ -277,30 +323,41 @@ test('WF-06 validates issue sources and enforces customer ownership through trea
       mimetype: 'image/jpeg',
     }, { mediaStage: 'AFTER' });
 
+    await assert.rejects(
+      service.createTreatment(user(2, 2), consultation.consultation_id, {
+        actionDescription: 'Submit another update before review.',
+      }),
+      { statusCode: 409 },
+    );
+    const firstReview = await service.reviewTreatment(user(4, 4), treatment.treatment_log_id, {
+      reviewResult: 'NEEDS_MORE_ACTION',
+      reviewComment: 'Continue the ventilation adjustment and monitor growth.',
+    });
+    assert.equal(firstReview.issue_status, 'IN_PROGRESS');
+    await assert.rejects(
+      service.reviewTreatment(user(4, 4), treatment.treatment_log_id, {
+        reviewResult: 'APPROVED',
+      }),
+      { statusCode: 409 },
+    );
+
     const reviewedTreatment = await service.createTreatment(user(2, 2), consultation.consultation_id, {
       actionDescription: 'Completed follow-up and documented outcome.',
       resultDescription: 'The issue is stable and ready for expert review.',
     });
+    assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).status, 'WAITING_REVIEW');
     const lockedMedia = await service.addTreatmentMedia(user(2, 2), reviewedTreatment.treatment_log_id, {
       originalname: 'review.jpg',
       mimetype: 'image/jpeg',
     }, { mediaStage: 'AFTER' });
-    await service.changeIssueStatus(user(2, 2), issue.issue_id, 'MONITORING');
-    assert.equal(
-      (await db.query('SELECT status FROM cultivation_issues WHERE issue_id = $1', [issue.issue_id]))
-        .rows[0].status,
-      'MONITORING',
-    );
-    await assert.rejects(
-      service.deleteTreatmentMedia(user(2, 2), reviewedTreatment.treatment_log_id, lockedMedia.media_id),
-      { statusCode: 409 },
-    );
     const timeline = await service.customerIssue(user(3, 3), issue.issue_id, true);
-    assert.equal(timeline.issue.status, 'MONITORING');
+    assert.equal(timeline.issue.status, 'WAITING_REVIEW');
     assert.equal(timeline.consultations[0].treatments[0].media.length, 1);
     assert.equal(timeline.consultations[0].treatments.length, 2);
     await assert.rejects(
-      service.resolveIssue(user(2, 2), issue.issue_id),
+      service.reviewTreatment(user(2, 2), reviewedTreatment.treatment_log_id, {
+        reviewResult: 'APPROVED',
+      }),
       { statusCode: 403 },
     );
     await assert.rejects(
@@ -315,14 +372,42 @@ test('WF-06 validates issue sources and enforces customer ownership through trea
       service.listConsultations(user(2, 2)),
       { statusCode: 403 },
     );
-    const resolved = await service.resolveIssue(user(4, 4), issue.issue_id);
+    const approvedReview = await service.reviewTreatment(user(6, 4), reviewedTreatment.treatment_log_id, {
+      reviewResult: 'APPROVED',
+      reviewComment: 'Treatment was performed correctly; keep monitoring.',
+    });
+    assert.equal(approvedReview.issue_status, 'MONITORING');
+    assert.equal(
+      (await service.getConsultation(user(4, 4), consultation.consultation_id)).status,
+      'ANSWERED',
+    );
+    assert.equal((await service.getTreatments(user(2, 2), consultation.consultation_id)).length, 2);
+    const resolved = await service.resolveIssue(user(6, 4), issue.issue_id, {
+      reviewComment: 'Confirmed the issue is resolved.',
+    });
     assert.equal(resolved.status, 'RESOLVED');
+    assert.equal(resolved.resolved_by, 6);
+    assert.ok(resolved.resolved_at);
+    await assert.rejects(
+      service.deleteTreatmentMedia(user(2, 2), reviewedTreatment.treatment_log_id, lockedMedia.media_id),
+      { statusCode: 409 },
+    );
+    const finalConsultation = await service.getConsultation(user(4, 4), consultation.consultation_id);
+    assert.equal(finalConsultation.status, 'CLOSED');
+    assert.ok(finalConsultation.closed_at);
+    assert.equal((await service.getIssue(user(2, 2), issue.issue_id)).resolved_at !== null, true);
+    const finalTimeline = await service.customerIssue(user(3, 3), issue.issue_id, true);
+    assert.equal(finalTimeline.consultations[0].treatments[0].reviews[0].review_result, 'NEEDS_MORE_ACTION');
+    assert.equal(finalTimeline.consultations[0].treatments[1].reviews[0].review_result, 'APPROVED');
+    assert.equal(finalTimeline.consultations[0].treatments.length, 2);
+    assert.equal(finalTimeline.reviews.length, 3);
+    assert.equal(finalTimeline.reviews[2].review_result, 'RESOLVED');
   } finally {
     await db.close();
   }
 });
 
-test('WF-06 supports an expert information request and operator follow-up', async () => {
+test('WF-06 allows an operator to add information while an expert is diagnosing', async () => {
   const db = await setupDatabase();
   try {
     const service = loadService(db);
@@ -342,20 +427,19 @@ test('WF-06 supports an expert information request and operator follow-up', asyn
     const consultation = await service.createConsultation(user(2, 2), issue.issue_id, {
       question: 'Please review this growth issue.',
     });
-    await service.assignConsultation(user(4, 4), consultation.consultation_id);
-    await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
-      diagnosis: 'More information is needed.',
-      needsMoreInfo: true,
-    });
     const message = await service.addConsultationMessage(user(2, 2), consultation.consultation_id, {
       message: 'Added a new close-up image and sensor reading context.',
     });
     assert.equal(message.message, 'Added a new close-up image and sensor reading context.');
+    await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
+      diagnosis: 'The growth is likely affected by low airflow.',
+      solution: 'Increase ventilation and monitor the tray.',
+    });
     const updatedConsultation = await service.getConsultation(
       user(4, 4),
       consultation.consultation_id,
     );
-    assert.equal(updatedConsultation.status, 'IN_PROGRESS');
+    assert.equal(updatedConsultation.status, 'ANSWERED');
     assert.equal(updatedConsultation.messages.length, 2);
     assert.equal(updatedConsultation.issue_status, 'IN_PROGRESS');
   } finally {
@@ -407,18 +491,19 @@ test('WF-06 uses only tables and statuses in the supplied database', async () =>
 
     assert.equal(consultation.status, 'PENDING');
     assert.equal(storedIssue.rows[0].status, 'WAITING_EXPERT');
-    await service.assignConsultation(user(4, 4), consultation.consultation_id);
-    await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
-      diagnosis: 'Possible contamination.',
-      needsMoreInfo: true,
-    });
     await service.addConsultationMessage(user(2, 2), consultation.consultation_id, {
       message: 'Added details.',
+    });
+    await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
+      diagnosis: 'Possible contamination.',
+      solution: 'Isolate the affected spawn.',
     });
     const consultationDetail = await service.getConsultation(user(4, 4), consultation.consultation_id);
     assert.equal(consultationDetail.messages.length, 2);
     assert.match(consultationDetail.question, /Added details\./);
-    assert.equal(notifications.rows.length, 2);
+    assert.equal(consultationDetail.status, 'ANSWERED');
+    assert.equal(consultationDetail.issue_status, 'IN_PROGRESS');
+    assert.equal(notifications.rows.length, 3);
   } finally {
     await db.close();
   }

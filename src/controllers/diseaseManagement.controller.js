@@ -15,18 +15,13 @@ async function getIssue(req, res) {
   res.json({ data: issue });
 }
 
-async function changeIssueStatus(req, res) {
-  const issue = await diseaseService.changeIssueStatus(
+async function resolveIssue(req, res) {
+  const issue = await diseaseService.resolveIssue(
     req.user,
     req.params.issueId,
-    req.body?.status,
+    req.body || {},
   );
-  res.json({ message: 'Issue status updated successfully', data: issue });
-}
-
-async function resolveIssue(req, res) {
-  const issue = await diseaseService.resolveIssue(req.user, req.params.issueId);
-  res.json({ message: 'Issue resolved successfully', data: issue });
+  res.json({ message: 'Issue resolution confirmed successfully', data: issue });
 }
 
 async function addIssueMedia(req, res) {
@@ -67,15 +62,6 @@ async function getConsultation(req, res) {
   res.json({ data: consultation });
 }
 
-async function assignConsultation(req, res) {
-  const consultation = await diseaseService.assignConsultation(
-    req.user,
-    req.params.consultationId,
-    req.body || {},
-  );
-  res.json({ message: 'Consultation assigned successfully', data: consultation });
-}
-
 async function respondToConsultation(req, res) {
   const consultation = await diseaseService.respondToConsultation(
     req.user,
@@ -83,11 +69,6 @@ async function respondToConsultation(req, res) {
     req.body || {},
   );
   res.json({ message: 'Consultation response submitted successfully', data: consultation });
-}
-
-async function closeConsultation(req, res) {
-  const consultation = await diseaseService.closeConsultation(req.user, req.params.consultationId);
-  res.json({ message: 'Consultation closed successfully', data: consultation });
 }
 
 async function createTreatment(req, res) {
@@ -102,6 +83,15 @@ async function createTreatment(req, res) {
 async function getTreatments(req, res) {
   const treatments = await diseaseService.getTreatments(req.user, req.params.consultationId);
   res.json({ data: treatments });
+}
+
+async function reviewTreatment(req, res) {
+  const review = await diseaseService.reviewTreatment(
+    req.user,
+    req.params.treatmentLogId,
+    req.body || {},
+  );
+  res.json({ message: 'Treatment reviewed successfully', data: review });
 }
 
 async function addTreatmentMedia(req, res) {
@@ -142,17 +132,15 @@ module.exports = {
   createIssue,
   listIssues,
   getIssue,
-  changeIssueStatus,
   resolveIssue,
   addIssueMedia,
   createConsultation,
   addConsultationMessage,
   listConsultations,
   getConsultation,
-  assignConsultation,
   respondToConsultation,
-  closeConsultation,
   createTreatment,
+  reviewTreatment,
   getTreatments,
   addTreatmentMedia,
   deleteTreatmentMedia,
