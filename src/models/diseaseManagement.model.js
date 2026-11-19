@@ -202,7 +202,7 @@ async function findIssue(issueId) {
             mt.name AS mushroom_name, reporter.full_name AS reported_by_name,
             (SELECT ec.expert_id FROM expert_consultations ec
              WHERE ec.issue_id = ci.issue_id
-             ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS assigned_expert_id,
+             ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS responding_expert_id,
             spawn_inspection.stage AS spawn_stage
      FROM cultivation_issues ci
      LEFT JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
@@ -299,44 +299,6 @@ async function createIssueMedia(issueId, media, uploadedBy, caption) {
   }
 }
 
-async function updateIssueStatus(issueId, status, expectedStatus) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const result = await client.query(
-      `UPDATE cultivation_issues
-       SET status = $2,
-           resolved_at = CASE WHEN $2 = 'RESOLVED' THEN now()
-                              ELSE resolved_at END
-       WHERE issue_id = $1 AND status = $3
-       RETURNING *`,
-      [issueId, status, expectedStatus],
-    );
-    if (!result.rows[0]) {
-      throw new AppError('Issue status changed; reload before applying this transition', 409);
-    }
-    await client.query('COMMIT');
-    return result.rows[0];
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
-async function hasTreatmentResult(issueId) {
-  const result = await pool.query(
-    `SELECT 1
-     FROM disease_treatment_logs dt
-     INNER JOIN expert_consultations ec ON ec.consultation_id = dt.consultation_id
-     WHERE ec.issue_id = $1 AND NULLIF(BTRIM(dt.result_description), '') IS NOT NULL
-     LIMIT 1`,
-    [issueId],
-  );
-  return Boolean(result.rows[0]);
-}
-
 async function createConsultation(issueId, question, createdBy) {
   const client = await pool.connect();
   try {
@@ -347,7 +309,7 @@ async function createConsultation(issueId, question, createdBy) {
     );
     const issue = issueResult.rows[0];
     if (!issue) throw new AppError('Issue not found', 404);
-    if (!['OPEN', 'IN_PROGRESS', 'MONITORING'].includes(issue.status)) {
+    if (issue.status !== 'OPEN') {
       throw new AppError('Issue is not ready for a new expert consultation', 409);
     }
     const consultationResult = await client.query(
@@ -398,7 +360,7 @@ async function createConsultationMessage(consultationId, message, senderId) {
     const createdAt = new Date().toISOString();
     const messageSuffix = `\n\n[OPERATOR_FOLLOW_UP:${createdAt}]\n${message}`;
     const result = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status, ec.expert_id,
+      `SELECT ec.consultation_id, ec.issue_id, ec.status,
               ci.title, ci.status AS issue_status
        FROM expert_consultations ec
        INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
@@ -408,37 +370,37 @@ async function createConsultationMessage(consultationId, message, senderId) {
     );
     const consultation = result.rows[0];
     if (!consultation) throw new AppError('Consultation not found', 404);
-    if (consultation.status !== 'PENDING' || consultation.expert_id === null) {
-      throw new AppError('This consultation is not waiting for additional information', 409);
-    }
-    if (consultation.issue_status !== 'WAITING_EXPERT') {
-      throw new AppError('Issue is not waiting for additional information', 409);
+    const canAddInformation = (
+      consultation.status === 'PENDING' && consultation.issue_status === 'WAITING_EXPERT'
+    ) || (
+      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'IN_PROGRESS'
+    );
+    if (!canAddInformation) {
+      throw new AppError('Consultation is not open for additional information', 409);
     }
     await client.query(
       `UPDATE expert_consultations
-       SET question = question || $2, status = 'IN_PROGRESS'
+       SET question = question || $2
        WHERE consultation_id = $1`,
       [consultationId, messageSuffix],
     );
     await client.query(
-      `UPDATE cultivation_issues SET status = 'IN_PROGRESS' WHERE issue_id = $1`,
-      [consultation.issue_id],
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by, reference_type, reference_id
+       )
+       SELECT u.user_id, 'MUSHROOM_DISEASE', 'Additional issue information provided',
+              $1, $2, 'EXPERT_CONSULTATION', $3
+       FROM users u
+       INNER JOIN roles r ON r.role_id = u.role_id
+       WHERE u.status = 'ACTIVE'
+         AND (u.role_id = 1 OR lower(regexp_replace(r.role_name, '[ _-]', '', 'g')) LIKE '%expert%')
+         AND u.user_id <> $2`,
+      [
+        `The operator added information for issue "${consultation.title}".`,
+        senderId,
+        consultationId,
+      ],
     );
-    if (consultation.expert_id !== null) {
-      await client.query(
-        `INSERT INTO notifications (
-           user_id, notification_type, title, message, created_by, reference_type, reference_id
-         )
-         VALUES ($1, 'MUSHROOM_DISEASE', 'Additional issue information provided',
-                 $2, $3, 'EXPERT_CONSULTATION', $4)`,
-        [
-          consultation.expert_id,
-          `The operator added information for issue "${consultation.title}".`,
-          senderId,
-          consultationId,
-        ],
-      );
-    }
     await client.query('COMMIT');
     return {
       consultation_id: consultationId,
@@ -554,52 +516,12 @@ async function findConsultation(consultationId) {
   return result.rows[0] || null;
 }
 
-async function assignConsultation(consultationId, expertId) {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    const consultationResult = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status, ec.expert_id,
-              ci.status AS issue_status
-       FROM expert_consultations ec
-       INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
-       WHERE ec.consultation_id = $1 FOR UPDATE OF ec, ci`,
-      [consultationId],
-    );
-    const consultation = consultationResult.rows[0];
-    if (!consultation) throw new AppError('Consultation not found', 404);
-    if (!['WAITING_EXPERT', 'IN_PROGRESS'].includes(consultation.issue_status)) {
-      throw new AppError('Issue is not open for expert assignment', 409);
-    }
-    if (!['PENDING', 'IN_PROGRESS'].includes(consultation.status)) {
-      throw new AppError('Consultation cannot be assigned in its current state', 409);
-    }
-    const result = await client.query(
-      `UPDATE expert_consultations
-       SET expert_id = $2, status = 'IN_PROGRESS'
-       WHERE consultation_id = $1 RETURNING *`,
-      [consultationId, expertId],
-    );
-    await client.query(
-      `UPDATE cultivation_issues SET status = 'IN_PROGRESS' WHERE issue_id = $1`,
-      [consultation.issue_id],
-    );
-    await client.query('COMMIT');
-    return result.rows[0];
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
-  }
-}
-
 async function respondToConsultation(consultationId, response, actorId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const result = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status, ec.expert_id,
+      `SELECT ec.consultation_id, ec.issue_id, ec.status,
               ci.reported_by, ci.title, ci.status AS issue_status
        FROM expert_consultations ec
        INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
@@ -609,35 +531,33 @@ async function respondToConsultation(consultationId, response, actorId) {
     );
     const consultation = result.rows[0];
     if (!consultation) throw new AppError('Consultation not found', 404);
-    if (consultation.status !== 'IN_PROGRESS') {
+    const canRespond = (
+      consultation.status === 'PENDING' && consultation.issue_status === 'WAITING_EXPERT'
+    ) || (
+      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'IN_PROGRESS'
+    );
+    if (!canRespond) {
       throw new AppError('Consultation is not open for a response', 409);
     }
-    if (consultation.issue_status !== 'IN_PROGRESS') {
-      throw new AppError('Issue is no longer open for expert diagnosis', 409);
-    }
-    const status = response.needsMoreInfo ? 'PENDING' : 'ANSWERED';
     const updated = await client.query(
       `UPDATE expert_consultations
-       SET diagnosis = $2, solution = $3, status = $4, responded_at = now()
+       SET diagnosis = $2, solution = $3, expert_id = $4,
+           status = 'ANSWERED', responded_at = now()
        WHERE consultation_id = $1 RETURNING *`,
-      [consultationId, response.diagnosis, response.solution ?? null, status],
+      [consultationId, response.diagnosis, response.solution, actorId],
     );
     await client.query(
-      `UPDATE cultivation_issues SET status = $2 WHERE issue_id = $1`,
-      [consultation.issue_id, response.needsMoreInfo ? 'WAITING_EXPERT' : 'IN_PROGRESS'],
+      `UPDATE cultivation_issues SET status = 'IN_PROGRESS' WHERE issue_id = $1`,
+      [consultation.issue_id],
     );
-    const notificationMessage = response.needsMoreInfo
-      ? `Expert requests more information for issue "${consultation.title}".`
-      : `Expert provided a diagnosis and treatment plan for issue "${consultation.title}".`;
     await client.query(
       `INSERT INTO notifications (
          user_id, notification_type, title, message, created_by, reference_type, reference_id
        )
-       VALUES ($1, 'MUSHROOM_DISEASE', $2, $3, $4, 'CULTIVATION_ISSUE', $5)`,
+       VALUES ($1, 'MUSHROOM_DISEASE', 'Expert diagnosis available', $2, $3, 'CULTIVATION_ISSUE', $4)`,
       [
         consultation.reported_by,
-        response.needsMoreInfo ? 'More information requested' : 'Expert diagnosis available',
-        notificationMessage,
+        `Expert provided a diagnosis and treatment plan for issue "${consultation.title}".`,
         actorId,
         consultation.issue_id,
       ],
@@ -650,22 +570,6 @@ async function respondToConsultation(consultationId, response, actorId) {
   } finally {
     client.release();
   }
-}
-
-async function closeConsultation(consultationId) {
-  const result = await pool.query(
-    `UPDATE expert_consultations
-     SET status = 'CLOSED'
-     WHERE consultation_id = $1 AND status = 'ANSWERED'
-     RETURNING *`,
-    [consultationId],
-  );
-  if (!result.rows[0]) {
-    const consultation = await findConsultation(consultationId);
-    if (!consultation) throw new AppError('Consultation not found', 404);
-    throw new AppError('Only a responded consultation can be closed', 409);
-  }
-  return result.rows[0];
 }
 
 async function createTreatment(consultationId, data, performedBy) {
@@ -683,23 +587,45 @@ async function createTreatment(consultationId, data, performedBy) {
     );
     const consultation = result.rows[0];
     if (!consultation) throw new AppError('Consultation not found', 404);
-    if (!['ANSWERED', 'CLOSED'].includes(consultation.consultation_status)
+    if (consultation.consultation_status !== 'ANSWERED'
       || !consultation.solution
-      || consultation.issue_status !== 'IN_PROGRESS') {
+      || !['IN_PROGRESS', 'MONITORING'].includes(consultation.issue_status)) {
       throw new AppError('A provided expert solution is required before recording treatment', 409);
     }
     const treatment = await client.query(
       `INSERT INTO disease_treatment_logs (
-         consultation_id, performed_by, action_description, result_description, performed_at
+         consultation_id, performed_by, action_description, result_description
        )
-       VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()))
+       VALUES ($1, $2, $3, $4)
        RETURNING *`,
       [
         consultationId,
         performedBy,
         data.actionDescription,
         data.resultDescription ?? null,
-        data.performedAt ?? null,
+      ],
+    );
+    await client.query(
+      `UPDATE cultivation_issues
+       SET status = 'WAITING_REVIEW'
+       WHERE issue_id = $1 AND status = $2`,
+      [consultation.issue_id, consultation.issue_status],
+    );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by, reference_type, reference_id
+       )
+       SELECT u.user_id, 'MUSHROOM_DISEASE', 'Treatment update submitted',
+              $1, $2, 'CULTIVATION_ISSUE', $3
+       FROM users u
+       INNER JOIN roles r ON r.role_id = u.role_id
+       WHERE u.status = 'ACTIVE'
+         AND (u.role_id = 1 OR lower(regexp_replace(r.role_name, '[ _-]', '', 'g')) LIKE '%expert%')
+         AND u.user_id <> $2`,
+      [
+        `Farm operator submitted a treatment update for issue ${consultation.issue_id}.`,
+        performedBy,
+        consultation.issue_id,
       ],
     );
     await client.query('COMMIT');
@@ -723,7 +649,20 @@ async function findTreatments(consultationId) {
                 'uploaded_at', tm.uploaded_at
               ) ORDER BY tm.uploaded_at, tm.media_id)
               FROM treatment_media tm WHERE tm.treatment_log_id = dt.treatment_log_id
-            ), '[]'::json) AS media
+            ), '[]'::json) AS media,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                'review_id', etr.review_id,
+                'review_result', etr.review_result,
+                'review_comment', etr.review_comment,
+                'reviewed_by', etr.reviewed_by,
+                'reviewed_by_name', reviewer.full_name,
+                'created_at', etr.created_at
+              ) ORDER BY etr.created_at, etr.review_id)
+              FROM expert_treatment_reviews etr
+              INNER JOIN users reviewer ON reviewer.user_id = etr.reviewed_by
+              WHERE etr.treatment_log_id = dt.treatment_log_id
+            ), '[]'::json) AS reviews
      FROM disease_treatment_logs dt
      INNER JOIN users u ON u.user_id = dt.performed_by
      WHERE dt.consultation_id = $1
@@ -745,12 +684,223 @@ async function findTreatment(treatmentLogId) {
   return result.rows[0] || null;
 }
 
+async function findIssueReviews(issueId) {
+  const result = await pool.query(
+    `SELECT tr.*, reviewer.full_name AS reviewed_by_name
+     FROM expert_treatment_reviews tr
+     INNER JOIN users reviewer ON reviewer.user_id = tr.reviewed_by
+     WHERE tr.issue_id = $1
+     ORDER BY tr.created_at, tr.review_id`,
+    [issueId],
+  );
+  return result.rows;
+}
+
+async function reviewTreatment(treatmentLogId, review, reviewerId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT dt.treatment_log_id, ec.consultation_id, ec.status AS consultation_status,
+              ec.issue_id, ci.status AS issue_status, ci.reported_by
+       FROM disease_treatment_logs dt
+       INNER JOIN expert_consultations ec ON ec.consultation_id = dt.consultation_id
+       INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
+       WHERE dt.treatment_log_id = $1
+       FOR UPDATE OF ec, ci`,
+      [treatmentLogId],
+    );
+    const treatment = result.rows[0];
+    if (!treatment) throw new AppError('Treatment log not found', 404);
+    if (treatment.issue_status !== 'WAITING_REVIEW'
+      || treatment.consultation_status !== 'ANSWERED') {
+      throw new AppError('Treatment is not waiting for expert review', 409);
+    }
+    const latestResult = await client.query(
+      `SELECT treatment_log_id
+       FROM disease_treatment_logs
+       WHERE consultation_id = $1
+       ORDER BY treatment_log_id DESC
+       LIMIT 1`,
+      [treatment.consultation_id],
+    );
+    if (Number(latestResult.rows[0]?.treatment_log_id) !== treatmentLogId) {
+      throw new AppError('Only the latest treatment update can be reviewed', 409);
+    }
+    const existingReview = await client.query(
+      `SELECT 1 FROM expert_treatment_reviews WHERE treatment_log_id = $1 LIMIT 1`,
+      [treatmentLogId],
+    );
+    if (existingReview.rows[0]) {
+      throw new AppError('Treatment has already been reviewed', 409);
+    }
+    const created = await client.query(
+      `INSERT INTO expert_treatment_reviews (
+         issue_id, treatment_log_id, reviewed_by, review_result, review_comment
+       )
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING *`,
+      [treatment.issue_id, treatmentLogId, reviewerId, review.result, review.comment ?? null],
+    );
+    const nextIssueStatus = review.result === 'APPROVED' ? 'MONITORING' : 'IN_PROGRESS';
+    const issueUpdate = await client.query(
+      `UPDATE cultivation_issues
+       SET status = $2,
+           resolved_at = NULL
+       WHERE issue_id = $1 AND status = 'WAITING_REVIEW'
+       RETURNING *`,
+      [treatment.issue_id, nextIssueStatus],
+    );
+    if (!issueUpdate.rows[0]) {
+      throw new AppError('Issue status changed; reload before reviewing this treatment', 409);
+    }
+    const approved = review.result === 'APPROVED';
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by, reference_type, reference_id
+       )
+       VALUES ($1, 'MUSHROOM_DISEASE', $2, $3, $4, 'CULTIVATION_ISSUE', $5)`,
+      [
+        treatment.reported_by,
+        approved ? 'Treatment approved' : 'More treatment required',
+        approved
+          ? `Expert approved the treatment update; issue ${treatment.issue_id} remains under monitoring.`
+          : `Expert requested additional treatment for issue ${treatment.issue_id}.`,
+        reviewerId,
+        treatment.issue_id,
+      ],
+    );
+    await client.query('COMMIT');
+    return { ...created.rows[0], issue_status: issueUpdate.rows[0].status };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function resolveIssue(issueId, reviewerId, comment) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const consultationIdResult = await client.query(
+      `SELECT consultation_id
+       FROM expert_consultations
+       WHERE issue_id = $1
+       ORDER BY created_at DESC, consultation_id DESC
+       LIMIT 1`,
+      [issueId],
+    );
+    const consultationId = consultationIdResult.rows[0]?.consultation_id;
+    if (!consultationId) {
+      const missingConsultationIssue = await client.query(
+        `SELECT issue_id, status, reported_by
+         FROM cultivation_issues
+         WHERE issue_id = $1
+         FOR UPDATE`,
+        [issueId],
+      );
+      if (!missingConsultationIssue.rows[0]) throw new AppError('Issue not found', 404);
+      throw new AppError('An answered consultation is required to resolve the issue', 409);
+    }
+    const consultationResult = await client.query(
+      `SELECT consultation_id, status
+       FROM expert_consultations
+       WHERE consultation_id = $1
+       FOR UPDATE`,
+      [consultationId],
+    );
+    const consultation = consultationResult.rows[0];
+    const issueResult = await client.query(
+      `SELECT issue_id, status, reported_by
+       FROM cultivation_issues
+       WHERE issue_id = $1
+       FOR UPDATE`,
+      [issueId],
+    );
+    const issue = issueResult.rows[0];
+    if (!issue) throw new AppError('Issue not found', 404);
+    if (issue.status !== 'MONITORING') {
+      throw new AppError('Only an issue under monitoring can be confirmed as resolved', 409);
+    }
+    if (!consultation || consultation.status !== 'ANSWERED') {
+      throw new AppError('An answered consultation is required to resolve the issue', 409);
+    }
+    const treatmentResult = await client.query(
+      `SELECT treatment_log_id
+       FROM disease_treatment_logs
+       WHERE consultation_id = $1
+       ORDER BY treatment_log_id DESC
+       LIMIT 1`,
+      [consultation.consultation_id],
+    );
+    const completionReview = await client.query(
+      `INSERT INTO expert_treatment_reviews (
+         issue_id, treatment_log_id, reviewed_by, review_result, review_comment
+       )
+       VALUES ($1, $2, $3, 'RESOLVED', $4)
+       RETURNING *`,
+      [issueId, treatmentResult.rows[0]?.treatment_log_id ?? null, reviewerId, comment ?? null],
+    );
+    const updatedIssue = await client.query(
+      `UPDATE cultivation_issues
+       SET status = 'RESOLVED', resolved_at = now(), resolved_by = $2
+       WHERE issue_id = $1 AND status = 'MONITORING'
+       RETURNING *`,
+      [issueId, reviewerId],
+    );
+    if (!updatedIssue.rows[0]) {
+      throw new AppError('Issue status changed; reload before confirming resolution', 409);
+    }
+    const closedConsultation = await client.query(
+      `UPDATE expert_consultations
+       SET status = 'CLOSED', closed_at = now()
+       WHERE consultation_id = $1 AND status = 'ANSWERED'
+       RETURNING consultation_id, closed_at`,
+      [consultation.consultation_id],
+    );
+    if (!closedConsultation.rows[0]) {
+      throw new AppError('Consultation could not be closed after resolution', 409);
+    }
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by, reference_type, reference_id
+       )
+       VALUES ($1, 'MUSHROOM_DISEASE', 'Issue resolved', $2, $3, 'CULTIVATION_ISSUE', $4)`,
+      [
+        issue.reported_by,
+        `Expert confirmed issue ${issueId} is resolved.`,
+        reviewerId,
+        issueId,
+      ],
+    );
+    await client.query('COMMIT');
+    return {
+      ...updatedIssue.rows[0],
+      consultation_status: 'CLOSED',
+      closed_at: closedConsultation.rows[0].closed_at,
+      completion_review: completionReview.rows[0],
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function createTreatmentMedia(treatmentLogId, media, uploadedBy, mediaStage, caption) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const status = await client.query(
-      `SELECT ci.status
+      `SELECT ci.status, dt.consultation_id,
+              (SELECT latest.treatment_log_id
+               FROM disease_treatment_logs latest
+               WHERE latest.consultation_id = dt.consultation_id
+               ORDER BY latest.treatment_log_id DESC
+               LIMIT 1) AS latest_treatment_log_id
        FROM disease_treatment_logs dt
        INNER JOIN expert_consultations ec ON ec.consultation_id = dt.consultation_id
        INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
@@ -758,8 +908,9 @@ async function createTreatmentMedia(treatmentLogId, media, uploadedBy, mediaStag
       [treatmentLogId],
     );
     if (!status.rows[0]) throw new AppError('Treatment log not found', 404);
-    if (['MONITORING', 'RESOLVED'].includes(status.rows[0].status)) {
-      throw new AppError('Treatment media is locked in its current state', 409);
+    if (status.rows[0].status !== 'WAITING_REVIEW'
+      || Number(status.rows[0].latest_treatment_log_id) !== treatmentLogId) {
+      throw new AppError('Only the latest treatment awaiting review can be updated', 409);
     }
     const result = await client.query(
       `INSERT INTO treatment_media (
@@ -789,7 +940,12 @@ async function createTreatmentMedia(treatmentLogId, media, uploadedBy, mediaStag
 
 async function findTreatmentMedia(mediaId) {
   const result = await pool.query(
-    `SELECT tm.*, dt.performed_by, ci.status AS issue_status
+    `SELECT tm.*, dt.performed_by, ci.status AS issue_status,
+            (SELECT latest.treatment_log_id
+             FROM disease_treatment_logs latest
+             WHERE latest.consultation_id = dt.consultation_id
+             ORDER BY latest.treatment_log_id DESC
+             LIMIT 1) AS latest_treatment_log_id
      FROM treatment_media tm
      INNER JOIN disease_treatment_logs dt ON dt.treatment_log_id = tm.treatment_log_id
      INNER JOIN expert_consultations ec ON ec.consultation_id = dt.consultation_id
@@ -853,8 +1009,9 @@ async function findCustomerIssue(issueId, userId) {
 async function findIssueTimeline(issueId) {
   const issue = await findIssue(issueId);
   if (!issue) return null;
-  const [issueMedia, consultationResult] = await Promise.all([
+  const [issueMedia, reviews, consultationResult] = await Promise.all([
     findIssueMedia(issueId),
+    findIssueReviews(issueId),
     pool.query(
       `SELECT ec.*, expert.full_name AS expert_name
        FROM expert_consultations ec
@@ -863,12 +1020,13 @@ async function findIssueTimeline(issueId) {
       [issueId],
     ),
   ]);
+  issue.reviews = reviews;
   const consultations = await Promise.all(consultationResult.rows.map(async (consultation) => ({
     ...consultation,
     messages: await findConsultationMessages(consultation.consultation_id),
     treatments: await findTreatments(consultation.consultation_id),
   })));
-  return { issue, media: issueMedia, consultations };
+  return { issue, media: issueMedia, reviews, consultations };
 }
 
 module.exports = {
@@ -877,19 +1035,18 @@ module.exports = {
   createIssue,
   findIssues,
   findIssue,
+  findIssueReviews,
   findIssueMedia,
   createIssueMedia,
-  updateIssueStatus,
-  hasTreatmentResult,
   createConsultation,
   createConsultationMessage,
   findConsultationMessages,
   findConsultations,
   findConsultation,
-  assignConsultation,
   respondToConsultation,
-  closeConsultation,
   createTreatment,
+  reviewTreatment,
+  resolveIssue,
   findTreatments,
   findTreatment,
   createTreatmentMedia,
