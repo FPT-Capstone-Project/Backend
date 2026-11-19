@@ -12,7 +12,6 @@ const sessionFloors = `
   INNER JOIN cultivation_floors f ON f.floor_id = t.floor_id
   INNER JOIN iot_masters m ON m.id = f.master_id
   WHERE s.session_id = $1
-    AND ($2::integer IS NULL OR f.floor_id = $2)
   GROUP BY s.session_id, s.start_at, s.end_at, f.floor_id, f.floor_name,
            f.master_id, f.node_address, f.misting_ssr_channel, m.light_ssr_channel
 `;
@@ -29,8 +28,8 @@ async function findSessionOwner(sessionId, userId) {
   return result.rows[0] || null;
 }
 
-async function findDeviceHistory(sessionId, { limit, offset, floorId = null }) {
-  const values = [sessionId, floorId, limit, offset];
+async function findDeviceHistory(sessionId, { limit, offset }) {
+  const values = [sessionId, limit, offset];
   const [count, events] = await Promise.all([
     pool.query(
       `WITH session_floors AS (${sessionFloors})
@@ -41,7 +40,7 @@ async function findDeviceHistory(sessionId, { limit, offset, floorId = null }) {
         AND (c.channel = sf.misting_ssr_channel OR c.channel = sf.light_ssr_channel)
         AND c.requested_at >= GREATEST(sf.start_at, sf.assigned_at)
         AND c.requested_at <= COALESCE(sf.end_at, now())`,
-      values.slice(0, 2),
+      values.slice(0, 1),
     ),
     pool.query(
       `WITH session_floors AS (${sessionFloors})
@@ -69,15 +68,15 @@ async function findDeviceHistory(sessionId, { limit, offset, floorId = null }) {
         AND c.requested_at <= COALESCE(sf.end_at, now())
        GROUP BY c.id
        ORDER BY c.requested_at DESC, c.id DESC
-       LIMIT $3 OFFSET $4`,
+       LIMIT $2 OFFSET $3`,
       values,
     ),
   ]);
   return { deviceEvents: events.rows, total: count.rows[0].total };
 }
 
-async function findSensorHistory(sessionId, { limit, offset, floorId = null }) {
-  const values = [sessionId, floorId, limit, offset];
+async function findSensorHistory(sessionId, { limit, offset }) {
+  const values = [sessionId, limit, offset];
   const [count, readings] = await Promise.all([
     pool.query(
       `WITH session_floors AS (${sessionFloors})
@@ -87,7 +86,7 @@ async function findSensorHistory(sessionId, { limit, offset, floorId = null }) {
          ON r.master_id = sf.master_id AND r.node_address = sf.node_address
         AND r.received_at >= GREATEST(sf.start_at, sf.assigned_at)
         AND r.received_at <= COALESCE(sf.end_at, now())`,
-      values.slice(0, 2),
+      values.slice(0, 1),
     ),
     pool.query(
       `WITH session_floors AS (${sessionFloors})
@@ -103,7 +102,7 @@ async function findSensorHistory(sessionId, { limit, offset, floorId = null }) {
         AND r.received_at >= GREATEST(sf.start_at, sf.assigned_at)
         AND r.received_at <= COALESCE(sf.end_at, now())
        ORDER BY r.received_at DESC, r.id DESC
-       LIMIT $3 OFFSET $4`,
+       LIMIT $2 OFFSET $3`,
       values,
     ),
   ]);

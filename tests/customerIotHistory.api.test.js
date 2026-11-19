@@ -37,13 +37,6 @@ test('customer IoT history returns assigned-floor data and enforces session owne
           (SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
           1,
           1
-        ), (
-          (SELECT room_id FROM cultivation_rooms WHERE room_code = 'IOT-API'),
-          2,
-          'Second Customer Floor',
-          (SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
-          2,
-          2
         );
       INSERT INTO cultivation_trays (room_id, tray_code, floor_id, status)
         VALUES (
@@ -60,15 +53,6 @@ test('customer IoT history returns assigned-floor data and enforces session owne
       INSERT INTO cultivation_sessions (session_id, mushroom_type_id, start_at, order_item_id, status)
         VALUES (1, 1, now() - interval '1 day', 1, 'CULTIVATING'),
                (2, 1, now() - interval '1 day', 2, 'CULTIVATING');
-      INSERT INTO cultivation_trays (room_id, tray_code, floor_id, status)
-        VALUES (
-          (SELECT room_id FROM cultivation_rooms WHERE room_code = 'IOT-API'),
-          'IOT-CUSTOMER-3',
-          (SELECT floor_id FROM cultivation_floors WHERE floor_name = 'Second Customer Floor'),
-          'OCCUPIED'
-        );
-      INSERT INTO cultivation_session_trays (session_id, tray_id, assigned_at, status)
-        VALUES (1, 3, now() - interval '1 hour', 'ACTIVE');
       INSERT INTO cultivation_session_trays (session_id, tray_id, assigned_at, status)
         VALUES (1, 1, now() - interval '1 hour', 'ACTIVE'),
                (2, 2, now() - interval '1 hour', 'ACTIVE');
@@ -79,9 +63,7 @@ test('customer IoT history returns assigned-floor data and enforces session owne
                ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
                 1, 2, 26, 80, true, now() - interval '5 seconds', false),
                ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
-                1, 3, 28, 79, true, now() - interval '2 hours', false),
-               ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
-                2, 1, 21.5, 91, true, now() - interval '3 seconds', false);
+                1, 3, 28, 79, true, now() - interval '2 hours', false);
       INSERT INTO iot_device_commands
         (id, master_id, channel, action, status, requested_by, requested_at, expires_at, published_at, completed_at)
         VALUES ('11111111-1111-4111-8111-111111111111',
@@ -120,7 +102,7 @@ test('customer IoT history returns assigned-floor data and enforces session owne
     const base = '/api/customer/sessions/1/iot-history';
 
     assert.equal((await request(`${base}/sensors`, null)).status, 401);
-    const sensorHistory = await request(`${base}/sensors?page=1&pageSize=100&floorId=1`, 3);
+    const sensorHistory = await request(`${base}/sensors?page=1&pageSize=100`, 3);
     assert.equal(sensorHistory.status, 200);
     assert.equal(sensorHistory.body.data.readings.length, 2);
     assert.deepEqual(
@@ -129,12 +111,6 @@ test('customer IoT history returns assigned-floor data and enforces session owne
     );
     assert.ok(sensorHistory.body.data.readings.every((reading) => reading.ok));
     assert.equal(sensorHistory.body.data.readings[0].floorName, 'Customer Floor');
-
-    const secondFloorHistory = await request(`${base}/sensors?floorId=2`, 3);
-    assert.equal(secondFloorHistory.status, 200);
-    assert.equal(secondFloorHistory.body.data.readings.length, 1);
-    assert.equal(secondFloorHistory.body.data.readings[0].sensorId, 1);
-    assert.equal(secondFloorHistory.body.data.readings[0].floorName, 'Second Customer Floor');
 
     const deviceHistory = await request(`${base}?page=1&pageSize=100`, 3);
     assert.equal(deviceHistory.status, 200);
