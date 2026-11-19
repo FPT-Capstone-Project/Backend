@@ -563,9 +563,8 @@ CREATE TABLE public.cultivation_issues (
   severity       VARCHAR CHECK (severity IN ('LOW', 'MEDIUM', 'HIGH')),
   status         VARCHAR NOT NULL DEFAULT 'OPEN'
     CHECK (status IN (
-      'OPEN', 'PENDING_EXPERT', 'UNDER_DIAGNOSIS', 'NEED_MORE_INFO',
-      'SOLUTION_PROVIDED', 'IN_PROGRESS', 'PENDING_REVIEW', 'RESOLVED',
-      'REOPENED', 'CANCELLED'
+      'OPEN', 'WAITING_EXPERT', 'IN_PROGRESS', 'MONITORING',
+      'WAITING_REVIEW', 'RESOLVED'
     )),
   action_taken   TEXT,
   next_action    TEXT,
@@ -573,6 +572,7 @@ CREATE TABLE public.cultivation_issues (
   environment_snapshot JSONB,
   reported_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
   resolved_at    TIMESTAMPTZ,
+  resolved_by    INTEGER REFERENCES public.users(user_id),
   CONSTRAINT cultivation_issues_source_check CHECK (
     (session_tray_id IS NOT NULL AND spawn_inspection_id IS NULL)
     OR (session_tray_id IS NULL AND spawn_inspection_id IS NOT NULL)
@@ -591,7 +591,8 @@ CREATE TABLE public.expert_consultations (
   status          VARCHAR NOT NULL DEFAULT 'PENDING'
     CHECK (status IN ('PENDING', 'IN_PROGRESS', 'NEED_MORE_INFO', 'ANSWERED', 'CLOSED')),
   created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-  responded_at    TIMESTAMPTZ
+  responded_at    TIMESTAMPTZ,
+  closed_at       TIMESTAMPTZ
 );
 
 CREATE TABLE public.consultation_messages (
@@ -622,6 +623,45 @@ CREATE TABLE public.disease_treatment_logs (
   action_description TEXT NOT NULL,
   result_description TEXT,
   performed_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE public.expert_treatment_reviews (
+  review_id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  issue_id INTEGER NOT NULL,
+  treatment_log_id BIGINT,
+  reviewed_by INTEGER NOT NULL,
+  review_result VARCHAR NOT NULL
+    CHECK (review_result IN (
+      'APPROVED',
+      'NEEDS_MORE_ACTION',
+      'NEEDS_MORE_INFORMATION',
+      'RESOLVED'
+    )),
+  review_comment TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT expert_treatment_reviews_treatment_required_check
+    CHECK (review_result = 'RESOLVED' OR treatment_log_id IS NOT NULL),
+  CONSTRAINT expert_treatment_reviews_issue_id_fkey
+    FOREIGN KEY (issue_id)
+    REFERENCES public.cultivation_issues(issue_id),
+  CONSTRAINT fk_review_treatment_log
+    FOREIGN KEY (treatment_log_id)
+    REFERENCES public.disease_treatment_logs(treatment_log_id),
+  CONSTRAINT fk_review_expert
+    FOREIGN KEY (reviewed_by)
+    REFERENCES public.users(user_id)
+);
+
+CREATE INDEX idx_expert_treatment_reviews_issue
+ON public.expert_treatment_reviews (
+  issue_id,
+  created_at DESC
+);
+
+CREATE INDEX idx_expert_reviews_treatment_log
+ON public.expert_treatment_reviews (
+  treatment_log_id,
+  created_at DESC
 );
 
 CREATE TABLE public.treatment_media (

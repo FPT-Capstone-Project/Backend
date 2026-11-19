@@ -7,6 +7,7 @@ const ISSUE_STATUSES = [
   'WAITING_EXPERT',
   'IN_PROGRESS',
   'MONITORING',
+  'WAITING_REVIEW',
   'RESOLVED',
 ];
 const CONSULTATION_STATUSES = ['PENDING', 'IN_PROGRESS', 'ANSWERED', 'CLOSED'];
@@ -52,16 +53,6 @@ function parsePage(query = {}) {
     throw new AppError(`pageSize must be between 1 and ${MAX_PAGE_SIZE}`, 400);
   }
   return { page, pageSize, limit: pageSize, offset: (page - 1) * pageSize };
-}
-
-function parseTimestamp(value, field) {
-  if (value === undefined || value === null || value === '') return undefined;
-  if (typeof value !== 'string'
-    || !/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d{1,3})?(?:Z|[+-]\d\d:\d\d)$/.test(value)
-    || !Number.isFinite(Date.parse(value))) {
-    throw new AppError(`${field} must be an ISO timestamp with timezone`, 400);
-  }
-  return new Date(value).toISOString();
 }
 
 async function getActor(user) {
@@ -171,47 +162,8 @@ async function getIssue(user, issueId) {
   const issue = await diseaseModel.findIssue(id);
   if (!issue) throw new AppError('Issue not found', 404);
   issue.media = await diseaseModel.findIssueMedia(id);
+  issue.reviews = await diseaseModel.findIssueReviews(id);
   return issue;
-}
-
-const operatorTransitions = {
-  OPEN: ['IN_PROGRESS'],
-  WAITING_EXPERT: [],
-  IN_PROGRESS: ['MONITORING'],
-  MONITORING: [],
-};
-
-async function changeIssueStatus(user, issueId, value) {
-  const actorInfo = await getActor(user);
-  requireFarmOperator(actorInfo);
-  const nextStatus = parseOptionalEnum(value, 'status', ISSUE_STATUSES);
-  if (!nextStatus) throw new AppError('status is required', 400);
-  const id = parseId(issueId, 'issueId');
-  const issue = await diseaseModel.findIssue(id);
-  if (!issue) throw new AppError('Issue not found', 404);
-  const allowed = operatorTransitions[issue.status] || [];
-  if (!allowed.includes(nextStatus)) {
-    throw new AppError(`Cannot change issue from ${issue.status} to ${nextStatus}`, 409);
-  }
-  if (nextStatus === 'MONITORING' && !await diseaseModel.hasTreatmentResult(id)) {
-    throw new AppError('Record a treatment result before submitting the issue for review', 409);
-  }
-  return diseaseModel.updateIssueStatus(id, nextStatus, issue.status);
-}
-
-async function resolveIssue(user, issueId) {
-  const actorInfo = await getActor(user);
-  requireExpert(actorInfo);
-  const id = parseId(issueId, 'issueId');
-  const issue = await diseaseModel.findIssue(id);
-  if (!issue) throw new AppError('Issue not found', 404);
-  if (issue.status !== 'MONITORING') {
-    throw new AppError('Only issues pending expert review can be resolved', 409);
-  }
-  if (!isAdmin(actorInfo) && Number(issue.assigned_expert_id) !== actorInfo.userId) {
-    throw new AppError('Only the assigned expert can resolve this issue', 403);
-  }
-  return diseaseModel.updateIssueStatus(id, 'RESOLVED', issue.status);
 }
 
 async function addIssueMedia(user, issueId, file, payload = {}) {
@@ -293,35 +245,9 @@ async function getConsultation(user, consultationId) {
   const id = parseId(consultationId, 'consultationId');
   const consultation = await diseaseModel.findConsultation(id);
   if (!consultation) throw new AppError('Consultation not found', 404);
-  if (isExpert(actorInfo) && !isAdmin(actorInfo)
-    && consultation.expert_id !== null
-    && Number(consultation.expert_id) !== actorInfo.userId) {
-    throw new AppError('Consultation is assigned to another expert', 403);
-  }
   consultation.treatments = await diseaseModel.findTreatments(id);
   consultation.messages = await diseaseModel.findConsultationMessages(id);
   return consultation;
-}
-
-async function assignConsultation(user, consultationId, payload = {}) {
-  const actorInfo = await getActor(user);
-  requireExpert(actorInfo);
-  const id = parseId(consultationId, 'consultationId');
-  const consultation = await diseaseModel.findConsultation(id);
-  if (!consultation) throw new AppError('Consultation not found', 404);
-  if (!isAdmin(actorInfo)
-    && consultation.expert_id !== null
-    && Number(consultation.expert_id) !== actorInfo.userId) {
-    throw new AppError('Consultation is assigned to another expert', 403);
-  }
-  const targetExpertId = isAdmin(actorInfo)
-    ? parseId(payload.expertId ?? payload.expert_id, 'expertId')
-    : actorInfo.userId;
-  const targetRole = await diseaseModel.getRole(targetExpertId);
-  if (!targetRole || !diseaseModel.isExpertRole(targetRole)) {
-    throw new AppError('The selected user is not an active Mushroom Expert', 400);
-  }
-  return diseaseModel.assignConsultation(id, targetExpertId);
 }
 
 async function respondToConsultation(user, consultationId, payload = {}) {
@@ -330,48 +256,16 @@ async function respondToConsultation(user, consultationId, payload = {}) {
   const id = parseId(consultationId, 'consultationId');
   const consultation = await diseaseModel.findConsultation(id);
   if (!consultation) throw new AppError('Consultation not found', 404);
-  if (!isAdmin(actorInfo) && Number(consultation.expert_id) !== actorInfo.userId) {
-    throw new AppError('Only the assigned expert can respond', 403);
-  }
-  const needsMoreInfo = payload.needsMoreInfo === true || payload.needs_more_info === true;
-  const rawNeedsMoreInfo = payload.needsMoreInfo ?? payload.needs_more_info;
-  if (rawNeedsMoreInfo !== undefined && typeof rawNeedsMoreInfo !== 'boolean') {
-    throw new AppError('needsMoreInfo must be a boolean', 400);
-  }
-  const rawStatus = payload.status === undefined ? undefined : String(payload.status).toUpperCase();
-  if (rawStatus !== undefined && !['NEED_MORE_INFO', 'ANSWERED'].includes(rawStatus)) {
-    throw new AppError('status must be NEED_MORE_INFO or ANSWERED', 400);
-  }
-  const requestedMoreInfo = rawStatus === 'NEED_MORE_INFO' || needsMoreInfo;
   return diseaseModel.respondToConsultation(id, {
     diagnosis: parseText(payload.diagnosis, 'diagnosis', { required: true }),
-    solution: requestedMoreInfo
-      ? parseText(payload.solution, 'solution')
-      : parseText(payload.solution, 'solution', { required: true }),
-    needsMoreInfo: requestedMoreInfo,
+    solution: parseText(payload.solution, 'solution', { required: true }),
   }, actorInfo.userId);
-}
-
-async function closeConsultation(user, consultationId) {
-  const actorInfo = await getActor(user);
-  requireExpert(actorInfo);
-  const id = parseId(consultationId, 'consultationId');
-  const consultation = await diseaseModel.findConsultation(id);
-  if (!consultation) throw new AppError('Consultation not found', 404);
-  if (!isAdmin(actorInfo) && Number(consultation.expert_id) !== actorInfo.userId) {
-    throw new AppError('Only the assigned expert can close this consultation', 403);
-  }
-  return diseaseModel.closeConsultation(id);
 }
 
 async function createTreatment(user, consultationId, payload = {}) {
   const actorInfo = await getActor(user);
   requireFarmOperator(actorInfo);
   const id = parseId(consultationId, 'consultationId');
-  const performedAt = parseTimestamp(payload.performedAt ?? payload.performed_at, 'performedAt');
-  if (performedAt && new Date(performedAt) > new Date()) {
-    throw new AppError('performedAt cannot be in the future', 400);
-  }
   const treatment = await diseaseModel.createTreatment(id, {
     actionDescription: parseText(
       payload.actionDescription ?? payload.action_description,
@@ -382,9 +276,34 @@ async function createTreatment(user, consultationId, payload = {}) {
       payload.resultDescription ?? payload.result_description,
       'resultDescription',
     ),
-    performedAt,
   }, actorInfo.userId);
   return treatment;
+}
+
+async function reviewTreatment(user, treatmentLogId, payload = {}) {
+  const actorInfo = await getActor(user);
+  requireExpert(actorInfo);
+  const id = parseId(treatmentLogId, 'treatmentLogId');
+  const result = parseOptionalEnum(
+    payload.reviewResult ?? payload.review_result,
+    'reviewResult',
+    ['APPROVED', 'NEEDS_MORE_ACTION'],
+  );
+  if (!result) throw new AppError('reviewResult is required', 400);
+  return diseaseModel.reviewTreatment(id, {
+    result,
+    comment: parseText(payload.reviewComment ?? payload.review_comment, 'reviewComment'),
+  }, actorInfo.userId);
+}
+
+async function resolveIssue(user, issueId, payload = {}) {
+  const actorInfo = await getActor(user);
+  requireExpert(actorInfo);
+  return diseaseModel.resolveIssue(
+    parseId(issueId, 'issueId'),
+    actorInfo.userId,
+    parseText(payload.reviewComment ?? payload.review_comment, 'reviewComment'),
+  );
 }
 
 async function getTreatments(user, consultationId) {
@@ -406,8 +325,8 @@ async function addTreatmentMedia(user, treatmentLogId, file, payload = {}) {
   if (Number(treatment.performed_by) !== actorInfo.userId && !isAdmin(actorInfo)) {
     throw new AppError('Only the treatment author or an admin can upload media', 403);
   }
-  if (['MONITORING', 'RESOLVED'].includes(treatment.issue_status)) {
-    throw new AppError('Treatment media is locked in its current state', 409);
+  if (treatment.issue_status !== 'WAITING_REVIEW') {
+    throw new AppError('Treatment media can only be uploaded while waiting for review', 409);
   }
   const mediaStage = parseOptionalEnum(payload.mediaStage ?? payload.media_stage, 'mediaStage', MEDIA_STAGES);
   if (!mediaStage) throw new AppError('mediaStage is required', 400);
@@ -444,8 +363,11 @@ async function deleteTreatmentMedia(user, treatmentLogId, mediaId) {
   if (Number(media.performed_by) !== actorInfo.userId && !isAdmin(actorInfo)) {
     throw new AppError('Only the treatment author or an admin can delete this media', 403);
   }
-  if (['MONITORING', 'RESOLVED'].includes(media.issue_status)) {
-    throw new AppError('Treatment media is locked in its current state', 409);
+  if (media.issue_status !== 'WAITING_REVIEW') {
+    throw new AppError('Treatment media can only be changed while waiting for review', 409);
+  }
+  if (Number(media.latest_treatment_log_id) !== Number(treatment.treatment_log_id)) {
+    throw new AppError('Only the latest treatment update can be changed', 409);
   }
   const resourceType = media.media_type === 'VIDEO' ? 'video' : 'image';
   const publicId = cloudinaryService.getPublicIdFromUrl(media.media_url);
@@ -483,6 +405,7 @@ async function customerIssue(user, issueId, includeTimeline = false) {
   if (!issue) throw new AppError('Issue not found', 404);
   if (!includeTimeline) {
     issue.media = await diseaseModel.findIssueMedia(id);
+    issue.reviews = await diseaseModel.findIssueReviews(id);
     return issue;
   }
   return diseaseModel.findIssueTimeline(id);
@@ -492,17 +415,15 @@ module.exports = {
   createIssue,
   listIssues,
   getIssue,
-  changeIssueStatus,
-  resolveIssue,
   addIssueMedia,
   createConsultation,
   addConsultationMessage,
   listConsultations,
   getConsultation,
-  assignConsultation,
   respondToConsultation,
-  closeConsultation,
   createTreatment,
+  reviewTreatment,
+  resolveIssue,
   getTreatments,
   addTreatmentMedia,
   deleteTreatmentMedia,
