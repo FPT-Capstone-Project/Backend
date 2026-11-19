@@ -37,21 +37,12 @@ function paginationResult(result, pagination) {
   };
 }
 
-function parseFloorId(value) {
-  if (value === undefined || value === null || value === '') return null;
-  return parseId(value, 'floorId');
-}
-
 async function getDeviceHistory(rawSessionId, user, query = {}) {
   const sessionId = parseId(rawSessionId, 'sessionId');
   await assertSessionAccess(sessionId, user);
   const pagination = parsePagination(query);
-  const floorId = parseFloorId(query.floorId);
   return paginationResult(
-    await customerIotHistoryModel.findDeviceHistory(sessionId, {
-      ...pagination,
-      floorId,
-    }),
+    await customerIotHistoryModel.findDeviceHistory(sessionId, pagination),
     pagination,
   );
 }
@@ -60,12 +51,8 @@ async function getSensorHistory(rawSessionId, user, query = {}) {
   const sessionId = parseId(rawSessionId, 'sessionId');
   await assertSessionAccess(sessionId, user);
   const pagination = parsePagination(query);
-  const floorId = parseFloorId(query.floorId);
   return paginationResult(
-    await customerIotHistoryModel.findSensorHistory(sessionId, {
-      ...pagination,
-      floorId,
-    }),
+    await customerIotHistoryModel.findSensorHistory(sessionId, pagination),
     pagination,
   );
 }
