@@ -88,26 +88,62 @@ async function findAllForOrder(orderId, actor) {
   return { orderId, shipments: result.rows, total: result.rows.length };
 }
 
-async function updateStatus(shipmentId, status) {
-  const result = await pool.query(
-    `UPDATE shipments
-     SET status = $2,
-         shipped_at = CASE
-           WHEN $2 = 'PENDING' THEN NULL
-           WHEN $2 IN ('SHIPPED', 'IN_TRANSIT', 'DELIVERED') THEN COALESCE(shipped_at, CURRENT_TIMESTAMP)
-           ELSE shipped_at
-         END,
-         delivered_at = CASE
-           WHEN $2 = 'DELIVERED' THEN COALESCE(delivered_at, CURRENT_TIMESTAMP)
-           WHEN $2 = 'RETURNED' THEN delivered_at
-           ELSE NULL
-         END
-     WHERE shipment_id = $1
-     RETURNING *`,
-    [shipmentId, status],
-  );
-  if (!result.rows[0]) throw new AppError('Shipment not found', 404);
-  return result.rows[0];
+async function updateStatus(shipmentId, status, actor) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE shipments
+       SET status = $2::varchar(30),
+           shipped_at = CASE
+             WHEN $2::text = 'PENDING' THEN NULL
+             WHEN $2::text IN ('SHIPPED', 'IN_TRANSIT', 'DELIVERED') THEN COALESCE(shipped_at, CURRENT_TIMESTAMP)
+             ELSE shipped_at
+           END,
+           delivered_at = CASE
+             WHEN $2::text = 'DELIVERED' THEN COALESCE(delivered_at, CURRENT_TIMESTAMP)
+             WHEN $2::text = 'RETURNED' THEN delivered_at
+             ELSE NULL
+           END
+       WHERE shipment_id = $1::integer
+       RETURNING *`,
+      [shipmentId, status],
+    );
+    const shipment = result.rows[0];
+    if (!shipment) throw new AppError('Shipment not found', 404);
+
+    const labels = {
+      PENDING: 'Chờ giao hàng',
+      SHIPPED: 'Đã bàn giao cho đơn vị vận chuyển',
+      IN_TRANSIT: 'Đang vận chuyển',
+      DELIVERED: 'Đã giao hàng thành công',
+      CANCELLED: 'Đã hủy giao hàng',
+      RETURNED: 'Đã hoàn hàng',
+    };
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by,
+         reference_type, reference_id
+       )
+       SELECT o.user_id, 'SHIPMENT_UPDATE', 'Cập nhật trạng thái giao hàng',
+              $2::text, $3::integer, 'ORDER', o.order_id
+       FROM orders o
+       WHERE o.order_id = $1::integer`,
+      [
+        shipment.order_id,
+        `Đơn hàng #${shipment.order_id}: ${labels[status]}.`,
+        actor?.user_id || null,
+      ],
+    );
+
+    await client.query('COMMIT');
+    return shipment;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 module.exports = { create, findAllForAdmin, findAllForOrder, updateStatus };

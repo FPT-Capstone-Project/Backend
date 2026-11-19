@@ -16,7 +16,11 @@ async function orderList(req, res) {
 }
 
 async function updateStatus(req, res) {
-  const shipment = await shipmentService.updateShipmentStatus(req.params.id, req.body?.status);
+  const shipment = await shipmentService.updateShipmentStatus(
+    req.params.id,
+    req.body?.status,
+    req.user,
+  );
   res.json({ message: 'Shipment status updated successfully', data: shipment });
 }
 

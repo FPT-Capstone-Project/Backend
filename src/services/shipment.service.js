@@ -89,8 +89,12 @@ async function createShipment(payload = {}) {
   return shipmentModel.create(normalizeShipment(payload));
 }
 
-async function updateShipmentStatus(shipmentId, status) {
-  return shipmentModel.updateStatus(parseId(shipmentId, 'shipmentId'), parseStatus(status));
+async function updateShipmentStatus(shipmentId, status, actor) {
+  return shipmentModel.updateStatus(
+    parseId(shipmentId, 'shipmentId'),
+    parseStatus(status),
+    actor,
+  );
 }
 
 module.exports = {
