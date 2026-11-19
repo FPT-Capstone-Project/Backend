@@ -317,6 +317,7 @@ router.post('/issues/:issueId/consultations', authenticate, controller.createCon
 router.get('/consultations', authenticate, controller.listConsultations);
 router.get('/consultations/:consultationId', authenticate, controller.getConsultation);
 router.patch('/consultations/:consultationId/assign', authenticate, controller.assignConsultation);
+router.post('/consultations/:consultationId/assign', authenticate, controller.assignConsultation);
 router.patch('/consultations/:consultationId/respond', authenticate, controller.respondToConsultation);
 router.patch('/consultations/:consultationId/close', authenticate, controller.closeConsultation);
 router.post('/consultations/:consultationId/messages', authenticate, controller.addConsultationMessage);
