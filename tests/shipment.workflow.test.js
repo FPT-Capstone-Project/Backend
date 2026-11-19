@@ -15,6 +15,16 @@ async function setupDatabase() {
       order_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(user_id)
     );
+    CREATE TABLE notifications (
+      notification_id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(user_id),
+      notification_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      created_by INTEGER,
+      reference_type TEXT,
+      reference_id INTEGER
+    );
     CREATE TABLE shipments (
       shipment_id SERIAL PRIMARY KEY,
       order_id INTEGER NOT NULL REFERENCES orders(order_id),
@@ -120,6 +130,15 @@ test('shipment listing returns order details and status updates record timestamp
     const shipped = await service.updateShipmentStatus(5, ' shipped ');
     assert.equal(shipped.status, 'SHIPPED');
     assert.ok(shipped.shipped_at);
+    const notifications = await db.query(
+      'SELECT * FROM notifications WHERE user_id = 7 ORDER BY notification_id DESC',
+    );
+    assert.equal(notifications.rows.length, 1);
+    assert.equal(notifications.rows[0].notification_type, 'SHIPMENT_UPDATE');
+    assert.match(
+      notifications.rows[0].message,
+      /Đã bàn giao cho đơn vị vận chuyển/,
+    );
     const delivered = await service.updateShipmentStatus(5, 'DELIVERED');
     assert.ok(delivered.delivered_at);
     const returned = await service.updateShipmentStatus(5, 'RETURNED');

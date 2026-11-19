@@ -15,7 +15,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await db.exec(`
       CREATE TABLE users (user_id INT PRIMARY KEY, full_name TEXT, role_id INT, status TEXT);
       CREATE TABLE orders (order_id INT PRIMARY KEY, user_id INT);
-      CREATE TABLE shipments (shipment_id INT PRIMARY KEY, order_id INT, status TEXT);
+      CREATE TABLE shipments (shipment_id INT PRIMARY KEY, order_id INT, status TEXT, delivered_at TIMESTAMPTZ);
       CREATE TABLE order_items (order_item_id INT PRIMARY KEY, order_id INT);
       CREATE TABLE cultivation_sessions (session_id INT PRIMARY KEY, order_item_id INT);
       CREATE TABLE harvest_requests (session_id INT, harvest_method TEXT);
@@ -45,10 +45,12 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await assert.rejects(model.create(data, other, upload), { statusCode: 404 });
     await assert.rejects(model.create({ ...data, orderId: 99 }, owner, upload), { statusCode: 404 });
     await assert.rejects(model.create(data, owner, upload), { statusCode: 409 });
-    await db.query("UPDATE shipments SET status = 'DELIVERED' WHERE shipment_id = 2");
+    await db.query("UPDATE shipments SET status = 'DELIVERED', delivered_at = NOW() - INTERVAL '3 days' WHERE shipment_id = 2");
     await db.query("UPDATE harvest_requests SET harvest_method = 'PICKUP'");
     await assert.rejects(model.create(data, owner, upload), { statusCode: 409 });
     await db.query("UPDATE harvest_requests SET harvest_method = 'DELIVERY'");
+    await assert.rejects(model.create(data, owner, upload), { statusCode: 409 });
+    await db.query("UPDATE shipments SET delivered_at = NOW() WHERE shipment_id = 2");
     assert.equal(uploads, 0);
     const complaint = await model.create(data, owner, upload);
     assert.equal(complaint.status, 'OPEN');

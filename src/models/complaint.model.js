@@ -48,9 +48,16 @@ async function create(data, actor, uploadImages) {
     const order = rows[0];
     if (!order) throw new AppError('Order not found', 404);
     const shipment = await client.query(
-      `SELECT status FROM shipments WHERE order_id = $1
+      `SELECT status, delivered_at FROM shipments WHERE order_id = $1
        ORDER BY shipment_id DESC LIMIT 1 FOR UPDATE`, [data.orderId]);
-    if (!order.harvest_delivery || shipment.rows[0]?.status !== 'DELIVERED') {
+    const deliveredAt = shipment.rows[0]?.delivered_at
+      ? new Date(shipment.rows[0].delivered_at).getTime()
+      : Number.NaN;
+    const complaintDeadline = Number.isFinite(deliveredAt)
+      ? deliveredAt + (2 * 24 * 60 * 60 * 1000)
+      : 0;
+    if (!order.harvest_delivery || shipment.rows[0]?.status !== 'DELIVERED'
+      || complaintDeadline < Date.now()) {
       throw new AppError('Only delivered harvested mushroom shipments can be complained about', 409);
     }
     const existing = await client.query('SELECT complaint_id FROM complaints WHERE order_id = $1', [data.orderId]);
