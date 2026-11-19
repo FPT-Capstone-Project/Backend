@@ -136,6 +136,15 @@ const router = express.Router();
  *     responses:
  *       200: { description: Consultation details }
  *       404: { description: Consultation not found }
+ * /api/consultations/{consultationId}/assign:
+ *   patch:
+ *     tags: [Disease Management]
+ *     summary: Expert accepts a pending consultation
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Consultation assigned to the expert and moved to IN_PROGRESS }
+ *       403: { description: Expert or Admin role required }
+ *       409: { description: Consultation is no longer available }
  * /api/consultations/{consultationId}/respond:
  *   patch:
  *     tags: [Disease Management]
@@ -153,8 +162,9 @@ const router = express.Router();
  *             properties:
  *               diagnosis: { type: string }
  *               solution: { type: string }
+ *               needsMoreInfo: { type: boolean, description: Keep consultation IN_PROGRESS and notify the operator to add information }
  *     responses:
- *       200: { description: Expert response submitted; consultation becomes ANSWERED and issue becomes IN_PROGRESS }
+ *       200: { description: Treatment plan marks the consultation ANSWERED and issue IN_PROGRESS; needsMoreInfo keeps both open for operator follow-up }
  *       403: { description: Expert or Admin role required }
  * /api/consultations/{consultationId}/messages:
  *   post:
@@ -294,6 +304,7 @@ router.post('/issues/:issueId/consultations', authenticate, controller.createCon
 
 router.get('/consultations', authenticate, controller.listConsultations);
 router.get('/consultations/:consultationId', authenticate, controller.getConsultation);
+router.patch('/consultations/:consultationId/assign', authenticate, controller.assignConsultation);
 router.patch('/consultations/:consultationId/respond', authenticate, controller.respondToConsultation);
 router.post('/consultations/:consultationId/messages', authenticate, controller.addConsultationMessage);
 router.post('/consultations/:consultationId/treatments', authenticate, controller.createTreatment);

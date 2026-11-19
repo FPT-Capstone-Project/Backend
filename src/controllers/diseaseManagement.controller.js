@@ -62,6 +62,14 @@ async function getConsultation(req, res) {
   res.json({ data: consultation });
 }
 
+async function assignConsultation(req, res) {
+  const consultation = await diseaseService.assignConsultation(
+    req.user,
+    req.params.consultationId,
+  );
+  res.json({ message: 'Consultation assigned successfully', data: consultation });
+}
+
 async function respondToConsultation(req, res) {
   const consultation = await diseaseService.respondToConsultation(
     req.user,
@@ -138,6 +146,7 @@ module.exports = {
   addConsultationMessage,
   listConsultations,
   getConsultation,
+  assignConsultation,
   respondToConsultation,
   createTreatment,
   reviewTreatment,

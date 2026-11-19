@@ -373,7 +373,7 @@ async function createConsultationMessage(consultationId, message, senderId) {
     const canAddInformation = (
       consultation.status === 'PENDING' && consultation.issue_status === 'WAITING_EXPERT'
     ) || (
-      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'IN_PROGRESS'
+      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'WAITING_EXPERT'
     );
     if (!canAddInformation) {
       throw new AppError('Consultation is not open for additional information', 409);
@@ -516,13 +516,13 @@ async function findConsultation(consultationId) {
   return result.rows[0] || null;
 }
 
-async function respondToConsultation(consultationId, response, actorId) {
+async function assignConsultation(consultationId, expertId) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     const result = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status,
-              ci.reported_by, ci.title, ci.status AS issue_status
+      `SELECT ec.consultation_id, ec.expert_id, ec.status,
+              ci.issue_id, ci.status AS issue_status
        FROM expert_consultations ec
        INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
        WHERE ec.consultation_id = $1
@@ -531,33 +531,107 @@ async function respondToConsultation(consultationId, response, actorId) {
     );
     const consultation = result.rows[0];
     if (!consultation) throw new AppError('Consultation not found', 404);
-    const canRespond = (
-      consultation.status === 'PENDING' && consultation.issue_status === 'WAITING_EXPERT'
-    ) || (
-      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'IN_PROGRESS'
+    if (consultation.status !== 'PENDING'
+      || consultation.expert_id !== null
+      || consultation.issue_status !== 'WAITING_EXPERT') {
+      throw new AppError('Consultation is no longer available to accept', 409);
+    }
+    const assigned = await client.query(
+      `UPDATE expert_consultations
+       SET expert_id = $2, status = 'IN_PROGRESS'
+       WHERE consultation_id = $1
+       RETURNING *`,
+      [consultationId, expertId],
     );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by,
+         reference_type, reference_id
+       )
+       SELECT ci.reported_by, 'MUSHROOM_DISEASE',
+              'Expert accepted consultation',
+              'Chuyên gia đã nhận yêu cầu tư vấn và đang xem xét.',
+              $2, 'CULTIVATION_ISSUE', ci.issue_id
+       FROM cultivation_issues ci
+       WHERE ci.issue_id = $1`,
+      [consultation.issue_id, expertId],
+    );
+    await client.query('COMMIT');
+    return assigned.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function respondToConsultation(consultationId, response, actorId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT ec.consultation_id, ec.issue_id, ec.status,
+              ec.expert_id, ci.reported_by, ci.title, ci.status AS issue_status
+       FROM expert_consultations ec
+       INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
+       WHERE ec.consultation_id = $1
+       FOR UPDATE OF ec, ci`,
+      [consultationId],
+    );
+    const consultation = result.rows[0];
+    if (!consultation) throw new AppError('Consultation not found', 404);
+    const canRespond = (consultation.status === 'PENDING'
+      && consultation.expert_id === null
+      && consultation.issue_status === 'WAITING_EXPERT')
+      || (consultation.status === 'IN_PROGRESS'
+        && consultation.expert_id !== null
+        && consultation.issue_status === 'WAITING_EXPERT'
+        && Number(consultation.expert_id) === Number(actorId));
     if (!canRespond) {
       throw new AppError('Consultation is not open for a response', 409);
     }
+    if (!response.needsMoreInfo && !response.solution) {
+      throw new AppError('solution is required when providing a treatment plan', 400);
+    }
+    const nextStatus = response.needsMoreInfo ? 'IN_PROGRESS' : 'ANSWERED';
     const updated = await client.query(
       `UPDATE expert_consultations
        SET diagnosis = $2, solution = $3, expert_id = $4,
-           status = 'ANSWERED', responded_at = now()
+           status = $5, responded_at = now()
        WHERE consultation_id = $1 RETURNING *`,
-      [consultationId, response.diagnosis, response.solution, actorId],
+      [
+        consultationId,
+        response.diagnosis,
+        response.needsMoreInfo ? null : response.solution,
+        actorId,
+        nextStatus,
+      ],
     );
     await client.query(
-      `UPDATE cultivation_issues SET status = 'IN_PROGRESS' WHERE issue_id = $1`,
-      [consultation.issue_id],
+      `UPDATE cultivation_issues
+       SET status = $2
+       WHERE issue_id = $1`,
+      [
+        consultation.issue_id,
+        response.needsMoreInfo ? 'WAITING_EXPERT' : 'IN_PROGRESS',
+      ],
     );
+    const notificationTitle = response.needsMoreInfo
+      ? 'More information requested'
+      : 'Expert diagnosis available';
+    const notificationMessage = response.needsMoreInfo
+      ? response.diagnosis
+      : `Expert provided a diagnosis and treatment plan for issue "${consultation.title}".`;
     await client.query(
       `INSERT INTO notifications (
          user_id, notification_type, title, message, created_by, reference_type, reference_id
        )
-       VALUES ($1, 'MUSHROOM_DISEASE', 'Expert diagnosis available', $2, $3, 'CULTIVATION_ISSUE', $4)`,
+       VALUES ($1, 'MUSHROOM_DISEASE', $2, $3, $4, 'CULTIVATION_ISSUE', $5)`,
       [
         consultation.reported_by,
-        `Expert provided a diagnosis and treatment plan for issue "${consultation.title}".`,
+        notificationTitle,
+        notificationMessage,
         actorId,
         consultation.issue_id,
       ],
@@ -1043,6 +1117,7 @@ module.exports = {
   findConsultationMessages,
   findConsultations,
   findConsultation,
+  assignConsultation,
   respondToConsultation,
   createTreatment,
   reviewTreatment,

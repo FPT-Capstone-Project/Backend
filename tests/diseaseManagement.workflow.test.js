@@ -427,6 +427,19 @@ test('WF-06 allows an operator to add information while an expert is diagnosing'
     const consultation = await service.createConsultation(user(2, 2), issue.issue_id, {
       question: 'Please review this growth issue.',
     });
+    const assigned = await service.assignConsultation(user(4, 4), consultation.consultation_id);
+    assert.equal(assigned.status, 'IN_PROGRESS');
+    assert.equal(assigned.expert_id, 4);
+    await assert.rejects(
+      service.assignConsultation(user(6, 4), consultation.consultation_id),
+      { statusCode: 409 },
+    );
+    const moreInfo = await service.respondToConsultation(user(4, 4), consultation.consultation_id, {
+      diagnosis: 'Please provide a close-up from beneath the tray.',
+      needsMoreInfo: true,
+    });
+    assert.equal(moreInfo.status, 'IN_PROGRESS');
+    assert.equal(moreInfo.solution, null);
     const message = await service.addConsultationMessage(user(2, 2), consultation.consultation_id, {
       message: 'Added a new close-up image and sensor reading context.',
     });

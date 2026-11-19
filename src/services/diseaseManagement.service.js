@@ -250,6 +250,15 @@ async function getConsultation(user, consultationId) {
   return consultation;
 }
 
+async function assignConsultation(user, consultationId) {
+  const actorInfo = await getActor(user);
+  requireExpert(actorInfo);
+  return diseaseModel.assignConsultation(
+    parseId(consultationId, 'consultationId'),
+    actorInfo.userId,
+  );
+}
+
 async function respondToConsultation(user, consultationId, payload = {}) {
   const actorInfo = await getActor(user);
   requireExpert(actorInfo);
@@ -258,7 +267,8 @@ async function respondToConsultation(user, consultationId, payload = {}) {
   if (!consultation) throw new AppError('Consultation not found', 404);
   return diseaseModel.respondToConsultation(id, {
     diagnosis: parseText(payload.diagnosis, 'diagnosis', { required: true }),
-    solution: parseText(payload.solution, 'solution', { required: true }),
+    solution: parseText(payload.solution, 'solution'),
+    needsMoreInfo: payload.needsMoreInfo === true,
   }, actorInfo.userId);
 }
 
@@ -420,6 +430,7 @@ module.exports = {
   addConsultationMessage,
   listConsultations,
   getConsultation,
+  assignConsultation,
   respondToConsultation,
   createTreatment,
   reviewTreatment,
