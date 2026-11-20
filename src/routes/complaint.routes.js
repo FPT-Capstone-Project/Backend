@@ -14,20 +14,20 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             required: [complaintType, description]
  *             properties:
  *               complaintType: { type: string, maxLength: 100 }
  *               description: { type: string, maxLength: 10000 }
- *               imageUrls:
+ *               images:
  *                 type: array
  *                 maxItems: 10
- *                 items: { type: string, format: uri, description: HTTPS image URL }
+ *                 items: { type: string, format: binary, description: Image file, maximum 5 MB each }
  *     responses:
- *       201: { description: Complaint created with OPEN status }
- *       400: { description: Invalid content or image URLs }
+ *       201: { description: Complaint created with PENDING status }
+ *       400: { description: Invalid content or image files }
  *       404: { description: Order not found or not owned }
  *       409: { description: Ineligible shipment or duplicate complaint }
  * /api/complaints:
@@ -38,7 +38,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  *     parameters:
  *       - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
  *       - { in: query, name: pageSize, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
- *       - { in: query, name: status, schema: { type: string, enum: [OPEN, IN_PROGRESS, WAITING_CUSTOMER, RESOLVED, REJECTED] } }
+ *       - { in: query, name: status, schema: { type: string, enum: [PENDING, UNDER_REVIEW, NEED_MORE_INFO, RESOLVING, RESOLVED, REJECTED, CLOSED] } }
  *     responses:
  *       200: { description: Paginated complaints }
  * /api/complaints/my:
@@ -119,7 +119,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  *           schema:
  *             type: object
  *             properties:
- *               status: { type: string, enum: [OPEN, IN_PROGRESS, WAITING_CUSTOMER, RESOLVED, REJECTED] }
+ *               status: { type: string, enum: [PENDING, UNDER_REVIEW, NEED_MORE_INFO, RESOLVING, RESOLVED, REJECTED, CLOSED] }
  *               resolution: { type: string, maxLength: 10000 }
  *     responses:
  *       200: { description: Complaint updated }

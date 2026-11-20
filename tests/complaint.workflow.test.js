@@ -36,6 +36,11 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     `);
     await db.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '../migrations/034_harvest_delivery_complaints.sql'), 'utf8'));
     await db.exec(require('node:fs').readFileSync(require('node:path').join(__dirname, '../migrations/035_complaints_reference_orders.sql'), 'utf8'));
+    await db.exec(`ALTER TABLE complaints DROP CONSTRAINT complaints_status_check;
+      ALTER TABLE complaints ALTER COLUMN status SET DEFAULT 'PENDING';
+      ALTER TABLE complaints ADD CONSTRAINT chk_complaints_status CHECK (status IN (
+        'PENDING','UNDER_REVIEW','NEED_MORE_INFO','RESOLVING','RESOLVED','REJECTED','CLOSED'
+      ));`);
     const owner = { user_id: 2, role_id: 3 };
     const other = { user_id: 3, role_id: 3 };
     const staff = { user_id: 1, role_id: 1 };
@@ -53,7 +58,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await db.query("UPDATE shipments SET delivered_at = NOW() WHERE shipment_id = 2");
     assert.equal(uploads, 0);
     const complaint = await model.create(data, owner, upload);
-    assert.equal(complaint.status, 'OPEN');
+    assert.equal(complaint.status, 'PENDING');
     assert.equal(complaint.order_id, 1);
     assert.equal(complaint.shipment_id, undefined);
     assert.deepEqual(complaint.image_urls, ['https://example.test/image.jpg']);
@@ -65,20 +70,20 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await assert.rejects(model.update(complaint.complaint_id, { status: 'RESOLVED' }, staff), { statusCode: 400 });
     const resolved = await model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Direct resolution' }, staff);
     assert.ok(resolved.resolved_at);
-    const reopened = await model.update(complaint.complaint_id, { status: 'OPEN' }, staff);
-    assert.equal(reopened.status, 'OPEN');
+    const reopened = await model.update(complaint.complaint_id, { status: 'PENDING' }, staff);
+    assert.equal(reopened.status, 'PENDING');
     assert.equal(reopened.resolved_at, null);
     await model.update(complaint.complaint_id, { status: 'REJECTED', resolution: 'Test rejection' }, staff);
-    await model.update(complaint.complaint_id, { status: 'OPEN' }, staff);
+    await model.update(complaint.complaint_id, { status: 'PENDING' }, staff);
     await db.query('UPDATE complaints SET resolution = NULL WHERE complaint_id = $1', [complaint.complaint_id]);
     await assert.rejects(model.update(complaint.complaint_id, { assignedTo: 3 }, staff), { statusCode: 400 });
-    await model.update(complaint.complaint_id, { status: 'IN_PROGRESS', assignedTo: 1 }, staff);
+    await model.update(complaint.complaint_id, { status: 'UNDER_REVIEW', assignedTo: 1 }, staff);
     await model.reply(complaint.complaint_id, 'Please provide details', staff);
-    await model.update(complaint.complaint_id, { status: 'WAITING_CUSTOMER' }, staff);
+    await model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, staff);
     await assert.rejects(model.reply(complaint.complaint_id, 'Intrusion', other), { statusCode: 404 });
     await model.reply(complaint.complaint_id, 'More details', owner);
     const detail = await model.detail(complaint.complaint_id, owner);
-    assert.equal(detail.status, 'IN_PROGRESS');
+    assert.equal(detail.status, 'UNDER_REVIEW');
     assert.equal(detail.order.order_id, 1);
     assert.equal(detail.replies[1].sender_id, 2);
     assert.equal(detail.assigned_staff.user_id, 1);
@@ -86,6 +91,11 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Replacement delivered' }, staff);
     await assert.rejects(model.reply(complaint.complaint_id, 'Late reply', owner), { statusCode: 409 });
     assert.ok((await model.detail(complaint.complaint_id, owner)).resolved_at);
+    await db.query('UPDATE complaints SET resolution = NULL WHERE complaint_id = $1', [complaint.complaint_id]);
+    await assert.rejects(model.update(complaint.complaint_id, { status: 'CLOSED' }, staff), { statusCode: 400 });
+    const closed = await model.update(complaint.complaint_id, { status: 'CLOSED', resolution: 'Complaint closed' }, staff);
+    assert.ok(closed.resolved_at);
+    await assert.rejects(model.reply(complaint.complaint_id, 'Late reply', owner), { statusCode: 409 });
     assert.ok((await db.query('SELECT * FROM notifications WHERE user_id = 1')).rows.length);
   } finally {
     if (previous) require.cache[dbPath] = previous;
