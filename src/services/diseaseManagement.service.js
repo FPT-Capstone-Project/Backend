@@ -197,6 +197,9 @@ async function addIssueMedia(user, issueId, file, payload = {}) {
 }
 
 async function createConsultation(user, issueId, payload = {}) {
+  if (typeof payload.question === 'string' && payload.question.trim().startsWith('MCMS_CHAT_V1:')) {
+    throw new AppError('question uses a reserved storage prefix', 400);
+  }
   const actorInfo = await getActor(user);
   requireFarmOperator(actorInfo);
   const id = parseId(issueId, 'issueId');
@@ -209,14 +212,30 @@ async function createConsultation(user, issueId, payload = {}) {
   );
 }
 
-async function addConsultationMessage(user, consultationId, payload = {}) {
+async function addConsultationMessage(user, consultationId, payload = {}, file) {
   const actorInfo = await getActor(user);
-  requireFarmOperator(actorInfo);
-  return diseaseModel.createConsultationMessage(
-    parseId(consultationId, 'consultationId'),
-    parseText(payload.message, 'message', { required: true }),
-    actorInfo.userId,
-  );
+  requireStaff(actorInfo);
+  const id = parseId(consultationId, 'consultationId');
+  const message = parseText(payload.message, 'message', { required: !file });
+  if (file && !file.mimetype?.startsWith('image/')) throw new AppError('Only images are allowed', 400);
+  const consultation = await diseaseModel.findConsultation(id);
+  if (!consultation) throw new AppError('Consultation not found', 404);
+  if (consultation.status === 'CLOSED' || consultation.issue_status === 'RESOLVED') throw new AppError('Consultation is closed', 409);
+  if (isExpert(actorInfo) && !isAdmin(actorInfo) && Number(consultation.expert_id) !== actorInfo.userId) {
+    throw new AppError('Only the assigned expert can reply', 403);
+  }
+  const media = file ? await cloudinaryService.uploadMedia(file, 'mushroom-disease/messages') : null;
+  try {
+    return await diseaseModel.createConsultationMessage(id, message, actorInfo.userId, {
+      isExpert: isExpert(actorInfo), isAdmin: isAdmin(actorInfo), mediaUrl: media?.mediaUrl,
+    });
+  } catch (error) {
+    if (media) {
+      try { await cloudinaryService.deleteMedia(media.publicId, media.resourceType); }
+      catch (cleanupError) { console.error('Unable to clean up consultation photo:', cleanupError); }
+    }
+    throw error;
+  }
 }
 
 async function listConsultations(user, query = {}) {

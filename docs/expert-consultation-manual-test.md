@@ -1,5 +1,22 @@
 # Luong tay test: Yeu cau chuyen gia
 
+## Cập nhật mobile: hội thoại hai chiều và ảnh
+
+Không cần migration hay bảng mới. Backend lưu hội thoại có cấu trúc trong cột `expert_consultations.question` hiện có, trả câu hỏi gốc và danh sách `messages` qua các API cũ. Câu hỏi và các tin bổ sung cũ vẫn đọc được.
+Các phản hồi chuyên môn từ thời điểm cập nhật được lưu thành tin riêng, không mất khi Expert trả lời tiếp.
+
+- Farm Operator mở báo cáo → **Nhờ chuyên gia** → nhập nội dung, chọn **Đính kèm ảnh** → gửi yêu cầu. Ảnh được tải trước khi gửi yêu cầu; nếu lỗi có thể tiếp tục yêu cầu đã lưu.
+- Expert nhận tư vấn rồi mở **Trao đổi trong yêu cầu**. Hai bên gửi được nhiều tin và ảnh, kể cả sau khi consultation là `ANSWERED`, lúc chờ duyệt và khi theo dõi.
+- Tin nhắn có người gửi, thời gian, ảnh có thể bấm xem lớn. Hội thoại tải mới mỗi 5 giây khi app đang hoạt động; có nút tải lại.
+- Gửi tin/ảnh không thay đổi trạng thái xử lý và không hoàn tất yêu cầu. Expert vẫn gửi chẩn đoán/hướng xử lý, Operator ghi nhận xử lý, Expert duyệt rồi chọn **Đã ổn — Hoàn tất yêu cầu** khi issue `MONITORING`.
+- Sau hoàn tất, hội thoại chỉ đọc. Expert khác chưa được phân công và Customer không được gửi tin.
+
+`POST /api/consultations/{id}/messages` nhận JSON `{ "message": "Nội dung" }` hoặc multipart với `message` và `file` (ảnh, tối đa 25 MB). Có thể chỉ gửi ảnh. Cả Farm Operator và Expert được phân công đều dùng endpoint này. Response chi tiết consultation có `messages[].media_url` khi có ảnh.
+
+Checklist bổ sung: gửi 3 lượt mỗi bên; gửi ảnh không có chữ; gửi tiếp sau `ANSWERED`; gửi khi `WAITING_REVIEW`/`MONITORING`; kiểm tra không mất phản hồi cũ; hoàn tất rồi xác nhận API gửi tin trả `409`; thử Expert khác trả `403`.
+
+Các bước bên dưới mô tả luồng nghiệp vụ; bước bổ sung thông tin không còn bị giới hạn ở `WAITING_EXPERT`. Ảnh trong tin nhắn độc lập với ảnh issue/treatment nên vẫn gửi được lúc theo dõi.
+
 Tai lieu nay mo ta cach test toan bo quy trinh WF-06 tu khi Farm Operator tao issue, chuyen gia nhan va chan doan, den khi treatment duoc duyet va issue duoc giai quyet.
 
 ## 1. Cau hinh chung

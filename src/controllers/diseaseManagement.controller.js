@@ -48,6 +48,7 @@ async function addConsultationMessage(req, res) {
     req.user,
     req.params.consultationId,
     req.body || {},
+    req.file,
   );
   res.status(201).json({ message: 'Consultation information added successfully', data: message });
 }
