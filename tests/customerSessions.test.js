@@ -38,6 +38,17 @@ test('customer sessions include owned tray history without exposing reused tray 
       (2, 'T2', 'OCCUPIED', 2, 2, 2);
     INSERT INTO cultivation_session_trays VALUES
       (1, 1, 1, 'ACTIVE'), (2, 2, 2, 'RELEASED'), (3, 3, 2, 'ACTIVE');
+    ALTER TABLE cultivation_sessions ADD COLUMN harvest_ready_at TIMESTAMPTZ;
+    ALTER TABLE cultivation_sessions ADD COLUMN harvest_date DATE;
+    ALTER TABLE cultivation_sessions ADD COLUMN duration_days INT;
+    CREATE TABLE inventory_transactions (transaction_id INT, session_id INT, transaction_type TEXT, quantity INT);
+    CREATE TABLE cultivation_progress (progress_id INT, session_id INT, current_stage TEXT, progress_percent NUMERIC, updated_at TIMESTAMPTZ);
+    CREATE TABLE harvest_requests (
+      harvest_request_id INT, session_id INT, harvest_method TEXT, status TEXT,
+      scheduled_at TIMESTAMPTZ, delivery_address TEXT, completed_at TIMESTAMPTZ
+    );
+    INSERT INTO harvest_requests VALUES
+      (8, 2, 'PICKUP', 'COMPLETED', '2026-11-18 03:00:00+00', NULL, '2026-11-18 04:00:00+00');
   `);
   const paths = ['../src/config/db', '../src/models/user.model', '../src/services/auth.service'];
   const saved = paths.map((name) => [require.resolve(name), require.cache[require.resolve(name)]]);
@@ -91,6 +102,15 @@ test('customer sessions include owned tray history without exposing reused tray 
     assert.deepEqual(other.data.map((session) => session.session_id), [3]);
     assert.equal(other.data[0].trays[0].room_name, 'Room B');
     assert.deepEqual((await (await request(12)).json()).data, []);
+    const requestStatus = (userId) => fetch(`http://127.0.0.1:${server.address().port}/api/customer/orders/1/cultivation-status`, {
+      headers: { authorization: `Bearer ${jwt.sign({ sub: String(userId) }, secret)}` },
+    });
+    const status = await (await requestStatus(10)).json();
+    const completedSession = status.data.sessions.find((session) => session.session_id === 2);
+    assert.equal(completedSession.harvest_method, 'PICKUP');
+    assert.equal(completedSession.handover_completed_at, '2026-11-18T04:00:00.000Z');
+    assert.equal(status.data.sessions.find((session) => session.session_id === 1).handover_completed_at, null);
+    assert.equal((await requestStatus(11)).status, 404);
   } finally {
     server.closeAllConnections();
     await new Promise((resolve) => server.close(resolve));

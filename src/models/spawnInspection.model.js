@@ -546,6 +546,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
             latest_progress.current_stage, latest_progress.progress_percent,
             latest_progress.updated_at AS progress_updated_at,
             hr.harvest_request_id, hr.harvest_method, hr.status AS harvest_request_status, hr.scheduled_at, hr.delivery_address,
+            hr.completed_at AS handover_completed_at,
             COALESCE((
               SELECT json_agg(json_build_object(
                 'session_tray_id', st.session_tray_id,

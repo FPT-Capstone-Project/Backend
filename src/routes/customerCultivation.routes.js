@@ -53,7 +53,7 @@ router.get('/orders/:orderId/harvest-history', authenticate, orderController.cus
  *           type: integer
  *     responses:
  *       200:
- *          description: Customer-visible session status, harvest readiness, latest growth progress, assigned trays, and receiving method/status/schedule when selected
+ *          description: Customer-visible session status, harvest readiness, latest growth progress, assigned trays, and receiving method, status, schedule, address and handover completion time when recorded
  *       404:
  *         description: Order not found or not accessible to this user
  */
