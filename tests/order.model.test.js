@@ -2,8 +2,9 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 function loadOrderModel({
-  durationDays = 30,
-  growingDays = 25,
+  growingDays = 9,
+  packageAvailable = true,
+  mushroomStatus = 'ACTIVE',
   availableTrays = 5,
   heldTrays = 0,
   spawnInventory = 30,
@@ -20,10 +21,11 @@ function loadOrderModel({
       statements.push({ statement, values });
 
       if (statement.startsWith('SELECT package_id')) {
-        return { rows: [{ package_id: 7, package_name: '30 days', duration_days: durationDays, price: '500000', status: 'ACTIVE' }] };
+        assert.match(statement, /WHERE duration_days = \$1 AND status = 'ACTIVE'/);
+        return { rows: packageAvailable ? [{ package_id: 7, package_name: `${values[0]} days`, duration_days: values[0], price: '500000', status: 'ACTIVE' }] : [] };
       }
       if (statement.startsWith('SELECT mushroom_type_id')) {
-        return { rows: [{ mushroom_type_id: 9, name: 'Oyster', growing_days: growingDays, price: '30000', status: 'ACTIVE' }] };
+        return { rows: [{ mushroom_type_id: 9, name: 'Oyster', growing_days: growingDays, price: '30000', status: mushroomStatus }] };
       }
       if (statement.startsWith('SELECT t.tray_id')) {
         return { rows: Array.from({ length: availableTrays }, (_, index) => ({ tray_id: index + 1, floor_id: 1, compatible: true })) };
@@ -90,11 +92,10 @@ function loadOrderModel({
   return { model: require('../src/models/order.model'), statements };
 }
 
-test('creates a cultivation item for the selected package, mushroom, and tray quantity', async () => {
+test('creates a cultivation item with an automatic package for the mushroom and tray quantity', async () => {
   const { model, statements } = loadOrderModel();
   const order = await model.createCultivationOrder({
     userId: 3,
-    packageId: 7,
     mushroomTypeId: 9,
     quantity: 3,
   });
@@ -104,7 +105,7 @@ test('creates a cultivation item for the selected package, mushroom, and tray qu
   assert.equal(order.items.length, 1);
   assert.equal(order.items[0].rental_package_id, 7);
   assert.equal(order.items[0].mushroom_type_id, 9);
-  assert.equal(order.items[0].package_name, '30 days');
+  assert.equal(order.items[0].package_name, '15 days');
   assert.equal(order.items[0].mushroom_name, 'Oyster');
   assert.equal(order.items[0].unit_price, '530000');
   assert.equal(order.items[0].quantity, 3);
@@ -122,7 +123,6 @@ test('rejects orders when selected tray quantity exceeds available trays', async
   await assert.rejects(
     () => model.createCultivationOrder({
       userId: 3,
-      packageId: 7,
       mushroomTypeId: 9,
       quantity: 3,
     }),
@@ -138,7 +138,6 @@ test('rejects orders when selected mushroom spawn is held or unavailable', async
   await assert.rejects(
     () => model.createCultivationOrder({
       userId: 3,
-      packageId: 7,
       mushroomTypeId: 9,
       quantity: 3,
     }),
@@ -149,21 +148,51 @@ test('rejects orders when selected mushroom spawn is held or unavailable', async
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
 });
 
-test('rejects a mushroom that takes longer than the selected package and rolls back', async () => {
-  const { model, statements } = loadOrderModel({ durationDays: 20, growingDays: 25 });
+test('rejects unsupported growing times and rolls back', async () => {
+  for (const growingDays of [6, 16, 25]) {
+    const { model, statements } = loadOrderModel({ growingDays });
+    await assert.rejects(
+      () => model.createCultivationOrder({
+        userId: 3,
+        mushroomTypeId: 9,
+        quantity: 1,
+      }),
+      { statusCode: 400, message: /growing_days between 7 and 15/ },
+    );
+    assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
+    assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
+  }
+});
 
+test('maps both growing-day ranges at their boundaries and ignores a client package ID', async () => {
+  for (const [growingDays, durationDays] of [[7, 15], [9, 15], [10, 20], [15, 20]]) {
+    const { model, statements } = loadOrderModel({ growingDays });
+    const order = await model.createCultivationOrder({
+      userId: 3, mushroomTypeId: 9, quantity: 1, packageId: 999,
+    });
+    const selection = statements.find(({ statement }) => statement.startsWith('SELECT package_id'));
+    assert.deepEqual(selection.values, [durationDays]);
+    assert.equal(order.items[0].rental_package_id, 7);
+  }
+});
+
+test('rejects an unavailable automatic package without creating an order', async () => {
+  const { model, statements } = loadOrderModel({ packageAvailable: false });
   await assert.rejects(
-    () => model.createCultivationOrder({
-      userId: 3,
-      packageId: 7,
-      mushroomTypeId: 9,
-      quantity: 1,
-    }),
-    { statusCode: 400, message: /longer than the 20-day package/ },
+    () => model.createCultivationOrder({ userId: 3, mushroomTypeId: 9, quantity: 1 }),
+    { statusCode: 400, message: /No active 15-day cultivation package/ },
   );
-
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO orders')));
+});
+
+test('rejects inactive mushrooms before selecting a package', async () => {
+  const { model, statements } = loadOrderModel({ mushroomStatus: 'INACTIVE' });
+  await assert.rejects(
+    () => model.createCultivationOrder({ userId: 3, mushroomTypeId: 9, quantity: 1 }),
+    { statusCode: 400, message: 'Mushroom type is not available' },
+  );
+  assert.ok(!statements.some(({ statement }) => statement.startsWith('SELECT package_id')));
 });
 
 test('lists and returns order details only with the authenticated customer ID', async () => {

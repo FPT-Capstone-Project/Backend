@@ -173,7 +173,6 @@ async function cancelOrderForUser(orderId, userId) {
 
 async function createCultivationOrder({
   userId,
-  packageId,
   mushroomTypeId,
   quantity,
   holdMinutes,
@@ -182,19 +181,6 @@ async function createCultivationOrder({
 
   try {
     await client.query('BEGIN');
-
-    const packageResult = await client.query(
-      `SELECT package_id, package_name, duration_days, price, status
-       FROM rental_packages
-       WHERE package_id = $1
-       FOR SHARE`,
-      [packageId],
-    );
-    const rentalPackage = packageResult.rows[0];
-    if (!rentalPackage) throw new AppError('Cultivation package not found', 404);
-    if (rentalPackage.status !== 'ACTIVE') {
-      throw new AppError('Cultivation package is not available', 400);
-    }
 
     const mushroomResult = await client.query(
       `SELECT mushroom_type_id, name, growing_days, price, status
@@ -206,11 +192,23 @@ async function createCultivationOrder({
     const mushroomType = mushroomResult.rows[0];
     if (!mushroomType) throw new AppError('Mushroom type not found', 404);
     if (mushroomType.status !== 'ACTIVE') throw new AppError('Mushroom type is not available', 400);
-    if (Number(mushroomType.growing_days) > Number(rentalPackage.duration_days)) {
-      throw new AppError(
-        `Growing this mushroom takes ${mushroomType.growing_days} days, longer than the ${rentalPackage.duration_days}-day package. Choose another mushroom type or package.`,
-        400,
-      );
+    const growingDays = Number(mushroomType.growing_days);
+    if (!Number.isInteger(growingDays) || growingDays < 7 || growingDays > 15) {
+      throw new AppError('Automatic package selection requires mushroom growing_days between 7 and 15', 400);
+    }
+    const durationDays = growingDays <= 9 ? 15 : 20;
+    const packageResult = await client.query(
+      `SELECT package_id, package_name, duration_days, price, status
+       FROM rental_packages
+       WHERE duration_days = $1 AND status = 'ACTIVE'
+       ORDER BY package_id
+       LIMIT 1
+       FOR SHARE`,
+      [durationDays],
+    );
+    const rentalPackage = packageResult.rows[0];
+    if (!rentalPackage) {
+      throw new AppError(`No active ${durationDays}-day cultivation package is available`, 400);
     }
 
     const spawnQuantity = requiredSpawnForTrays(quantity);
@@ -249,7 +247,7 @@ async function createCultivationOrder({
                  mushroom_type_id, quantity, unit_price, total_price`,
       [
         order.order_id,
-        packageId,
+        rentalPackage.package_id,
         mushroomTypeId,
         quantity,
         packagePrice,

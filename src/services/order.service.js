@@ -18,8 +18,6 @@ function getReservationHoldMinutes() {
 
 async function createCultivationOrder(userId, payload = {}) {
   const customerId = parseId(userId, 'userId');
-  const rawPackageId = payload.packageId ?? payload.package_id;
-  const packageId = parseId(rawPackageId, 'packageId');
   const mushroomTypeId = parseId(
     payload.mushroomTypeId ?? payload.mushroom_type_id,
     'mushroomTypeId',
@@ -31,7 +29,6 @@ async function createCultivationOrder(userId, payload = {}) {
 
   return orderModel.createCultivationOrder({
     userId: customerId,
-    packageId,
     mushroomTypeId,
     quantity,
     holdMinutes: getReservationHoldMinutes(),
