@@ -2,6 +2,14 @@
 
 ## Cập nhật mobile: hội thoại hai chiều và ảnh
 
+### Expert xem thông tin phiên
+
+Trong chi tiết tư vấn, bấm **Xem thông tin phiên trồng**. Trang chỉ đọc sử dụng `GET /api/issues/{issueId}` hiện có, hiển thị loại nấm, trạng thái phiên, khay/tầng, ngày bắt đầu/dự kiến thu hoạch, tiến độ mới nhất và báo cáo nguồn.
+
+Backend bổ sung `session_status`, `session_start_at`, `expected_harvest_date`, `growth_stage`, `growth_progress`, `growth_condition`, `growth_updated_at`, `tray_code`, `floor_id`, `tray_condition`, `mushroom_condition`, `inspection_notes`, `inspection_at`, `spawn_condition`. Không cần thêm bảng/cột. Cần triển khai code backend này để app nhận các trường bổ sung.
+
+Kiểm tra giai đoạn hiện tại lấy từ bản ghi tiến độ mới nhất; giai đoạn lúc báo sự cố và ảnh chụp dữ liệu môi trường chỉ hiển thị nếu thực sự đã được lưu. Thiếu dữ liệu hiển thị “Chưa ghi nhận”. Mở/đóng trang không thay đổi trạng thái tư vấn hay phiên trồng.
+
 Không cần migration hay bảng mới. Backend lưu hội thoại có cấu trúc trong cột `expert_consultations.question` hiện có, trả câu hỏi gốc và danh sách `messages` qua các API cũ. Câu hỏi và các tin bổ sung cũ vẫn đọc được.
 Các phản hồi chuyên môn từ thời điểm cập nhật được lưu thành tin riêng, không mất khi Expert trả lời tiếp.
 

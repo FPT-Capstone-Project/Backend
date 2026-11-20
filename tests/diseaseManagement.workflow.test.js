@@ -183,6 +183,13 @@ async function setupDatabase() {
     INSERT INTO cultivation_progress (session_id, current_stage) VALUES (1, 'PINNING');
     INSERT INTO iot_sensor_latest VALUES (10, 4, 1, 22.5, 88, TRUE, now());
   `);
+  await db.exec(`
+    ALTER TABLE cultivation_sessions ADD COLUMN start_at TIMESTAMPTZ, ADD COLUMN harvest_date DATE;
+    ALTER TABLE cultivation_progress ADD COLUMN progress_percent NUMERIC, ADD COLUMN condition TEXT, ADD COLUMN updated_at TIMESTAMPTZ;
+    ALTER TABLE cultivation_trays ADD COLUMN tray_code TEXT;
+    ALTER TABLE cultivation_inspections ADD COLUMN tray_condition TEXT, ADD COLUMN mushroom_condition TEXT, ADD COLUMN notes TEXT, ADD COLUMN inspection_date TIMESTAMPTZ;
+    ALTER TABLE spawn_inspections ADD COLUMN notes TEXT, ADD COLUMN inspected_at TIMESTAMPTZ, ADD COLUMN condition TEXT;
+  `);
   return db;
 }
 
@@ -537,6 +544,30 @@ test('WF-06 reads legacy follow-ups and preserves existing diagnosis without sch
     assert.equal((await service.listConsultations(expert)).consultations[0].question, legacy);
     const tables = await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'consultation_messages'");
     assert.equal(tables.rows.length, 0);
+  } finally { await db.close(); }
+});
+
+test('WF-06 expert context uses current progress and linked inspection without inventing historical data', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadService(db);
+    const issue = await service.createIssue(user(2, 2), {
+      sessionTrayId: 1, inspectionId: 1, issueType: 'OTHER', title: 'Context', description: 'Test context',
+    });
+    await db.query("UPDATE cultivation_inspections SET tray_condition = 'Dry', mushroom_condition = 'Small caps', notes = 'Linked report' WHERE inspection_id = 1");
+    await db.query("UPDATE cultivation_trays SET tray_code = 'ROOM1-F1-R1-C1' WHERE tray_id = 1");
+    await db.query("INSERT INTO cultivation_progress (session_id, current_stage, progress_percent, condition, updated_at) VALUES (1, 'MATURATION', 100, 'Stable', now())");
+    const detail = await service.getIssue(user(4, 4), issue.issue_id);
+    assert.equal(detail.growth_stage, 'MATURATION');
+    assert.equal(Number(detail.growth_progress), 100);
+    assert.equal(detail.growth_condition, 'Stable');
+    assert.equal(issue.reported_stage, 'PINNING');
+    assert.equal(detail.reported_stage ?? null, null);
+    assert.equal(detail.session_status, 'CULTIVATING');
+    assert.equal(detail.tray_code, 'ROOM1-F1-R1-C1');
+    assert.equal(detail.tray_condition, 'Dry');
+    assert.equal(detail.inspection_notes, 'Linked report');
+    await assert.rejects(service.getIssue(user(3, 3), issue.issue_id), { statusCode: 403 });
   } finally { await db.close(); }
 });
 

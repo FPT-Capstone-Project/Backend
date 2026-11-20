@@ -203,7 +203,16 @@ async function findIssue(issueId) {
             (SELECT ec.expert_id FROM expert_consultations ec
              WHERE ec.issue_id = ci.issue_id
              ORDER BY ec.created_at DESC, ec.consultation_id DESC LIMIT 1) AS responding_expert_id,
-            spawn_inspection.stage AS spawn_stage
+            spawn_inspection.stage AS spawn_stage,
+            s.status AS session_status, s.start_at AS session_start_at,
+            s.harvest_date AS expected_harvest_date,
+            progress.current_stage AS growth_stage, progress.progress_percent AS growth_progress,
+            progress.condition AS growth_condition, progress.updated_at AS growth_updated_at,
+            tray.tray_code, tray.floor_id,
+            inspection.tray_condition, inspection.mushroom_condition,
+            COALESCE(inspection.notes, spawn_inspection.notes) AS inspection_notes,
+            COALESCE(inspection.inspection_date, spawn_inspection.inspected_at) AS inspection_at,
+            spawn_inspection.condition AS spawn_condition
      FROM cultivation_issues ci
      LEFT JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
      LEFT JOIN spawn_inspections spawn_inspection
@@ -216,6 +225,13 @@ async function findIssue(issueId) {
      LEFT JOIN orders o ON o.order_id = oi.order_id
      LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
      LEFT JOIN users reporter ON reporter.user_id = ci.reported_by
+     LEFT JOIN cultivation_trays tray ON tray.tray_id = st.tray_id
+     LEFT JOIN cultivation_inspections inspection ON inspection.inspection_id = ci.inspection_id
+     LEFT JOIN LATERAL (
+       SELECT current_stage, progress_percent, condition, updated_at
+       FROM cultivation_progress cp WHERE cp.session_id = s.session_id
+       ORDER BY cp.progress_id DESC LIMIT 1
+     ) progress ON TRUE
      WHERE ci.issue_id = $1`,
     [issueId],
   );
