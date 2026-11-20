@@ -169,7 +169,7 @@ const router = express.Router();
  * /api/consultations/{consultationId}/messages:
  *   post:
  *     tags: [Disease Management]
- *     summary: Append follow-up information to the consultation question
+ *     summary: Send a message or photo as an operator or the assigned expert until closure
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: consultationId, required: true, schema: { type: integer } }
@@ -182,8 +182,17 @@ const router = express.Router();
  *             required: [message]
  *             properties:
  *               message: { type: string }
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             description: At least one of message or file is required
+ *             properties:
+ *               message: { type: string, maxLength: 5000 }
+ *               file: { type: string, format: binary, description: Image up to 25 MB }
  *     responses:
- *       201: { description: Follow-up appended while the expert is diagnosing; status is unchanged }
+ *       201: { description: Message saved in conversation history; workflow status is unchanged }
+ *       403: { description: Sender is not staff or is an unassigned expert }
+ *       409: { description: Consultation is closed }
  * /api/consultations/{consultationId}/treatments:
  *   post:
  *     tags: [Disease Management]
@@ -306,7 +315,7 @@ router.get('/consultations', authenticate, controller.listConsultations);
 router.get('/consultations/:consultationId', authenticate, controller.getConsultation);
 router.patch('/consultations/:consultationId/assign', authenticate, controller.assignConsultation);
 router.patch('/consultations/:consultationId/respond', authenticate, controller.respondToConsultation);
-router.post('/consultations/:consultationId/messages', authenticate, controller.addConsultationMessage);
+router.post('/consultations/:consultationId/messages', authenticate, mediaUpload.single('file'), controller.addConsultationMessage);
 router.post('/consultations/:consultationId/treatments', authenticate, controller.createTreatment);
 router.get('/consultations/:consultationId/treatments', authenticate, controller.getTreatments);
 

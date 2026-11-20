@@ -353,61 +353,70 @@ async function createConsultation(issueId, question, createdBy) {
   }
 }
 
-async function createConsultationMessage(consultationId, message, senderId) {
+// Reuse the existing TEXT question column; no schema migration is required.
+const CHAT_PREFIX = 'MCMS_CHAT_V1:';
+function readConversation(consultation) {
+  const raw = consultation.question || '';
+  if (raw.startsWith(CHAT_PREFIX)) {
+    try {
+      const data = JSON.parse(raw.slice(CHAT_PREFIX.length));
+      if (typeof data.question === 'string' && Array.isArray(data.messages)) return data;
+    } catch { /* Preserve legacy plain text if it is not a valid envelope. */ }
+  }
+  const messages = [];
+  // Preserve the latest response from consultations created before chat support.
+  if (consultation.diagnosis && consultation.expert_id != null) {
+    messages.push({ message_id: 'previous-response', sender_id: consultation.expert_id,
+      message: [consultation.diagnosis, consultation.solution].filter(Boolean).join('\n\n'),
+      created_at: consultation.responded_at || consultation.created_at });
+  }
+  return { question: raw, messages };
+}
+function publicConsultation(consultation) {
+  return consultation ? { ...consultation, question: readConversation(consultation).question } : null;
+}
+async function appendConversationMessage(client, consultation, message, senderId, mediaUrl) {
+  const conversation = readConversation(consultation);
+  const entry = { message_id: `chat-${conversation.messages.length + 1}`,
+    consultation_id: consultation.consultation_id, sender_id: senderId,
+    message: message || '', media_url: mediaUrl || null, created_at: new Date().toISOString() };
+  conversation.messages.push(entry);
+  await client.query('UPDATE expert_consultations SET question = $2 WHERE consultation_id = $1',
+    [consultation.consultation_id, CHAT_PREFIX + JSON.stringify(conversation)]);
+  return entry;
+}
+
+async function createConsultationMessage(consultationId, message, senderId, options = {}) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const createdAt = new Date().toISOString();
-    const messageSuffix = `\n\n[OPERATOR_FOLLOW_UP:${createdAt}]\n${message}`;
     const result = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status,
-              ci.title, ci.status AS issue_status
+      `SELECT ec.*, ci.status AS issue_status, ci.reported_by
        FROM expert_consultations ec
-       INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
-       WHERE ec.consultation_id = $1
-       FOR UPDATE OF ec, ci`,
-      [consultationId],
-    );
+       JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
+       WHERE ec.consultation_id = $1 FOR UPDATE OF ec, ci`, [consultationId]);
     const consultation = result.rows[0];
     if (!consultation) throw new AppError('Consultation not found', 404);
-    const canAddInformation = (
-      consultation.status === 'PENDING' && consultation.issue_status === 'WAITING_EXPERT'
-    ) || (
-      consultation.status === 'IN_PROGRESS' && consultation.issue_status === 'WAITING_EXPERT'
-    );
-    if (!canAddInformation) {
-      throw new AppError('Consultation is not open for additional information', 409);
+    if (consultation.status === 'CLOSED' || consultation.issue_status === 'RESOLVED') {
+      throw new AppError('Consultation is closed', 409);
     }
+    if (options.isExpert && !options.isAdmin && Number(consultation.expert_id) !== Number(senderId)) {
+      throw new AppError('Only the assigned expert can reply', 403);
+    }
+    const saved = await appendConversationMessage(client, consultation, message, senderId, options.mediaUrl);
     await client.query(
-      `UPDATE expert_consultations
-       SET question = question || $2
-       WHERE consultation_id = $1`,
-      [consultationId, messageSuffix],
-    );
-    await client.query(
-      `INSERT INTO notifications (
-         user_id, notification_type, title, message, created_by, reference_type, reference_id
-       )
-       SELECT u.user_id, 'MUSHROOM_DISEASE', 'Additional issue information provided',
-              $1, $2, 'EXPERT_CONSULTATION', $3
-       FROM users u
-       INNER JOIN roles r ON r.role_id = u.role_id
-       WHERE u.status = 'ACTIVE'
-         AND (u.role_id = 1 OR lower(regexp_replace(r.role_name, '[ _-]', '', 'g')) LIKE '%expert%')
-         AND u.user_id <> $2`,
-      [
-        `The operator added information for issue "${consultation.title}".`,
-        senderId,
-        consultationId,
-      ],
-    );
+      `INSERT INTO notifications (user_id, notification_type, title, message, created_by, reference_type, reference_id)
+       SELECT u.user_id, 'MUSHROOM_DISEASE', 'New consultation message', $1, $2, $5, $3
+       FROM users u JOIN roles r ON r.role_id = u.role_id
+       WHERE u.status = 'ACTIVE' AND u.user_id <> $2 AND (
+         u.user_id = $4 OR ($4::integer IS NULL AND (u.role_id = 1 OR lower(regexp_replace(r.role_name, '[ _-]', '', 'g')) LIKE '%expert%'))
+       )`,
+      [message || 'New photo attached', senderId,
+        options.isExpert ? consultation.issue_id : consultationId,
+        options.isExpert ? consultation.reported_by : consultation.expert_id,
+        options.isExpert ? 'CULTIVATION_ISSUE' : 'EXPERT_CONSULTATION']);
     await client.query('COMMIT');
-    return {
-      consultation_id: consultationId,
-      sender_id: senderId,
-      message,
-      created_at: createdAt,
-    };
+    return saved;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -418,7 +427,7 @@ async function createConsultationMessage(consultationId, message, senderId) {
 
 async function findConsultationMessages(consultationId) {
   const result = await pool.query(
-    `SELECT ec.question, ec.created_at, ci.reported_by, u.full_name AS sender_name
+    `SELECT ec.*, ci.reported_by, u.full_name AS sender_name
      FROM expert_consultations ec
      INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
      INNER JOIN users u ON u.user_id = ci.reported_by
@@ -428,46 +437,19 @@ async function findConsultationMessages(consultationId) {
   const consultation = result.rows[0];
   if (!consultation) return [];
 
-  const messages = [];
-  const marker = /\n\n\[OPERATOR_FOLLOW_UP:([^\]]+)\]\n/g;
-  let segmentStart = 0;
-  let match;
-  let messageId = 0;
-  while ((match = marker.exec(consultation.question)) !== null) {
-    const initialQuestion = consultation.question.slice(segmentStart, match.index).trim();
-    if (initialQuestion && messageId === 0) {
-      messages.push({
-        message_id: messageId++,
-        sender_id: consultation.reported_by,
-        sender_name: consultation.sender_name,
-        message: initialQuestion,
-        created_at: consultation.created_at,
-      });
-    }
-    const contentStart = marker.lastIndex;
-    const nextMarker = marker.exec(consultation.question);
-    const contentEnd = nextMarker ? nextMarker.index : consultation.question.length;
-    messages.push({
-      message_id: messageId++,
-      sender_id: consultation.reported_by,
-      sender_name: consultation.sender_name,
-      message: consultation.question.slice(contentStart, contentEnd).trim(),
-      created_at: match[1],
-    });
-    if (!nextMarker) break;
-    segmentStart = nextMarker.index;
-    marker.lastIndex = nextMarker.index;
+  const conversation = readConversation(consultation);
+  const parts = conversation.question.split(/\n\n\[OPERATOR_FOLLOW_UP:([^\]]+)\]\n/);
+  const messages = [{ message_id: 'legacy-0', sender_id: consultation.reported_by,
+    sender_name: consultation.sender_name, message: parts[0].trim(), created_at: consultation.created_at }];
+  for (let i = 1; i < parts.length; i += 2) {
+    messages.push({ message_id: `legacy-${i}`, sender_id: consultation.reported_by,
+      sender_name: consultation.sender_name, message: (parts[i + 1] || '').trim(), created_at: parts[i] });
   }
-  if (messageId === 0 && consultation.question.trim()) {
-    messages.push({
-      message_id: 0,
-      sender_id: consultation.reported_by,
-      sender_name: consultation.sender_name,
-      message: consultation.question.trim(),
-      created_at: consultation.created_at,
-    });
-  }
-  return messages;
+  const ids = [...new Set(conversation.messages.map((m) => m.sender_id))];
+  const senders = ids.length ? await pool.query('SELECT user_id, full_name FROM users WHERE user_id = ANY($1::integer[])', [ids]) : { rows: [] };
+  const names = new Map(senders.rows.map((u) => [String(u.user_id), u.full_name]));
+  return [...messages, ...conversation.messages.map((m) => ({ ...m, sender_name: names.get(String(m.sender_id)) || '' }))]
+    .sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 }
 
 async function findConsultations({ status, limit, offset } = {}) {
@@ -494,7 +476,7 @@ async function findConsultations({ status, limit, offset } = {}) {
      LIMIT $${pageValues.length - 1} OFFSET $${pageValues.length}`,
     pageValues,
   );
-  return { consultations: result.rows, total: Number(count.rows[0]?.total || 0) };
+  return { consultations: result.rows.map(publicConsultation), total: Number(count.rows[0]?.total || 0) };
 }
 
 async function findConsultation(consultationId) {
@@ -513,7 +495,7 @@ async function findConsultation(consultationId) {
      WHERE ec.consultation_id = $1`,
     [consultationId],
   );
-  return result.rows[0] || null;
+  return publicConsultation(result.rows[0]);
 }
 
 async function assignConsultation(consultationId, expertId) {
@@ -557,7 +539,7 @@ async function assignConsultation(consultationId, expertId) {
       [consultation.issue_id, expertId],
     );
     await client.query('COMMIT');
-    return assigned.rows[0];
+    return publicConsultation(assigned.rows[0]);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -571,7 +553,7 @@ async function respondToConsultation(consultationId, response, actorId) {
   try {
     await client.query('BEGIN');
     const result = await client.query(
-      `SELECT ec.consultation_id, ec.issue_id, ec.status,
+      `SELECT ec.*,
               ec.expert_id, ci.reported_by, ci.title, ci.status AS issue_status
        FROM expert_consultations ec
        INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
@@ -594,6 +576,8 @@ async function respondToConsultation(consultationId, response, actorId) {
     if (!response.needsMoreInfo && !response.solution) {
       throw new AppError('solution is required when providing a treatment plan', 400);
     }
+    await appendConversationMessage(client, consultation,
+      [response.diagnosis, response.needsMoreInfo ? null : response.solution].filter(Boolean).join('\n\n'), actorId);
     const nextStatus = response.needsMoreInfo ? 'IN_PROGRESS' : 'ANSWERED';
     const updated = await client.query(
       `UPDATE expert_consultations
@@ -637,7 +621,7 @@ async function respondToConsultation(consultationId, response, actorId) {
       ],
     );
     await client.query('COMMIT');
-    return updated.rows[0];
+    return publicConsultation(updated.rows[0]);
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -1096,7 +1080,7 @@ async function findIssueTimeline(issueId) {
   ]);
   issue.reviews = reviews;
   const consultations = await Promise.all(consultationResult.rows.map(async (consultation) => ({
-    ...consultation,
+    ...publicConsultation(consultation),
     messages: await findConsultationMessages(consultation.consultation_id),
     treatments: await findTreatments(consultation.consultation_id),
   })));

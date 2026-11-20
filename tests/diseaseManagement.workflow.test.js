@@ -453,11 +453,91 @@ test('WF-06 allows an operator to add information while an expert is diagnosing'
       consultation.consultation_id,
     );
     assert.equal(updatedConsultation.status, 'ANSWERED');
-    assert.equal(updatedConsultation.messages.length, 2);
+    assert.equal(updatedConsultation.messages.length, 4);
+    assert.equal(updatedConsultation.messages.filter((m) => Number(m.sender_id) === 4).length, 2);
     assert.equal(updatedConsultation.issue_status, 'IN_PROGRESS');
   } finally {
     await db.close();
   }
+});
+
+test('WF-06 preserves two-way chat and photos until explicit resolution', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadService(db);
+    const operator = user(2, 2);
+    const expert = user(4, 4);
+    const issue = await service.createIssue(operator, {
+      spawnInspectionId: 1, issueType: 'CONTAMINATION', title: 'Chat test', description: 'Abnormal spawn',
+    });
+    const consultation = await service.createConsultation(operator, issue.issue_id, { question: 'Please help' });
+    const id = consultation.consultation_id;
+    await service.addConsultationMessage(operator, id, { message: 'Before assignment' });
+    await assert.rejects(service.addConsultationMessage(expert, id, { message: 'Not assigned' }), { statusCode: 403 });
+    await service.assignConsultation(expert, id);
+    await service.respondToConsultation(expert, id, { diagnosis: 'Contamination', solution: 'Isolate' });
+    await service.addConsultationMessage(operator, id, {}, { originalname: 'close-up.jpg', mimetype: 'image/jpeg' });
+    await service.addConsultationMessage(expert, id, { message: 'Keep monitoring' });
+    await service.addConsultationMessage(expert, id, { message: 'Send another update tomorrow' });
+    const chatNotification = await db.query(
+      "SELECT reference_type, reference_id FROM notifications WHERE user_id = 2 AND title = 'New consultation message' ORDER BY notification_id DESC LIMIT 1",
+    );
+    assert.equal(chatNotification.rows[0].reference_type, 'CULTIVATION_ISSUE');
+    assert.equal(Number(chatNotification.rows[0].reference_id), Number(issue.issue_id));
+    await assert.rejects(service.addConsultationMessage(user(6, 4), id, { message: 'Other expert' }), { statusCode: 403 });
+    await assert.rejects(service.addConsultationMessage(user(3, 3), id, { message: 'Customer' }), { statusCode: 403 });
+    await assert.rejects(service.addConsultationMessage(operator, id, { message: '   ' }), { statusCode: 400 });
+    await assert.rejects(service.addConsultationMessage(operator, id, {}, { originalname: 'video.mp4', mimetype: 'video/mp4' }), { statusCode: 400 });
+    const detail = await service.getConsultation(expert, id);
+    assert.equal(detail.status, 'ANSWERED');
+    assert.equal(detail.issue_status, 'IN_PROGRESS');
+    assert.equal(detail.messages.length, 6);
+    assert.ok(detail.messages.some((m) => m.media_url === 'https://media.example/close-up.jpg'));
+    assert.equal(detail.question, 'Please help');
+    const treatment = await service.createTreatment(operator, id, { actionDescription: 'Isolated', resultDescription: 'Stable' });
+    await service.addConsultationMessage(expert, id, { message: 'Reviewing the result' });
+    await service.reviewTreatment(expert, treatment.treatment_log_id, { reviewResult: 'APPROVED' });
+    await service.addConsultationMessage(operator, id, { message: 'All stable now' });
+    await service.resolveIssue(expert, issue.issue_id);
+    await assert.rejects(service.addConsultationMessage(operator, id, { message: 'Closed' }), { statusCode: 409 });
+    await assert.rejects(service.addConsultationMessage(expert, id, { message: 'Closed' }), { statusCode: 409 });
+    const closed = await service.getConsultation(expert, id);
+    assert.equal(closed.status, 'CLOSED');
+    assert.equal(closed.messages.length, 8);
+  } finally { await db.close(); }
+});
+
+test('WF-06 reads legacy follow-ups and preserves existing diagnosis without schema changes', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadService(db);
+    const operator = user(2, 2);
+    const expert = user(4, 4);
+    const issue = await service.createIssue(operator, {
+      spawnInspectionId: 1, issueType: 'CONTAMINATION', title: 'Legacy', description: 'Legacy data',
+    });
+    const consultation = await service.createConsultation(operator, issue.issue_id, { question: 'Original question' });
+    const id = consultation.consultation_id;
+    const legacy = 'Original question\n\n[OPERATOR_FOLLOW_UP:2026-01-01T00:00:00Z]\nFirst update\n\n[OPERATOR_FOLLOW_UP:2026-01-02T00:00:00Z]\nSecond update';
+    await db.query('UPDATE expert_consultations SET question = $2 WHERE consultation_id = $1', [id, legacy]);
+    await service.addConsultationMessage(operator, id, { message: 'New update with [brackets] and "quotes"\nNew line' });
+    const assigned = await service.assignConsultation(expert, id);
+    assert.equal(assigned.question, legacy);
+    const detail = await service.getConsultation(expert, id);
+    assert.equal(detail.messages.length, 4);
+    assert.ok(detail.messages.some((m) => m.message === 'Second update'));
+    assert.equal(detail.question, legacy);
+    // Emulate a previously saved expert response in the original plain-text format.
+    await db.query(`UPDATE expert_consultations SET question = $2, diagnosis = 'Old diagnosis',
+      responded_at = now() WHERE consultation_id = $1`, [id, legacy]);
+    await service.respondToConsultation(expert, id, { diagnosis: 'New diagnosis', solution: 'New plan' });
+    const updated = await service.getConsultation(expert, id);
+    assert.ok(updated.messages.some((m) => m.message === 'Old diagnosis'));
+    assert.ok(updated.messages.some((m) => m.message === 'New diagnosis\n\nNew plan'));
+    assert.equal((await service.listConsultations(expert)).consultations[0].question, legacy);
+    const tables = await db.query("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'consultation_messages'");
+    assert.equal(tables.rows.length, 0);
+  } finally { await db.close(); }
 });
 
 test('WF-06 also accepts a spawn inspection as the issue source', async () => {
@@ -512,8 +592,9 @@ test('WF-06 uses only tables and statuses in the supplied database', async () =>
       solution: 'Isolate the affected spawn.',
     });
     const consultationDetail = await service.getConsultation(user(4, 4), consultation.consultation_id);
-    assert.equal(consultationDetail.messages.length, 2);
-    assert.match(consultationDetail.question, /Added details\./);
+    assert.equal(consultationDetail.messages.length, 3);
+    assert.equal(consultationDetail.question, 'Please diagnose the issue.');
+    assert.ok(consultationDetail.messages.some((m) => m.message === 'Added details.'));
     assert.equal(consultationDetail.status, 'ANSWERED');
     assert.equal(consultationDetail.issue_status, 'IN_PROGRESS');
     assert.equal(notifications.rows.length, 3);
