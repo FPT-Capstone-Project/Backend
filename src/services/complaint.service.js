@@ -2,7 +2,7 @@ const model = require('../models/complaint.model');
 const cloudinary = require('./cloudinary.service');
 const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
-const STATUSES = ['OPEN', 'IN_PROGRESS', 'WAITING_CUSTOMER', 'RESOLVED', 'REJECTED'];
+const STATUSES = ['PENDING', 'UNDER_REVIEW', 'NEED_MORE_INFO', 'RESOLVING', 'RESOLVED', 'REJECTED', 'CLOSED'];
 
 function id(value) {
   if (!['number', 'string'].includes(typeof value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0 || Number(value) > 2147483647) {
@@ -20,20 +20,13 @@ function status(value) {
 }
 async function create(orderId, body, files, actor) {
   const data = { orderId: id(orderId), type: text(body.complaintType ?? body.complaint_type, 'complaintType', 100), description: text(body.description, 'description') };
-  const imageUrls = body.imageUrls === undefined ? [] : body.imageUrls;
-  if (!Array.isArray(imageUrls) || imageUrls.length + files.length > 10) throw new AppError('imageUrls must be an array with at most 10 total images', 400);
-  for (const value of imageUrls) {
-    let url;
-    try { url = new URL(value); } catch { throw new AppError('imageUrls must contain valid HTTPS URLs', 400); }
-    if (typeof value !== 'string' || value.length > 2048 || url.protocol !== 'https:' || url.username || url.password) {
-      throw new AppError('imageUrls must contain valid HTTPS URLs without credentials', 400);
-    }
-  }
+  if (body.imageUrls !== undefined) throw new AppError('Upload images using the multipart "images" field', 400);
+  if (!Array.isArray(files) || files.length > 10) throw new AppError('A maximum of 10 images may be uploaded', 400);
   const uploaded = [];
   try {
     return await model.create(data, actor, async () => {
       for (const file of files) uploaded.push(await cloudinary.uploadMedia(file, 'harvest-complaints'));
-      return [...imageUrls, ...uploaded.map((image) => image.mediaUrl)];
+      return uploaded.map((image) => image.mediaUrl);
     });
   } catch (error) {
     const cleanup = await Promise.allSettled(uploaded.map((image) => cloudinary.deleteMedia(image.publicId, image.resourceType)));

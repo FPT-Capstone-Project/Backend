@@ -65,7 +65,7 @@ async function create(data, actor, uploadImages) {
     const images = await uploadImages();
     const result = await client.query(
       `INSERT INTO complaints (order_id, customer_id, complaint_type, description, image_urls, status)
-       VALUES ($1, $2, $3, $4, $5::jsonb, 'OPEN') RETURNING *`,
+       VALUES ($1, $2, $3, $4, $5::jsonb, 'PENDING') RETURNING *`,
       [data.orderId, actor.user_id, data.type, data.description, JSON.stringify(images)]);
     await notify(client, result.rows[0], actor, 'A customer submitted a harvest delivery complaint.');
     return result.rows[0];
@@ -95,11 +95,11 @@ async function detail(id, actor) {
 async function reply(id, message, actor) {
   return transaction(async (client) => {
     const complaint = await ownedComplaint(client, id, actor, true);
-    if (['RESOLVED', 'REJECTED'].includes(complaint.status)) throw new AppError('Complaint no longer accepts replies', 409);
+    if (['RESOLVED', 'REJECTED', 'CLOSED'].includes(complaint.status)) throw new AppError('Complaint no longer accepts replies', 409);
     const result = await client.query(`INSERT INTO complaint_replies (complaint_id, sender_id, message)
       VALUES ($1, $2, $3) RETURNING *`, [id, actor.user_id, message]);
     await client.query(`UPDATE complaints SET updated_at = CURRENT_TIMESTAMP,
-      status = CASE WHEN status = 'WAITING_CUSTOMER' AND $2::boolean THEN 'IN_PROGRESS' ELSE status END
+      status = CASE WHEN status = 'NEED_MORE_INFO' AND $2::boolean THEN 'UNDER_REVIEW' ELSE status END
       WHERE complaint_id = $1`, [id, !isStaff(actor)]);
     await notify(client, complaint, actor, 'A new reply was added to your harvest delivery complaint.');
     return result.rows[0];
@@ -116,11 +116,11 @@ async function update(id, data, actor) {
     }
     const status = data.status || complaint.status;
     const resolution = data.resolution === undefined ? complaint.resolution : data.resolution;
-    if (['RESOLVED', 'REJECTED'].includes(status) && !resolution?.trim()) {
+    if (['RESOLVED', 'REJECTED', 'CLOSED'].includes(status) && !resolution?.trim()) {
       throw new AppError('A resolution is required for a final status', 400);
     }
     const result = await client.query(`UPDATE complaints SET status = $2, assigned_to = $3, resolution = $4,
-      updated_at = CURRENT_TIMESTAMP, resolved_at = CASE WHEN $2 = 'RESOLVED'
+      updated_at = CURRENT_TIMESTAMP, resolved_at = CASE WHEN $2 IN ('RESOLVED', 'CLOSED')
       THEN COALESCE(resolved_at, CURRENT_TIMESTAMP) ELSE NULL END WHERE complaint_id = $1 RETURNING *`,
     [id, status, assigned, resolution]);
     await notify(client, result.rows[0], actor, 'Your harvest delivery complaint was updated.');
