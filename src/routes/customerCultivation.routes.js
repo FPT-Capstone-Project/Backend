@@ -8,6 +8,28 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
 const router = express.Router();
 const customerHistoryAccess = [authenticate, authorizeRoles(1, 2, 3)];
 
+/**
+ * @openapi
+ * /api/customer/sessions:
+ *   get:
+ *     tags: [Customer Cultivation]
+ *     summary: List the customer's cultivation sessions and their tray assignments
+ *     description: Released assignments do not include location or current physical tray status because trays may have moved or been reused.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, minimum: 1, default: 1 }
+ *       - in: query
+ *         name: pageSize
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *     responses:
+ *       200: { description: Owned sessions with tray assignments and pagination }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Customer role required }
+ */
+router.get('/sessions', authenticate, authorizeRoles(3), spawnInspectionController.customerSessions);
+
 router.get('/orders/:orderId/harvest-history', authenticate, orderController.customerHarvestHistory);
 
 /**
