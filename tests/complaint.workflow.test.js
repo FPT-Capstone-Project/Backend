@@ -27,7 +27,8 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
         complaint_id INT REFERENCES complaints, sender_id INT, message TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
       CREATE TABLE notifications (user_id INT, notification_type TEXT, title TEXT, message TEXT,
         created_by INT, reference_type TEXT, reference_id INT);
-      INSERT INTO users VALUES (1,'Staff',1,'ACTIVE'), (2,'Owner',3,'ACTIVE'), (3,'Other',3,'ACTIVE');
+      INSERT INTO users VALUES (1,'Staff',1,'ACTIVE'), (2,'Owner',3,'ACTIVE'), (3,'Other',3,'ACTIVE'),
+        (4,'Operator',2,'ACTIVE');
       INSERT INTO orders VALUES (1,2);
       INSERT INTO shipments VALUES (1,1,'DELIVERED'), (2,1,'PENDING');
       INSERT INTO order_items VALUES (1,1);
@@ -44,6 +45,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     const owner = { user_id: 2, role_id: 3 };
     const other = { user_id: 3, role_id: 3 };
     const staff = { user_id: 1, role_id: 1 };
+    const operator = { user_id: 4, role_id: 2 };
     const data = { orderId: 1, type: 'DAMAGED', description: 'Damaged mushrooms' };
     let uploads = 0;
     const upload = async () => { uploads++; return ['https://example.test/image.jpg']; };
@@ -57,12 +59,24 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await assert.rejects(model.create(data, owner, upload), { statusCode: 409 });
     await db.query("UPDATE shipments SET delivered_at = NOW() WHERE shipment_id = 2");
     assert.equal(uploads, 0);
+    assert.equal((await db.query('SELECT * FROM notifications')).rows.length, 0);
+    await db.exec("ALTER TABLE notifications ADD CONSTRAINT reject_confirmation CHECK (title <> 'Đã gửi khiếu nại')");
+    await assert.rejects(model.create(data, owner, async () => []));
+    assert.equal((await db.query('SELECT * FROM complaints')).rows.length, 0);
+    assert.equal((await db.query('SELECT * FROM notifications')).rows.length, 0);
+    await db.exec('ALTER TABLE notifications DROP CONSTRAINT reject_confirmation');
     const complaint = await model.create(data, owner, upload);
     assert.equal(complaint.status, 'PENDING');
     assert.equal(complaint.order_id, 1);
     assert.equal(complaint.shipment_id, undefined);
     assert.deepEqual(complaint.image_urls, ['https://example.test/image.jpg']);
+    const confirmation = await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id]);
+    assert.equal(confirmation.rows.length, 1);
+    assert.equal(confirmation.rows[0].title, 'Đã gửi khiếu nại');
+    assert.equal(confirmation.rows[0].reference_type, 'COMPLAINT');
+    assert.equal(confirmation.rows[0].reference_id, complaint.complaint_id);
     await assert.rejects(model.create(data, owner, upload), { statusCode: 409 });
+    assert.equal((await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length, 1);
     assert.equal(uploads, 1);
     await assert.rejects(model.detail(complaint.complaint_id, other), { statusCode: 404 });
     assert.equal((await model.list(other, { limit: 20, offset: 0, mine: true })).total, 0);
@@ -87,6 +101,32 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal(detail.order.order_id, 1);
     assert.equal(detail.replies[1].sender_id, 2);
     assert.equal(detail.assigned_staff.user_id, 1);
+    await model.update(complaint.complaint_id, { assignedTo: operator.user_id }, staff);
+    const beforeReply = (await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length;
+    await db.exec("ALTER TABLE notifications ADD CONSTRAINT reject_operator_notification CHECK (title <> 'Khiếu nại đã có phản hồi')");
+    await assert.rejects(model.reply(complaint.complaint_id, 'Operator reply', operator));
+    assert.equal((await db.query('SELECT * FROM complaint_replies')).rows.length, 2);
+    assert.equal((await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length, beforeReply);
+    await db.exec('ALTER TABLE notifications DROP CONSTRAINT reject_operator_notification');
+    await model.reply(complaint.complaint_id, 'Operator reply', operator);
+    const operatorNotifications = await db.query(
+      'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
+      [owner.user_id, 'Khiếu nại đã có phản hồi']);
+    assert.equal(operatorNotifications.rows.length, 1);
+    assert.match(operatorNotifications.rows[0].message, /Nhân viên trang trại đã phản hồi/);
+    assert.equal(operatorNotifications.rows[0].created_by, operator.user_id);
+    assert.equal(operatorNotifications.rows[0].reference_id, complaint.complaint_id);
+    await model.update(complaint.complaint_id, { resolution: 'Replacement proposed' }, operator);
+    const resolutionNotifications = await db.query(
+      'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
+      [owner.user_id, 'Khiếu nại đã có phản hồi']);
+    assert.equal(resolutionNotifications.rows.length, 2);
+    assert.match(resolutionNotifications.rows[1].message, /cập nhật nội dung xử lý/);
+    await model.update(complaint.complaint_id, { resolution: 'Replacement proposed' }, operator);
+    assert.equal((await db.query(
+      'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
+      [owner.user_id, 'Khiếu nại đã có phản hồi'])).rows.length, 2);
+    await db.query('UPDATE complaints SET resolution = NULL WHERE complaint_id = $1', [complaint.complaint_id]);
     await assert.rejects(model.update(complaint.complaint_id, { status: 'RESOLVED' }, staff), { statusCode: 400 });
     await model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Replacement delivered' }, staff);
     await assert.rejects(model.reply(complaint.complaint_id, 'Late reply', owner), { statusCode: 409 });
