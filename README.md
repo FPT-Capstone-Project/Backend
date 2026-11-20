@@ -4,7 +4,7 @@ Backend API được xây dựng bằng Node.js, Express và PostgreSQL. Project
 
 ## Phiên nuôi trồng của khách hàng
 
-`GET /api/customer/sessions?page=1&pageSize=20` yêu cầu JWT Customer và chỉ trả các phiên thuộc đơn hàng của tài khoản đó, cùng danh sách khay và thông tin phân trang. Khay đang gán có trạng thái, phòng, tầng và vị trí hàng/cột nếu đã được cấu hình. Khay đã trả vẫn xuất hiện nhưng không trả vị trí hay trạng thái hiện tại vì khay có thể đã được chuyển hoặc sử dụng lại; hệ thống không lưu vị trí lịch sử của lần gán.
+`GET /api/customer/sessions?page=1&pageSize=20&status=ALL` yêu cầu JWT Customer và chỉ trả các phiên thuộc đơn hàng của tài khoản đó, cùng danh sách khay và thông tin phân trang. Bộ lọc `status` gồm `ALL` (mặc định, bao gồm phiên đã hủy), `GROWING` (chưa hoàn thành và chưa hủy), `COMPLETED` (hoàn thành); lọc được áp dụng trước phân trang. Khay đang gán có trạng thái, phòng, tầng và vị trí hàng/cột nếu đã được cấu hình. Khay đã trả vẫn xuất hiện nhưng không trả vị trí hay trạng thái hiện tại vì khay có thể đã được chuyển hoặc sử dụng lại; hệ thống không lưu vị trí lịch sử của lần gán.
 
 ## Thanh toán PayOS
 

@@ -23,8 +23,13 @@ const customerHistoryAccess = [authenticate, authorizeRoles(1, 2, 3)];
  *       - in: query
  *         name: pageSize
  *         schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+ *       - in: query
+ *         name: status
+ *         description: GROWING excludes completed and cancelled sessions; ALL includes cancelled sessions.
+ *         schema: { type: string, enum: [ALL, GROWING, COMPLETED], default: ALL }
  *     responses:
  *       200: { description: Owned sessions with tray assignments and pagination }
+ *       400: { description: Invalid pagination or status filter }
  *       401: { description: Missing or invalid JWT }
  *       403: { description: Customer role required }
  */

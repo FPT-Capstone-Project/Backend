@@ -22,12 +22,14 @@ test('customer sessions include owned tray history without exposing reused tray 
     );
     CREATE TABLE cultivation_session_trays (session_tray_id INT PRIMARY KEY, session_id INT, tray_id INT, status TEXT);
     INSERT INTO orders VALUES (1, 10), (2, 11);
-    INSERT INTO order_items VALUES (1, 1, 2), (2, 1, 1), (3, 2, 1);
+    INSERT INTO order_items VALUES (1, 1, 2), (2, 1, 1), (3, 2, 1), (4, 1, 1), (5, 1, 1);
     INSERT INTO mushroom_types VALUES (1, 'Mushroom');
     INSERT INTO cultivation_sessions VALUES
       (1, 1, 1, 'CULTIVATING', 'NOT_READY', now(), NULL),
       (2, 2, 1, 'COMPLETED', 'NOT_READY', now(), now()),
-      (3, 3, 1, 'CULTIVATING', 'NOT_READY', now(), NULL);
+      (3, 3, 1, 'CULTIVATING', 'NOT_READY', now(), NULL),
+      (4, 4, 1, 'CANCELLED', 'NOT_READY', now(), now()),
+      (5, 5, 1, 'SPAWN_RESTING', 'NOT_READY', now(), NULL);
     INSERT INTO cultivation_rooms VALUES (1, 'Room A'), (2, 'Room B');
     INSERT INTO cultivation_floors VALUES (1, 'Floor A', 1), (2, 'Floor B', 2);
     INSERT INTO tray_positions VALUES (1, 2, 3), (2, 4, 5);
@@ -57,17 +59,32 @@ test('customer sessions include owned tray history without exposing reused tray 
     assert.equal((await request()).status, 401);
     assert.equal((await request(1)).status, 403);
     assert.equal((await request(10, '?page=0')).status, 400);
+    assert.equal((await request(10, '?status=INVALID')).status, 400);
+    assert.equal((await request(10, '?status=ALL&status=COMPLETED')).status, 400);
+    const all = await (await request(10)).json();
+    assert.deepEqual(all.data.map((session) => session.session_id), [5, 4, 2, 1]);
+    const growing = await (await request(10, '?status=GROWING&page=1&pageSize=1')).json();
+    assert.deepEqual(growing.pagination, { page: 1, pageSize: 1, total: 2, totalPages: 2 });
+    assert.deepEqual(growing.data.map((session) => session.session_id), [5]);
+    const growingNext = await (await request(10, '?status=GROWING&page=2&pageSize=1')).json();
+    assert.deepEqual(growingNext.data.map((session) => session.session_id), [1]);
+    const completed = await (await request(10, '?status=COMPLETED')).json();
+    assert.deepEqual(completed.data.map((session) => session.session_id), [2]);
+    assert.equal(completed.pagination.total, 1);
+    assert.deepEqual((await (await request(11, '?status=COMPLETED')).json()).data, []);
     const first = await (await request(10, '?page=1&pageSize=1')).json();
-    assert.deepEqual(first.pagination, { page: 1, pageSize: 1, total: 2, totalPages: 2 });
-    assert.equal(first.data[0].session_id, 2);
-    assert.equal(first.data[0].trays[0].assignment_status, 'RELEASED');
-    assert.equal(first.data[0].trays[0].room_name, null);
-    assert.equal(first.data[0].trays[0].tray_status, null);
-    const second = await (await request(10, '?page=2&pageSize=1')).json();
+    assert.deepEqual(first.pagination, { page: 1, pageSize: 1, total: 4, totalPages: 4 });
+    const third = await (await request(10, '?page=3&pageSize=1')).json();
+    assert.equal(third.data[0].session_id, 2);
+    assert.equal(third.data[0].trays[0].assignment_status, 'RELEASED');
+    assert.equal(third.data[0].trays[0].room_name, null);
+    assert.equal(third.data[0].trays[0].floor_id, null);
+    assert.equal(third.data[0].trays[0].tray_status, null);
+    const second = await (await request(10, '?page=4&pageSize=1')).json();
     assert.equal(second.data[0].session_id, 1);
     assert.deepEqual(second.data[0].trays[0], {
       session_tray_id: 1, tray_id: 1, tray_code: 'T1', assignment_status: 'ACTIVE',
-      tray_status: 'OCCUPIED', room_name: 'Room A', floor_name: 'Floor A',
+      tray_status: 'OCCUPIED', room_name: 'Room A', floor_id: 1, floor_name: 'Floor A',
       floor_number: 1, row_number: 2, column_number: 3,
     });
     const other = await (await request(11)).json();
