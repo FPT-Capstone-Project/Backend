@@ -485,6 +485,50 @@ async function changeStage(sessionId, nextStage) {
   }
 }
 
+async function findAllCustomerSessions(userId, pagination) {
+  const count = await pool.query(
+    `SELECT COUNT(*)::integer AS total
+     FROM cultivation_sessions s
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     INNER JOIN orders o ON o.order_id = oi.order_id
+     WHERE o.user_id = $1`,
+    [userId],
+  );
+  const result = await pool.query(
+    `SELECT s.session_id, o.order_id, s.status, s.harvest_status, s.start_at, s.end_at,
+            mt.name AS mushroom_name, oi.quantity AS tray_quantity,
+            COALESCE((
+              SELECT json_agg(json_build_object(
+                'session_tray_id', st.session_tray_id,
+                'tray_id', t.tray_id,
+                'tray_code', t.tray_code,
+                'assignment_status', st.status,
+                'tray_status', CASE WHEN st.status = 'ACTIVE' THEN t.status END,
+                'room_name', CASE WHEN st.status = 'ACTIVE' THEN r.room_name END,
+                'floor_name', CASE WHEN st.status = 'ACTIVE' THEN f.floor_name END,
+                'floor_number', CASE WHEN st.status = 'ACTIVE' THEN f.floor_number END,
+                'row_number', CASE WHEN st.status = 'ACTIVE' THEN p.row_number END,
+                'column_number', CASE WHEN st.status = 'ACTIVE' THEN p.column_number END
+              ) ORDER BY st.session_tray_id)
+              FROM cultivation_session_trays st
+              INNER JOIN cultivation_trays t ON t.tray_id = st.tray_id
+              LEFT JOIN cultivation_rooms r ON r.room_id = t.room_id
+              LEFT JOIN cultivation_floors f ON f.floor_id = t.floor_id
+              LEFT JOIN tray_positions p ON p.position_id = t.position_id
+              WHERE st.session_id = s.session_id
+            ), '[]'::json) AS trays
+     FROM cultivation_sessions s
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     INNER JOIN orders o ON o.order_id = oi.order_id
+     INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
+     WHERE o.user_id = $1
+     ORDER BY s.session_id DESC
+     LIMIT $2 OFFSET $3`,
+    [userId, pagination.limit, pagination.offset],
+  );
+  return { sessions: result.rows, total: count.rows[0].total };
+}
+
 async function findCustomerSessions(orderId, userId, isAdmin = false) {
   const ownerFilter = isAdmin ? '' : 'AND o.user_id = $2';
   const values = isAdmin ? [orderId] : [orderId, userId];
@@ -600,6 +644,7 @@ module.exports = {
   findInspectionForImage,
   createImage,
   changeStage,
+  findAllCustomerSessions,
   findCustomerSessions,
   findCustomerProgress,
   findCustomerInspections,
