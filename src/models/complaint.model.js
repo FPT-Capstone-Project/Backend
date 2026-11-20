@@ -25,14 +25,14 @@ async function ownedComplaint(client, id, actor, lock = false) {
   return rows[0];
 }
 
-async function notify(client, complaint, actor, message) {
+async function notify(client, complaint, actor, message, title = 'Harvest delivery complaint') {
   await client.query(
     `INSERT INTO notifications (user_id, notification_type, title, message, created_by, reference_type, reference_id)
-     SELECT user_id, 'COMPLAINT_UPDATE', 'Harvest delivery complaint', $1, $2, 'COMPLAINT', $3
+     SELECT user_id, 'COMPLAINT_UPDATE', $7, $1, $2, 'COMPLAINT', $3
      FROM users WHERE status = 'ACTIVE' AND user_id <> $2 AND
        (($4::boolean AND user_id = $5) OR (NOT $4::boolean AND
          (($6::integer IS NOT NULL AND user_id = $6) OR ($6::integer IS NULL AND role_id IN (1, 2)))))`,
-    [message, actor.user_id, complaint.complaint_id, isStaff(actor), complaint.customer_id, complaint.assigned_to]);
+    [message, actor.user_id, complaint.complaint_id, isStaff(actor), complaint.customer_id, complaint.assigned_to, title]);
 }
 
 async function create(data, actor, uploadImages) {
@@ -67,6 +67,12 @@ async function create(data, actor, uploadImages) {
       `INSERT INTO complaints (order_id, customer_id, complaint_type, description, image_urls, status)
        VALUES ($1, $2, $3, $4, $5::jsonb, 'PENDING') RETURNING *`,
       [data.orderId, actor.user_id, data.type, data.description, JSON.stringify(images)]);
+    await client.query(
+      `INSERT INTO notifications (user_id, notification_type, title, message, created_by, reference_type, reference_id)
+       VALUES ($1, 'COMPLAINT_UPDATE', $2, $3, $1, 'COMPLAINT', $4)`,
+      [actor.user_id, 'Đã gửi khiếu nại',
+        `Khiếu nại #${result.rows[0].complaint_id} của đơn hàng #${data.orderId} đã được gửi thành công.`,
+        result.rows[0].complaint_id]);
     await notify(client, result.rows[0], actor, 'A customer submitted a harvest delivery complaint.');
     return result.rows[0];
   });
@@ -101,7 +107,13 @@ async function reply(id, message, actor) {
     await client.query(`UPDATE complaints SET updated_at = CURRENT_TIMESTAMP,
       status = CASE WHEN status = 'NEED_MORE_INFO' AND $2::boolean THEN 'UNDER_REVIEW' ELSE status END
       WHERE complaint_id = $1`, [id, !isStaff(actor)]);
-    await notify(client, complaint, actor, 'A new reply was added to your harvest delivery complaint.');
+    if (Number(actor.role_id) === 2) {
+      await notify(client, complaint, actor,
+        `Nhân viên trang trại đã phản hồi khiếu nại #${id} của bạn.`,
+        'Khiếu nại đã có phản hồi');
+    } else {
+      await notify(client, complaint, actor, 'A new reply was added to your harvest delivery complaint.');
+    }
     return result.rows[0];
   });
 }
@@ -123,7 +135,13 @@ async function update(id, data, actor) {
       updated_at = CURRENT_TIMESTAMP, resolved_at = CASE WHEN $2 IN ('RESOLVED', 'CLOSED')
       THEN COALESCE(resolved_at, CURRENT_TIMESTAMP) ELSE NULL END WHERE complaint_id = $1 RETURNING *`,
     [id, status, assigned, resolution]);
-    await notify(client, result.rows[0], actor, 'Your harvest delivery complaint was updated.');
+    if (Number(actor.role_id) === 2 && data.resolution !== undefined && data.resolution !== complaint.resolution) {
+      await notify(client, result.rows[0], actor,
+        `Nhân viên trang trại đã cập nhật nội dung xử lý khiếu nại #${id} của bạn.`,
+        'Khiếu nại đã có phản hồi');
+    } else {
+      await notify(client, result.rows[0], actor, 'Your harvest delivery complaint was updated.');
+    }
     return result.rows[0];
   });
 }
