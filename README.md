@@ -2,6 +2,10 @@
 
 Backend API được xây dựng bằng Node.js, Express và PostgreSQL. Project hiện có nền tảng xác thực người dùng bằng JWT, mã hóa password bằng bcrypt, Swagger UI và cấu trúc module để tiếp tục phát triển các API khác.
 
+## Phiên nuôi trồng của khách hàng
+
+`GET /api/customer/sessions?page=1&pageSize=20` yêu cầu JWT Customer và chỉ trả các phiên thuộc đơn hàng của tài khoản đó, cùng danh sách khay và thông tin phân trang. Khay đang gán có trạng thái, phòng, tầng và vị trí hàng/cột nếu đã được cấu hình. Khay đã trả vẫn xuất hiện nhưng không trả vị trí hay trạng thái hiện tại vì khay có thể đã được chuyển hoặc sử dụng lại; hệ thống không lưu vị trí lịch sử của lần gán.
+
 ## Thanh toán PayOS
 
 Ứng dụng mobile tạo hoặc lấy lại payment link bằng `POST /api/payments/orders/{orderId}/payos`, sau đó mở `checkoutUrl` trong response để khách thanh toán. Sau khi mở trang thanh toán, ứng dụng poll `GET /api/payments/orders/{orderId}/status` cho đến khi `paymentStatus` là `PAID`. Không dùng redirect về `PAYOS_RETURN_URL` làm bằng chứng thanh toán thành công; trạng thái từ API mới là nguồn xác nhận.

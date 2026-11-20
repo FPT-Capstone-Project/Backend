@@ -52,6 +52,10 @@ async function farmChangeStage(req, res) {
   res.json({ message: 'Cultivation session stage updated successfully', data: session });
 }
 
+async function customerSessions(req, res) {
+  res.json(await spawnInspectionService.listCustomerSessions(req.user.user_id, req.query));
+}
+
 async function customerCultivationStatus(req, res) {
   const result = await spawnInspectionService.getCustomerCultivationStatus(
     req.params.orderId,
@@ -99,6 +103,7 @@ module.exports = {
   farmAddImage,
   farmReplaceSpawn,
   farmChangeStage,
+  customerSessions,
   customerCultivationStatus,
   customerCultivationProgress,
   customerSpawnInspections,

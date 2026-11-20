@@ -1,6 +1,7 @@
 const spawnInspectionModel = require('../models/spawnInspection.model');
 const cloudinaryService = require('./cloudinary.service');
 const AppError = require('../utils/app-error');
+const { parsePagination } = require('../utils/pagination');
 
 const SESSION_STATUSES = [
   'PENDING',
@@ -175,6 +176,20 @@ async function changeFarmStage(sessionId, payload = {}) {
   return spawnInspectionModel.changeStage(parseId(sessionId, 'sessionId'), nextStage);
 }
 
+async function listCustomerSessions(userId, query) {
+  const pagination = parsePagination(query);
+  const result = await spawnInspectionModel.findAllCustomerSessions(parseId(userId, 'userId'), pagination);
+  return {
+    data: result.sessions,
+    pagination: {
+      page: pagination.page,
+      pageSize: pagination.pageSize,
+      total: result.total,
+      totalPages: Math.ceil(result.total / pagination.pageSize),
+    },
+  };
+}
+
 async function getCustomerCultivationStatus(orderId, userId, isAdmin = false) {
   const sessions = await spawnInspectionModel.findCustomerSessions(
     parseId(orderId, 'orderId'),
@@ -214,6 +229,7 @@ module.exports = {
   addFarmInspectionImage,
   replaceFarmSpawn,
   changeFarmStage,
+  listCustomerSessions,
   getCustomerCultivationStatus,
   getCustomerCultivationProgress,
   getCustomerSpawnInspections,
