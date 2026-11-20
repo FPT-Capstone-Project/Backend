@@ -178,7 +178,11 @@ async function changeFarmStage(sessionId, payload = {}) {
 
 async function listCustomerSessions(userId, query) {
   const pagination = parsePagination(query);
-  const result = await spawnInspectionModel.findAllCustomerSessions(parseId(userId, 'userId'), pagination);
+  const status = query.status === undefined ? 'ALL' : query.status;
+  if (!['ALL', 'GROWING', 'COMPLETED'].includes(status)) {
+    throw new AppError('status must be ALL, GROWING, or COMPLETED', 400);
+  }
+  const result = await spawnInspectionModel.findAllCustomerSessions(parseId(userId, 'userId'), pagination, status);
   return {
     data: result.sessions,
     pagination: {

@@ -485,13 +485,16 @@ async function changeStage(sessionId, nextStage) {
   }
 }
 
-async function findAllCustomerSessions(userId, pagination) {
+async function findAllCustomerSessions(userId, pagination, status) {
+  const statusFilter = status === 'GROWING'
+    ? "AND s.status NOT IN ('COMPLETED', 'CANCELLED')"
+    : status === 'COMPLETED' ? "AND s.status = 'COMPLETED'" : '';
   const count = await pool.query(
     `SELECT COUNT(*)::integer AS total
      FROM cultivation_sessions s
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN orders o ON o.order_id = oi.order_id
-     WHERE o.user_id = $1`,
+     WHERE o.user_id = $1 ${statusFilter}`,
     [userId],
   );
   const result = await pool.query(
@@ -505,6 +508,7 @@ async function findAllCustomerSessions(userId, pagination) {
                 'assignment_status', st.status,
                 'tray_status', CASE WHEN st.status = 'ACTIVE' THEN t.status END,
                 'room_name', CASE WHEN st.status = 'ACTIVE' THEN r.room_name END,
+                'floor_id', CASE WHEN st.status = 'ACTIVE' THEN f.floor_id END,
                 'floor_name', CASE WHEN st.status = 'ACTIVE' THEN f.floor_name END,
                 'floor_number', CASE WHEN st.status = 'ACTIVE' THEN f.floor_number END,
                 'row_number', CASE WHEN st.status = 'ACTIVE' THEN p.row_number END,
@@ -521,7 +525,7 @@ async function findAllCustomerSessions(userId, pagination) {
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN orders o ON o.order_id = oi.order_id
      INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
-     WHERE o.user_id = $1
+     WHERE o.user_id = $1 ${statusFilter}
      ORDER BY s.session_id DESC
      LIMIT $2 OFFSET $3`,
     [userId, pagination.limit, pagination.offset],
