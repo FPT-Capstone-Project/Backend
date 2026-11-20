@@ -172,7 +172,7 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
       );
 
       INSERT INTO rental_packages (package_name, duration_days, price, status)
-      VALUES ('Basic', 15, 100, 'ACTIVE');
+      VALUES ('Basic', 15, 80, 'ACTIVE'), ('Standard', 20, 100, 'ACTIVE');
       INSERT INTO mushroom_types (name, growing_days, price, status)
       VALUES ('Oyster', 12, 20, 'ACTIVE');
       INSERT INTO cultivation_floors (status) VALUES ('ACTIVE');
@@ -183,14 +183,16 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
       INSERT INTO spawn_inventory (mushroom_type_id, quantity) VALUES (1, 10);
     `);
 
-    const { orderModel, paymentModel } = loadModels(db);
-    const order = await orderModel.createCultivationOrder({
-      userId: 7,
-      packageId: 1,
+    const { paymentModel } = loadModels(db);
+    delete require.cache[require.resolve('../src/services/order.service')];
+    const orderService = require('../src/services/order.service');
+    const order = await orderService.createCultivationOrder(7, {
       mushroomTypeId: 1,
       quantity: 2,
       holdMinutes: 15,
     });
+    assert.equal(order.items[0].rental_package_id, 2);
+    assert.equal(order.items[0].package_name, 'Standard');
     const held = await db.query('SELECT quantity, spawn_quantity, status FROM tray_reservations');
     assert.deepEqual(held.rows[0], { quantity: 2, spawn_quantity: 4, status: 'HELD' });
 
@@ -207,11 +209,12 @@ test('holds trays and spawn, then consumes both on successful PayOS payment', as
     const trays = await db.query("SELECT COUNT(*)::int AS count FROM cultivation_trays WHERE status = 'OCCUPIED'");
     const transactions = await db.query("SELECT transaction_type, quantity FROM inventory_transactions");
     const orderState = await db.query('SELECT status, payment_status FROM orders WHERE order_id = 1');
-    const sessionState = await db.query('SELECT status FROM cultivation_sessions WHERE order_item_id = 1');
+    const sessionState = await db.query('SELECT status, duration_days FROM cultivation_sessions WHERE order_item_id = 1');
     assert.equal(Number(inventory.rows[0].quantity), 6);
     assert.equal(reservation.rows[0].status, 'CONSUMED');
     assert.equal(trays.rows[0].count, 0);
     assert.equal(sessionState.rows[0].status, 'PENDING');
+    assert.equal(sessionState.rows[0].duration_days, 20);
     assert.equal(transactions.rows[0].transaction_type, 'OUT');
     assert.equal(Number(transactions.rows[0].quantity), 4);
     assert.deepEqual(orderState.rows[0], { status: 'PROCESSING', payment_status: 'PAID' });

@@ -248,17 +248,12 @@ const options = {
         },
         CreateCultivationOrderRequest: {
           type: 'object',
-          required: ['packageId', 'mushroomTypeId', 'quantity'],
+          required: ['mushroomTypeId', 'quantity'],
           properties: {
-            packageId: {
-              type: 'integer',
-              example: 1,
-              description: 'Selected active cultivation package. Its database duration must cover the mushroom growing days.',
-            },
             mushroomTypeId: {
               type: 'integer',
               example: 2,
-              description: 'Selected mushroom type.',
+              description: 'Selected active mushroom type. growing_days 7-9 automatically selects an active 15-day package; 10-15 selects an active 20-day package. Other growing times are unsupported.',
             },
             quantity: {
               type: 'integer',

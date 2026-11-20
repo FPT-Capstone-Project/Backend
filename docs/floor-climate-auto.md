@@ -41,7 +41,8 @@ Các API đọc cũ vẫn giữ yêu cầu đăng nhập như trước.
    Nếu đã có phiên trên tầng, danh sách phải bao gồm mọi loại nấm đang trồng.
    Khi chưa có phiên, API suggestions vẫn không có gợi ý; form cấu hình dùng
    điều kiện của các loại nấm đã chọn để điền ngưỡng.
-   Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm, gói và số khay.
+   Khách tạo đơn tại `POST /api/orders/cultivation` với loại nấm và số khay.
+   Hệ thống tự chọn gói ACTIVE: `growing_days` 7–9 ngày → gói 15 ngày; 10–15 ngày → gói 20 ngày.
    Thanh toán không tự gán khay. Sau quy trình chuẩn bị, phiên phải ở trạng thái
    `READY_FOR_CULTIVATION`; Farm Operator chọn tầng và đúng số khay của đơn.
    Khay phải AVAILABLE, có vị trí ACTIVE đúng tầng/phòng, chưa có liên kết ACTIVE.

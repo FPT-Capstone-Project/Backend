@@ -182,8 +182,8 @@ router.get('/:orderId', authenticate, orderController.getById);
  * /api/orders/cultivation:
  *   post:
  *     tags: [Orders]
- *     summary: Create a cultivation order for a mushroom type, package, and tray quantity
- *     description: The selected active package must cover the selected active mushroom's growing days. One ACTIVE floor with an approved matching mushroom profile must have enough AVAILABLE trays with ACTIVE positions in the same floor and room, after unexpired HELD reservations. Capacity is never combined across floors. Each tray requires two spawn units. Reservations are consumed after successful payment; Farm Operator selects physical trays later in WF-03.
+ *     summary: Create a cultivation order for a mushroom type and tray quantity
+ *     description: The server automatically selects an ACTIVE package by mushroom growing_days (7-9 days selects 15 days; 10-15 days selects 20 days). Client package IDs are ignored. If multiple packages match, the lowest package_id is used. One ACTIVE floor with an approved matching mushroom profile must have enough AVAILABLE trays with ACTIVE positions in the same floor and room, after unexpired HELD reservations. Capacity is never combined across floors. Each tray requires two spawn units. Reservations are consumed after successful payment; Farm Operator selects physical trays later in WF-03.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -196,11 +196,11 @@ router.get('/:orderId', authenticate, orderController.getById);
  *       201:
  *         description: Order and cultivation order item created
  *       400:
- *         description: Invalid selection or mushroom growing time exceeds the selected package duration
+ *         description: Invalid selection, unsupported mushroom growing time, or no active package for the required duration
  *       401:
  *         description: Missing or invalid JWT token
  *       404:
- *         description: Package or mushroom type not found
+ *         description: Mushroom type not found
  *       409:
  *         description: Insufficient cultivation capacity (`INSUFFICIENT_TRAYS` or `INSUFFICIENT_SPAWN`)
  */
