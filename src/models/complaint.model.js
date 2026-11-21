@@ -19,8 +19,16 @@ async function transaction(work) {
 async function ownedComplaint(client, id, actor, lock = false) {
   const { rows } = await client.query(
     `SELECT c.* FROM complaints c JOIN orders o USING (order_id)
-     WHERE c.complaint_id = $1 AND ($2::boolean OR (c.customer_id = $3 AND o.user_id = $3))
-     ${lock ? 'FOR UPDATE OF c' : ''}`, [id, isStaff(actor), actor.user_id]);
+     WHERE c.complaint_id = $1 AND (
+       $2::boolean
+       OR ($3::boolean AND (
+         c.assigned_to IS NULL OR c.assigned_to = $4 OR c.resolved_at IS NOT NULL
+         OR c.status IN ('RESOLVED', 'REJECTED', 'CLOSED')
+       ))
+       OR (c.customer_id = $4 AND o.user_id = $4)
+     )
+     ${lock ? 'FOR UPDATE OF c' : ''}`,
+    [id, Number(actor.role_id) === 1, Number(actor.role_id) === 2, actor.user_id]);
   if (!rows[0]) throw new AppError('Complaint not found', 404);
   return rows[0];
 }
@@ -78,13 +86,28 @@ async function create(data, actor, uploadImages) {
   });
 }
 
-async function list(actor, { status, limit, offset, mine }) {
-  const values = [!mine && isStaff(actor), actor.user_id, status || null];
+async function list(actor, { status, limit, offset, mine, queue }) {
+  const values = [!mine && isStaff(actor), actor.user_id, status || null, Number(actor.role_id), queue || null];
   const where = `FROM complaints c JOIN orders o USING (order_id)
-    WHERE ($1::boolean OR (c.customer_id = $2 AND o.user_id = $2)) AND ($3::text IS NULL OR c.status = $3)`;
+    LEFT JOIN users customer ON customer.user_id = c.customer_id
+    WHERE ($1::boolean OR (c.customer_id = $2 AND o.user_id = $2))
+      AND ($3::text IS NULL OR c.status = $3)
+      AND ($4::integer <> 2 OR CASE $5::text
+        WHEN 'UNASSIGNED' THEN c.assigned_to IS NULL AND c.resolved_at IS NULL
+          AND c.status NOT IN ('RESOLVED', 'REJECTED', 'CLOSED')
+        WHEN 'ASSIGNED' THEN c.assigned_to = $2 AND c.resolved_at IS NULL
+          AND c.status NOT IN ('RESOLVED', 'REJECTED', 'CLOSED')
+        WHEN 'RESPONDED' THEN c.resolved_at IS NOT NULL
+          OR c.status IN ('RESOLVED', 'REJECTED', 'CLOSED')
+        ELSE c.assigned_to IS NULL OR c.assigned_to = $2
+          OR c.resolved_at IS NOT NULL OR c.status IN ('RESOLVED', 'REJECTED', 'CLOSED')
+      END)`;
   const count = await pool.query(`SELECT COUNT(*)::integer AS total ${where}`, values);
-  const result = await pool.query(`SELECT c.*, to_jsonb(o) AS "order" ${where}
-    ORDER BY c.created_at DESC, c.complaint_id DESC LIMIT $4 OFFSET $5`, [...values, limit, offset]);
+  const result = await pool.query(`SELECT c.complaint_id, c.order_id, c.customer_id,
+      c.complaint_type, c.status, c.assigned_to, c.created_at, c.updated_at, c.resolved_at,
+      customer.full_name AS customer_name ${where}
+    ORDER BY c.created_at DESC, c.complaint_id DESC LIMIT $6 OFFSET $7`,
+  [...values, limit, offset]);
   return { data: result.rows, total: count.rows[0].total };
 }
 
@@ -101,6 +124,12 @@ async function detail(id, actor) {
 async function reply(id, message, actor) {
   return transaction(async (client) => {
     const complaint = await ownedComplaint(client, id, actor, true);
+    if (Number(actor.role_id) === 2 && complaint.assigned_to !== Number(actor.user_id)) {
+      throw new AppError('Complaint is not assigned to this operator', 404);
+    }
+    if (Number(actor.role_id) === 2 && complaint.resolved_at) {
+      throw new AppError('Complaint has already been resolved', 409);
+    }
     if (['RESOLVED', 'REJECTED', 'CLOSED'].includes(complaint.status)) throw new AppError('Complaint no longer accepts replies', 409);
     const result = await client.query(`INSERT INTO complaint_replies (complaint_id, sender_id, message)
       VALUES ($1, $2, $3) RETURNING *`, [id, actor.user_id, message]);
@@ -121,6 +150,20 @@ async function reply(id, message, actor) {
 async function update(id, data, actor) {
   return transaction(async (client) => {
     const complaint = await ownedComplaint(client, id, actor, true);
+    if (Number(actor.role_id) === 2) {
+      if (complaint.assigned_to !== Number(actor.user_id)) {
+        throw new AppError('Complaint is not assigned to this operator', 404);
+      }
+      if (complaint.resolved_at || ['RESOLVED', 'REJECTED', 'CLOSED'].includes(complaint.status)) {
+        throw new AppError('Complaint has already been resolved', 409);
+      }
+      if (data.assignedTo !== undefined) {
+        throw new AppError('Only admins can assign complaints', 403);
+      }
+      if (data.status !== 'RESOLVED' || data.resolution === undefined) {
+        throw new AppError('Assigned operators must submit a resolution to resolve the complaint', 400);
+      }
+    }
     const assigned = data.assignedTo === undefined ? complaint.assigned_to : data.assignedTo;
     if (assigned !== null) {
       const staff = await client.query("SELECT user_id FROM users WHERE user_id = $1 AND role_id IN (1, 2) AND status = 'ACTIVE'", [assigned]);

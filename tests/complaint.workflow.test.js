@@ -28,7 +28,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       CREATE TABLE notifications (user_id INT, notification_type TEXT, title TEXT, message TEXT,
         created_by INT, reference_type TEXT, reference_id INT);
       INSERT INTO users VALUES (1,'Staff',1,'ACTIVE'), (2,'Owner',3,'ACTIVE'), (3,'Other',3,'ACTIVE'),
-        (4,'Operator',2,'ACTIVE');
+        (4,'Operator',2,'ACTIVE'), (5,'Other operator',2,'ACTIVE');
       INSERT INTO orders VALUES (1,2);
       INSERT INTO shipments VALUES (1,1,'DELIVERED'), (2,1,'PENDING');
       INSERT INTO order_items VALUES (1,1);
@@ -46,6 +46,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     const other = { user_id: 3, role_id: 3 };
     const staff = { user_id: 1, role_id: 1 };
     const operator = { user_id: 4, role_id: 2 };
+    const otherOperator = { user_id: 5, role_id: 2 };
     const data = { orderId: 1, type: 'DAMAGED', description: 'Damaged mushrooms' };
     let uploads = 0;
     const upload = async () => { uploads++; return ['https://example.test/image.jpg']; };
@@ -81,6 +82,16 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await assert.rejects(model.detail(complaint.complaint_id, other), { statusCode: 404 });
     assert.equal((await model.list(other, { limit: 20, offset: 0, mine: true })).total, 0);
     assert.equal((await model.list(staff, { limit: 20, offset: 0 })).total, 1);
+    const unassignedComplaints = await model.list(operator, {
+      limit: 20,
+      offset: 0,
+      queue: 'UNASSIGNED',
+    });
+    assert.equal(unassignedComplaints.total, 1);
+    assert.equal('description' in unassignedComplaints.data[0], false);
+    assert.equal('image_urls' in unassignedComplaints.data[0], false);
+    assert.equal('order' in unassignedComplaints.data[0], false);
+    assert.equal((await model.list(operator, { limit: 20, offset: 0, queue: 'ASSIGNED' })).total, 0);
     await assert.rejects(model.update(complaint.complaint_id, { status: 'RESOLVED' }, staff), { statusCode: 400 });
     const resolved = await model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Direct resolution' }, staff);
     assert.ok(resolved.resolved_at);
@@ -102,6 +113,14 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal(detail.replies[1].sender_id, 2);
     assert.equal(detail.assigned_staff.user_id, 1);
     await model.update(complaint.complaint_id, { assignedTo: operator.user_id }, staff);
+    assert.equal((await model.list(operator, { limit: 20, offset: 0, queue: 'UNASSIGNED' })).total, 0);
+    assert.equal((await model.list(operator, { limit: 20, offset: 0, queue: 'ASSIGNED' })).total, 1);
+    assert.equal((await model.list(otherOperator, { limit: 20, offset: 0, queue: 'ASSIGNED' })).total, 0);
+    await assert.rejects(model.detail(complaint.complaint_id, otherOperator), { statusCode: 404 });
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Unauthorized' }, otherOperator),
+      { statusCode: 404 },
+    );
     const beforeReply = (await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length;
     await db.exec("ALTER TABLE notifications ADD CONSTRAINT reject_operator_notification CHECK (title <> 'Khiếu nại đã có phản hồi')");
     await assert.rejects(model.reply(complaint.complaint_id, 'Operator reply', operator));
@@ -116,13 +135,23 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.match(operatorNotifications.rows[0].message, /Nhân viên trang trại đã phản hồi/);
     assert.equal(operatorNotifications.rows[0].created_by, operator.user_id);
     assert.equal(operatorNotifications.rows[0].reference_id, complaint.complaint_id);
-    await model.update(complaint.complaint_id, { resolution: 'Replacement proposed' }, operator);
+    const operatorResolution = await model.update(
+      complaint.complaint_id,
+      { status: 'RESOLVED', resolution: 'Replacement proposed' },
+      operator,
+    );
+    assert.ok(operatorResolution.resolved_at);
     const resolutionNotifications = await db.query(
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
       [owner.user_id, 'Khiếu nại đã có phản hồi']);
     assert.equal(resolutionNotifications.rows.length, 2);
     assert.match(resolutionNotifications.rows[1].message, /cập nhật nội dung xử lý/);
-    await model.update(complaint.complaint_id, { resolution: 'Replacement proposed' }, operator);
+    assert.equal((await model.list(otherOperator, { limit: 20, offset: 0, queue: 'RESPONDED' })).total, 1);
+    assert.ok((await model.detail(complaint.complaint_id, otherOperator)).resolved_at);
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Second response' }, operator),
+      { statusCode: 409 },
+    );
     assert.equal((await db.query(
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
       [owner.user_id, 'Khiếu nại đã có phản hồi'])).rows.length, 2);

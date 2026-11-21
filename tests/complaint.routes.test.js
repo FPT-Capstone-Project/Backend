@@ -50,12 +50,13 @@ test('complaint routes validate inputs and enforce authenticated role access', a
     assert.equal((await request('', 3)).status, 403);
     assert.equal((await request('', 1)).status, 200);
     assert.equal((await request('', 2)).status, 200);
+    assert.equal((await request('/?queue=INVALID', 2)).status, 400);
     assert.equal((await request('/my/1', 3)).status, 200);
     assert.equal((await request('/my/1', 1)).status, 403);
     assert.equal((await request('/bad', 3)).status, 400);
     assert.equal((await request('/my?page=0', 3)).status, 400);
     assert.equal((await request('/1/assign', 3, 'PATCH', { assignedTo: 1 })).status, 403);
-    assert.equal((await request('/1/assign', 2, 'PATCH', { assignedTo: 1 })).status, 200);
+    assert.equal((await request('/1/assign', 2, 'PATCH', { assignedTo: 1 })).status, 403);
     assert.equal((await request('/1/assign', 1, 'PATCH', { assignedTo: 'bad' })).status, 400);
     assert.equal((await request('/1/status', 1, 'PATCH', { status: 'PENDING' })).status, 200);
     assert.equal((await request('/1/status', 1, 'PATCH', { status: 'OPEN' })).status, 400);
