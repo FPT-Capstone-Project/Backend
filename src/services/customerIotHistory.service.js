@@ -57,4 +57,10 @@ async function getSensorHistory(rawSessionId, user, query = {}) {
   );
 }
 
-module.exports = { getDeviceHistory, getSensorHistory };
+async function getCurrentSensorReadings(rawSessionId, user) {
+  const sessionId = parseId(rawSessionId, 'sessionId');
+  await assertSessionAccess(sessionId, user);
+  return customerIotHistoryModel.findCurrentSensorReadings(sessionId);
+}
+
+module.exports = { getDeviceHistory, getSensorHistory, getCurrentSensorReadings };

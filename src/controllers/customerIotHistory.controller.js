@@ -18,4 +18,12 @@ async function sensorHistory(req, res) {
   res.json({ data: result });
 }
 
-module.exports = { deviceHistory, sensorHistory };
+async function currentSensorReadings(req, res) {
+  const result = await customerIotHistoryService.getCurrentSensorReadings(
+    req.params.sessionId,
+    req.user,
+  );
+  res.json({ data: result });
+}
+
+module.exports = { deviceHistory, sensorHistory, currentSensorReadings };
