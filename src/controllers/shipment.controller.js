@@ -19,9 +19,18 @@ async function updateStatus(req, res) {
   const shipment = await shipmentService.updateShipmentStatus(
     req.params.id,
     req.body?.status,
+    req.body?.deliveredAt ?? req.body?.delivered_at,
     req.user,
   );
   res.json({ message: 'Shipment status updated successfully', data: shipment });
 }
 
-module.exports = { create, adminList, orderList, updateStatus };
+async function updateDetails(req, res) {
+  const shipment = await shipmentService.updateShipmentDetails(
+    req.params.id,
+    req.body || {},
+  );
+  res.json({ message: 'Shipment details updated successfully', data: shipment });
+}
+
+module.exports = { create, adminList, orderList, updateStatus, updateDetails };

@@ -13,7 +13,8 @@ async function setupDatabase() {
   await db.exec(`
     CREATE TABLE users (
       user_id SERIAL PRIMARY KEY,
-      full_name TEXT NOT NULL, address TEXT DEFAULT 'Profile address', phone TEXT, email TEXT
+      full_name TEXT NOT NULL, address TEXT DEFAULT 'Profile address', phone TEXT, email TEXT,
+      role_id INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'ACTIVE'
     );
     CREATE TABLE mushroom_types (
       mushroom_type_id SERIAL PRIMARY KEY,
@@ -103,8 +104,12 @@ async function setupDatabase() {
       reference_id INTEGER
     );
 
-    INSERT INTO users (user_id, full_name, phone)
-    VALUES (1, 'Farm Operator', '0900000001'), (3, 'Customer', '0900000003');
+    INSERT INTO users (user_id, full_name, phone, role_id, status)
+    VALUES
+      (1, 'Farm Operator', '0900000001', 2, 'ACTIVE'),
+      (2, 'Second Farm Operator', '0900000002', 2, 'ACTIVE'),
+      (3, 'Customer', '0900000003', 3, 'ACTIVE'),
+      (4, 'Inactive Farm Operator', '0900000004', 2, 'INACTIVE');
     INSERT INTO mushroom_types (mushroom_type_id, name) VALUES (1, 'Oyster Mushroom');
     INSERT INTO orders (order_id, user_id, status) VALUES (1, 3, 'PROCESSING');
     INSERT INTO order_items (order_item_id, order_id) VALUES (1, 1), (2, 1), (3, 1);
@@ -158,6 +163,68 @@ async function completeHarvest(harvest, harvestId) {
   return harvest.complete(harvestId, 1);
 }
 
+test('customer receiving selections and method changes notify all active farm operators', async () => {
+  const db = await setupDatabase();
+  try {
+    const { harvestRequest } = loadModels(db);
+    const customer = { user_id: 3, role_id: 3 };
+    const request = await harvestRequest.create(1, {
+      harvestMethod: 'PICKUP',
+      scheduledAt: nextPickup(),
+    }, customer);
+
+    const selectedNotifications = (await db.query(
+      `SELECT user_id, title, message FROM notifications
+       WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+         AND user_id IN (1, 2, 4)
+       ORDER BY user_id`,
+    )).rows;
+    assert.deepEqual(selectedNotifications.map(({ user_id }) => user_id), [1, 2]);
+    assert.equal(selectedNotifications[0].title, 'Khách hàng đã chọn phương thức nhận nấm');
+    assert.match(selectedNotifications[0].message, /đến hái tại trang trại/);
+
+    await harvestRequest.update(request.harvest_request_id, {
+      harvestMethod: 'PICKUP',
+      scheduledAt: nextPickup(2),
+    }, customer);
+    assert.equal(
+      (await db.query(
+        `SELECT COUNT(*)::int AS count FROM notifications WHERE user_id IN (1, 2, 4)`,
+      )).rows[0].count,
+      2,
+    );
+
+    await harvestRequest.update(request.harvest_request_id, {
+      harvestMethod: 'DELIVERY',
+    }, customer);
+
+    const operatorNotifications = (await db.query(
+      `SELECT user_id, title, message FROM notifications
+       WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+         AND user_id IN (1, 2, 4)
+       ORDER BY user_id, notification_id`,
+    )).rows;
+    assert.equal(operatorNotifications.length, 4);
+    assert.deepEqual(operatorNotifications.map(({ user_id }) => user_id), [1, 1, 2, 2]);
+    assert.deepEqual(operatorNotifications.map(({ title }) => title), [
+      'Khách hàng đã chọn phương thức nhận nấm',
+      'Khách hàng đã cập nhật phương thức nhận nấm',
+      'Khách hàng đã chọn phương thức nhận nấm',
+      'Khách hàng đã cập nhật phương thức nhận nấm',
+    ]);
+    assert.match(operatorNotifications[1].message, /giao hàng/);
+    assert.match(operatorNotifications[3].message, /giao hàng/);
+    assert.equal(
+      (await db.query(
+        `SELECT COUNT(*)::int AS count FROM notifications WHERE user_id = 3`,
+      )).rows[0].count,
+      3,
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test('WF-04 creates one harvest, records yield, completes the session, and preserves trays for WF-05', async () => {
   const db = await setupDatabase();
   try {
@@ -208,7 +275,8 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     assert.equal(
       (await db.query(
         `SELECT COUNT(*)::int AS count FROM notifications
-         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1`,
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+           AND user_id = 3`,
       )).rows[0].count,
       2,
     );
@@ -238,7 +306,8 @@ test('WF-04 creates one harvest, records yield, completes the session, and prese
     assert.equal(
       (await db.query(
         `SELECT COUNT(*)::int AS count FROM notifications
-         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1`,
+         WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+           AND user_id = 3`,
       )).rows[0].count,
       3,
     );
@@ -309,6 +378,12 @@ test('staff saves receiving before planning and limits pickup to the next three 
       harvestMethod: 'PICKUP', scheduledAt: nextPickup(3),
     }, staff);
     assert.equal((await db.query('SELECT * FROM harvests')).rows.length, 0);
+    assert.equal(
+      (await db.query(
+        `SELECT COUNT(*)::int AS count FROM notifications WHERE user_id IN (1, 2, 4)`,
+      )).rows[0].count,
+      0,
+    );
     await assert.rejects(() => harvestRequest.update(request.harvest_request_id, {
       harvestMethod: 'PICKUP', scheduledAt: nextPickup(4),
     }, { user_id: 2, role_id: 2 }), { statusCode: 400 });

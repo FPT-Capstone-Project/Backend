@@ -81,6 +81,42 @@ router.get(
 
 /**
  * @openapi
+ * /api/shipments/{id}/details:
+ *   patch:
+ *     tags: [Shipments]
+ *     summary: Update shipment details without changing its status
+ *     description: Admins and Farm Operators may update carrier, tracking code, shipping fee, and handoff time. Delivery time may be changed after delivery.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [carrier, trackingCode, shippingFee, shippedAt]
+ *             properties:
+ *               carrier: { type: string, maxLength: 100, nullable: true }
+ *               trackingCode: { type: string, maxLength: 150, nullable: true }
+ *               shippingFee: { type: number, minimum: 0, maximum: 9999999999.99 }
+ *               shippedAt: { type: string, format: date-time, nullable: true }
+ *               deliveredAt: { type: string, format: date-time, nullable: true }
+ *     responses:
+ *       200: { description: Shipment details updated without changing status }
+ *       400: { description: Invalid shipment details or timestamp order }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ *       404: { description: Shipment not found }
+ *       409: { description: Delivery time cannot be changed before delivery }
+ */
+router.patch('/:id/details', adminOrFarmOperator, shipmentController.updateDetails);
+
+/**
+ * @openapi
  * /api/shipments/{id}/status:
  *   patch:
  *     tags: [Shipments]
@@ -100,6 +136,7 @@ router.get(
  *             required: [status]
  *             properties:
  *               status: { type: string, enum: [PENDING, SHIPPED, IN_TRANSIT, DELIVERED, CANCELLED, RETURNED] }
+ *               deliveredAt: { type: string, format: date-time, description: Optional delivery confirmation time. }
  *     responses:
  *       200: { description: Shipment status updated }
  *       400: { description: Invalid shipment ID or status }

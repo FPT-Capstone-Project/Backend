@@ -74,7 +74,14 @@ function assertCustomerCanChangeMethod(harvestReadyAt) {
     throw new AppError('Customers may update the receiving method only on the harvest-ready day and the following day', 409);
   }
 }
-async function notifyReceivingMethod(client, userId, sessionId, harvestMethod) {
+async function notifyReceivingMethod(
+  client,
+  userId,
+  sessionId,
+  harvestMethod,
+  action,
+  notifyOperators,
+) {
   const isPickup = harvestMethod === 'PICKUP';
   await client.query(
     `INSERT INTO notifications (
@@ -87,6 +94,26 @@ async function notifyReceivingMethod(client, userId, sessionId, harvestMethod) {
       isPickup
         ? 'Lựa chọn khách đến hái nấm tại trang trại đã được ghi nhận.'
         : 'Yêu cầu giao nấm của bạn đã được ghi nhận.',
+      sessionId,
+    ],
+  );
+
+  if (!notifyOperators) return;
+
+  const actionText = action === 'updated' ? 'đã cập nhật' : 'đã chọn';
+  const methodText = isPickup ? 'đến hái tại trang trại' : 'giao hàng';
+  await client.query(
+    `INSERT INTO notifications (
+       user_id, notification_type, title, message, reference_type, reference_id
+     )
+     SELECT user_id, 'CULTIVATION_STATUS', $1, $2, 'CULTIVATION_SESSION', $3
+     FROM users
+     WHERE role_id = 2 AND status = 'ACTIVE'`,
+    [
+      action === 'updated'
+        ? 'Khách hàng đã cập nhật phương thức nhận nấm'
+        : 'Khách hàng đã chọn phương thức nhận nấm',
+      `Khách hàng ${actionText} phương thức ${methodText} cho phiên nuôi trồng #${sessionId}.`,
       sessionId,
     ],
   );
@@ -248,6 +275,8 @@ async function create(sessionId, data, actor) {
       session.customer_id,
       sessionId,
       data.harvestMethod,
+      'selected',
+      !isStaff(actor),
     );
     await client.query('COMMIT');
     return result.rows[0];
@@ -317,15 +346,15 @@ async function update(harvestRequestId, data, actor) {
     const nextScheduledAt = data.scheduledAt
       ? new Date(data.scheduledAt).getTime()
       : null;
-    if (
-      request.harvest_method !== data.harvestMethod ||
-      previousScheduledAt !== nextScheduledAt
-    ) {
+    const methodChanged = request.harvest_method !== data.harvestMethod;
+    if (methodChanged || previousScheduledAt !== nextScheduledAt) {
       await notifyReceivingMethod(
         client,
         request.customer_id,
         request.session_id,
         data.harvestMethod,
+        'updated',
+        !isStaff(actor) && methodChanged,
       );
     }
     await client.query('COMMIT');
