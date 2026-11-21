@@ -158,6 +158,30 @@ router.get(
 );
 /**
  * @openapi
+ * /api/customer/sessions/{sessionId}/iot-history/sensors/latest:
+ *   get:
+ *     tags: [Customer Cultivation]
+ *     summary: Get the latest sensor reading for each sensor on the session's assigned floors
+ *     description: Customers may access their own session; Admins and Farm Operators may access any session. Readings are scoped to the floor assignment and session period.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Latest reading per sensor, including validity and timestamp fields }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Unsupported role }
+ *       404: { description: Session not found or not accessible }
+ */
+router.get(
+  '/sessions/:sessionId/iot-history/sensors/latest',
+  ...customerHistoryAccess,
+  customerIotHistoryController.currentSensorReadings,
+);
+/**
+ * @openapi
  * /api/customer/sessions/{sessionId}/iot-history:
  *   get:
  *     tags: [Customer Cultivation]

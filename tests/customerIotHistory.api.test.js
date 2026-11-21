@@ -64,6 +64,14 @@ test('customer IoT history returns assigned-floor data and enforces session owne
                 1, 2, 26, 80, true, now() - interval '5 seconds', false),
                ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
                 1, 3, 28, 79, true, now() - interval '2 hours', false);
+      INSERT INTO iot_sensor_latest
+        (master_id, node_address, sensor_address, temperature, humidity, is_valid, last_received_at, retained)
+        VALUES ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
+                1, 1, 25.5, 82, true, now() - interval '10 seconds', false),
+               ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
+                1, 2, 26, 80, true, now() - interval '5 seconds', false),
+               ((SELECT id FROM iot_masters WHERE master_identifier = 'customer-history-master'),
+                1, 3, 28, 79, true, now() - interval '2 hours', false);
       INSERT INTO iot_device_commands
         (id, master_id, channel, action, status, requested_by, requested_at, expires_at, published_at, completed_at)
         VALUES ('11111111-1111-4111-8111-111111111111',
@@ -112,6 +120,19 @@ test('customer IoT history returns assigned-floor data and enforces session owne
     assert.ok(sensorHistory.body.data.readings.every((reading) => reading.ok));
     assert.equal(sensorHistory.body.data.readings[0].floorName, 'Customer Floor');
 
+    assert.equal((await request(`${base}/sensors/latest`, null)).status, 401);
+    const currentReadings = await request(`${base}/sensors/latest`, 3);
+    assert.equal(currentReadings.status, 200);
+    assert.deepEqual(
+      currentReadings.body.data.readings.map((reading) => reading.sensorId),
+      [1, 2],
+    );
+    assert.deepEqual(
+      currentReadings.body.data.readings.map((reading) => reading.temperature),
+      [25.5, 26],
+    );
+    assert.ok(currentReadings.body.data.readings.every((reading) => reading.ok));
+
     const deviceHistory = await request(`${base}?page=1&pageSize=100`, 3);
     assert.equal(deviceHistory.status, 200);
     assert.equal(deviceHistory.body.data.deviceEvents.length, 1);
@@ -123,6 +144,7 @@ test('customer IoT history returns assigned-floor data and enforces session owne
     }]);
 
     assert.equal((await request(`${base}/sensors`, 4)).status, 404);
+    assert.equal((await request(`${base}/sensors/latest`, 4)).status, 404);
     assert.equal((await request(`${base}/sensors?pageSize=101`, 3)).status, 400);
     assert.equal((await request(`${base}/sensors`, 1)).status, 200);
   } finally {

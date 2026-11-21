@@ -109,4 +109,31 @@ async function findSensorHistory(sessionId, { limit, offset }) {
   return { readings: readings.rows, total: count.rows[0].total };
 }
 
-module.exports = { findSessionOwner, findDeviceHistory, findSensorHistory };
+async function findCurrentSensorReadings(sessionId) {
+  const result = await pool.query(
+    `WITH session_floors AS (${sessionFloors})
+     SELECT CONCAT(sf.floor_id, ':', r.sensor_address) AS id,
+            r.temperature, r.humidity,
+            (r.is_valid AND NOT r.retained
+              AND r.last_received_at >= now() - interval '60 seconds') AS ok,
+            r.last_received_at AS "receivedAt",
+            NULL::timestamptz AS "measuredAt",
+            r.retained, sf.floor_name AS "floorName", sf.floor_id AS "floorId",
+            r.sensor_address AS "sensorId"
+     FROM session_floors sf
+     INNER JOIN iot_sensor_latest r
+       ON r.master_id = sf.master_id AND r.node_address = sf.node_address
+      AND r.last_received_at >= GREATEST(sf.start_at, sf.assigned_at)
+      AND r.last_received_at <= COALESCE(sf.end_at, now())
+     ORDER BY sf.floor_id, r.sensor_address`,
+    [sessionId],
+  );
+  return { readings: result.rows };
+}
+
+module.exports = {
+  findSessionOwner,
+  findDeviceHistory,
+  findSensorHistory,
+  findCurrentSensorReadings,
+};
