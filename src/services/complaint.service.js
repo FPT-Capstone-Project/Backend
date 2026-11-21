@@ -3,6 +3,7 @@ const cloudinary = require('./cloudinary.service');
 const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 const STATUSES = ['PENDING', 'UNDER_REVIEW', 'NEED_MORE_INFO', 'RESOLVING', 'RESOLVED', 'REJECTED', 'CLOSED'];
+const STAFF_QUEUES = ['UNASSIGNED', 'ASSIGNED', 'RESPONDED'];
 
 function id(value) {
   if (!['number', 'string'].includes(typeof value) || !Number.isSafeInteger(Number(value)) || Number(value) <= 0 || Number(value) > 2147483647) {
@@ -36,7 +37,16 @@ async function create(orderId, body, files, actor) {
 }
 async function list(query, actor, mine) {
   const pagination = parsePagination(query);
-  const result = await model.list(actor, { ...pagination, mine, status: query.status === undefined ? undefined : status(query.status) });
+  const queue = query.queue === undefined ? undefined : query.queue;
+  if (queue !== undefined && !STAFF_QUEUES.includes(queue)) {
+    throw new AppError(`queue must be one of: ${STAFF_QUEUES.join(', ')}`, 400);
+  }
+  const result = await model.list(actor, {
+    ...pagination,
+    mine,
+    queue,
+    status: query.status === undefined ? undefined : status(query.status),
+  });
   return { ...result, page: pagination.page, pageSize: pagination.pageSize };
 }
 function update(complaintId, body, actor) {

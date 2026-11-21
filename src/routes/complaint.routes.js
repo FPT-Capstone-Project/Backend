@@ -33,14 +33,15 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  * /api/complaints:
  *   get:
  *     tags: [Complaints]
- *     summary: Staff lists complaints newest first
+ *     summary: Admin lists all; Farm Operators list the unassigned, own assigned or responded complaints
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: query, name: page, schema: { type: integer, minimum: 1, default: 1 } }
  *       - { in: query, name: pageSize, schema: { type: integer, minimum: 1, maximum: 100, default: 20 } }
  *       - { in: query, name: status, schema: { type: string, enum: [PENDING, UNDER_REVIEW, NEED_MORE_INFO, RESOLVING, RESOLVED, REJECTED, CLOSED] } }
+ *       - { in: query, name: queue, schema: { type: string, enum: [UNASSIGNED, ASSIGNED, RESPONDED], description: Farm Operator queue filter } }
  *     responses:
- *       200: { description: Paginated complaints }
+ *       200: { description: Paginated complaint summaries; details are loaded from the complaint detail endpoint }
  * /api/complaints/my:
  *   get:
  *     tags: [Complaints]
@@ -61,7 +62,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  * /api/complaints/{id}:
  *   get:
  *     tags: [Complaints]
- *     summary: Staff or owning customer views complaint details
+ *     summary: Staff or owning customer views complaint details; operators can access only visible queue items
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: integer, minimum: 1 } }
@@ -70,7 +71,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  * /api/complaints/{id}/replies:
  *   post:
  *     tags: [Complaints]
- *     summary: Staff or owning customer replies to an active complaint
+ *     summary: Admin, assigned Farm Operator or owning customer replies to an active complaint
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: integer, minimum: 1 } }
@@ -89,7 +90,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  * /api/complaints/{id}/assign:
  *   patch:
  *     tags: [Complaints]
- *     summary: Staff assigns an active Admin or Farm Operator
+ *     summary: Admin assigns an active Admin or Farm Operator
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: integer, minimum: 1 } }
@@ -105,10 +106,11 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  *     responses:
  *       200: { description: Assignment updated }
  *       400: { description: Ineligible assignee }
+ *       403: { description: Admin role required }
  * /api/complaints/{id}/status:
  *   patch:
  *     tags: [Complaints]
- *     summary: Admin or Farm Operator changes directly to any supported status
+ *     summary: Admin updates status; the assigned Farm Operator submits the resolution
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: integer, minimum: 1 } }
@@ -132,7 +134,7 @@ router.get('/', authorizeRoles(1, 2), controller.list);
 router.get('/:complaintId', authorizeRoles(1, 2, 3), controller.detail);
 router.post('/:complaintId/replies', authorizeRoles(1, 2, 3), controller.reply);
 router.patch('/:complaintId', authorizeRoles(1, 2), controller.update);
-router.patch('/:complaintId/assign', authorizeRoles(1, 2), controller.assign);
+router.patch('/:complaintId/assign', authorizeRoles(1), controller.assign);
 router.patch('/:complaintId/status', authorizeRoles(1, 2), controller.status);
 
 module.exports = router;
