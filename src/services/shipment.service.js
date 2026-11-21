@@ -45,6 +45,19 @@ function parseShippingFee(value) {
   return fee;
 }
 
+function parseOptionalTimestamp(value, fieldName) {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  if (
+    typeof value !== 'string'
+    || !/(?:Z|[+-]\d{2}:\d{2})$/i.test(value)
+    || !Number.isFinite(new Date(value).getTime())
+  ) {
+    throw new AppError(`${fieldName} must be a valid ISO date-time with timezone`, 400);
+  }
+  return new Date(value).toISOString();
+}
+
 function normalizeShipment(payload = {}) {
   return {
     orderId: parseId(payload.orderId ?? payload.order_id, 'orderId'),
@@ -69,6 +82,44 @@ function normalizeShipment(payload = {}) {
   };
 }
 
+function normalizeShipmentDetails(payload = {}) {
+  const hasField = (field, alias) => Object.prototype.hasOwnProperty.call(payload, field)
+    || (alias && Object.prototype.hasOwnProperty.call(payload, alias));
+  if (!hasField('carrier')) throw new AppError('carrier is required', 400);
+  if (!hasField('trackingCode', 'tracking_code')) {
+    throw new AppError('trackingCode is required', 400);
+  }
+  if (!hasField('shippingFee', 'shipping_fee')) {
+    throw new AppError('shippingFee is required', 400);
+  }
+  const hasShippedAt = Object.prototype.hasOwnProperty.call(payload, 'shippedAt')
+    || Object.prototype.hasOwnProperty.call(payload, 'shipped_at');
+  const shippedAt = Object.prototype.hasOwnProperty.call(payload, 'shippedAt')
+    ? payload.shippedAt
+    : payload.shipped_at;
+  if (!hasShippedAt) {
+    throw new AppError('shippedAt is required', 400);
+  }
+  const hasDeliveredAt = Object.prototype.hasOwnProperty.call(payload, 'deliveredAt')
+    || Object.prototype.hasOwnProperty.call(payload, 'delivered_at');
+  const deliveredAt = Object.prototype.hasOwnProperty.call(payload, 'deliveredAt')
+    ? payload.deliveredAt
+    : payload.delivered_at;
+  return {
+    carrier: parseOptionalText(payload.carrier, 'carrier', 100),
+    trackingCode: parseOptionalText(
+      payload.trackingCode ?? payload.tracking_code,
+      'trackingCode',
+      150,
+    ),
+    shippingFee: parseShippingFee(payload.shippingFee ?? payload.shipping_fee),
+    shippedAt: parseOptionalTimestamp(shippedAt, 'shippedAt'),
+    deliveredAt: !hasDeliveredAt
+      ? undefined
+      : parseOptionalTimestamp(deliveredAt, 'deliveredAt'),
+  };
+}
+
 function parseStatus(value) {
   const status = typeof value === 'string' ? value.trim().toUpperCase() : '';
   if (!SHIPMENT_STATUSES.includes(status)) {
@@ -89,11 +140,24 @@ async function createShipment(payload = {}) {
   return shipmentModel.create(normalizeShipment(payload));
 }
 
-async function updateShipmentStatus(shipmentId, status, actor) {
+async function updateShipmentStatus(shipmentId, status, deliveredAt, actor) {
+  const parsedStatus = parseStatus(status);
+  const parsedDeliveredAt = parseOptionalTimestamp(deliveredAt, 'deliveredAt');
+  if (parsedDeliveredAt !== undefined && parsedStatus !== 'DELIVERED') {
+    throw new AppError('deliveredAt may only be provided when status is DELIVERED', 400);
+  }
   return shipmentModel.updateStatus(
     parseId(shipmentId, 'shipmentId'),
-    parseStatus(status),
+    parsedStatus,
     actor,
+    parsedDeliveredAt,
+  );
+}
+
+async function updateShipmentDetails(shipmentId, payload = {}) {
+  return shipmentModel.updateDetails(
+    parseId(shipmentId, 'shipmentId'),
+    normalizeShipmentDetails(payload),
   );
 }
 
@@ -102,4 +166,5 @@ module.exports = {
   listShipments,
   listShipmentsForOrder,
   updateShipmentStatus,
+  updateShipmentDetails,
 };

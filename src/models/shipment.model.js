@@ -88,10 +88,31 @@ async function findAllForOrder(orderId, actor) {
   return { orderId, shipments: result.rows, total: result.rows.length };
 }
 
-async function updateStatus(shipmentId, status, actor) {
+async function updateStatus(shipmentId, status, actor, deliveredAt) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    const currentResult = await client.query(
+      'SELECT shipped_at FROM shipments WHERE shipment_id = $1::integer FOR UPDATE',
+      [shipmentId],
+    );
+    const current = currentResult.rows[0];
+    if (!current) throw new AppError('Shipment not found', 404);
+
+    const handoffAt = current.shipped_at
+      ? new Date(current.shipped_at)
+      : ['SHIPPED', 'IN_TRANSIT', 'DELIVERED'].includes(status)
+        ? new Date()
+        : null;
+    if (
+      status === 'DELIVERED'
+      && deliveredAt
+      && handoffAt
+      && new Date(deliveredAt).getTime() < handoffAt.getTime()
+    ) {
+      throw new AppError('Delivery time cannot be earlier than handoff time', 400);
+    }
+
     const result = await client.query(
       `UPDATE shipments
        SET status = $2::varchar(30),
@@ -101,16 +122,15 @@ async function updateStatus(shipmentId, status, actor) {
              ELSE shipped_at
            END,
            delivered_at = CASE
-             WHEN $2::text = 'DELIVERED' THEN COALESCE(delivered_at, CURRENT_TIMESTAMP)
+             WHEN $2::text = 'DELIVERED' THEN COALESCE($3::timestamptz, COALESCE(delivered_at, CURRENT_TIMESTAMP))
              WHEN $2::text = 'RETURNED' THEN delivered_at
              ELSE NULL
            END
        WHERE shipment_id = $1::integer
        RETURNING *`,
-      [shipmentId, status],
+      [shipmentId, status, deliveredAt || null],
     );
     const shipment = result.rows[0];
-    if (!shipment) throw new AppError('Shipment not found', 404);
 
     const labels = {
       PENDING: 'Chờ giao hàng',
@@ -146,4 +166,79 @@ async function updateStatus(shipmentId, status, actor) {
   }
 }
 
-module.exports = { create, findAllForAdmin, findAllForOrder, updateStatus };
+async function updateDetails(shipmentId, details) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const currentResult = await client.query(
+      `SELECT status, shipped_at, delivered_at
+       FROM shipments
+       WHERE shipment_id = $1::integer
+       FOR UPDATE`,
+      [shipmentId],
+    );
+    const current = currentResult.rows[0];
+    if (!current) throw new AppError('Shipment not found', 404);
+
+    const shippedAt = details.shippedAt;
+    const deliveredAt = details.deliveredAt === undefined
+      ? current.delivered_at
+      : details.deliveredAt;
+    if (
+      ['SHIPPED', 'IN_TRANSIT', 'DELIVERED', 'RETURNED'].includes(current.status)
+      && !shippedAt
+    ) {
+      throw new AppError('Handoff time is required for this shipment status', 400);
+    }
+    if (current.status === 'DELIVERED' && !deliveredAt) {
+      throw new AppError('Delivery time is required for delivered shipments', 400);
+    }
+    if (
+      shippedAt
+      && deliveredAt
+      && new Date(deliveredAt).getTime() < new Date(shippedAt).getTime()
+    ) {
+      throw new AppError('Delivery time cannot be earlier than handoff time', 400);
+    }
+    if (
+      details.deliveredAt !== undefined
+      && !['DELIVERED', 'RETURNED'].includes(current.status)
+    ) {
+      throw new AppError('Delivery time can only be updated after delivery', 409);
+    }
+
+    const result = await client.query(
+      `UPDATE shipments
+       SET carrier = $2,
+           tracking_code = $3,
+           shipping_fee = $4,
+           shipped_at = $5,
+           delivered_at = $6
+       WHERE shipment_id = $1::integer
+       RETURNING *`,
+      [
+        shipmentId,
+        details.carrier,
+        details.trackingCode,
+        details.shippingFee,
+        shippedAt,
+        deliveredAt,
+      ],
+    );
+    await client.query('COMMIT');
+    return result.rows[0];
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  create,
+  findAllForAdmin,
+  findAllForOrder,
+  updateStatus,
+  updateDetails,
+};

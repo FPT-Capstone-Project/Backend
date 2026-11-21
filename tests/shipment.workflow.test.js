@@ -155,6 +155,60 @@ test('shipment listing returns order details and status updates record timestamp
   }
 });
 
+test('operators update shipment details without changing status and can correct delivery time', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadShipmentService(db);
+    await db.query(
+      `UPDATE shipments
+       SET status = 'IN_TRANSIT', shipped_at = '2026-11-21T08:30:00+07:00'
+       WHERE shipment_id = 5`,
+    );
+
+    const details = await service.updateShipmentDetails(5, {
+      carrier: '  Carrier  ',
+      trackingCode: '  TRACK-23  ',
+      shippingFee: '18000',
+      shippedAt: '2026-11-21T08:30:00+07:00',
+    });
+    assert.equal(details.status, 'IN_TRANSIT');
+    assert.equal(details.carrier, 'Carrier');
+    assert.equal(details.tracking_code, 'TRACK-23');
+    assert.equal(Number(details.shipping_fee), 18000);
+
+    const delivered = await service.updateShipmentStatus(
+      5,
+      'DELIVERED',
+      '2026-11-21T09:15:00+07:00',
+      { user_id: 2, role_id: 2 },
+    );
+    assert.equal(delivered.status, 'DELIVERED');
+    assert.equal(new Date(delivered.delivered_at).toISOString(), '2026-11-21T02:15:00.000Z');
+
+    const corrected = await service.updateShipmentDetails(5, {
+      carrier: 'Carrier',
+      trackingCode: 'TRACK-23',
+      shippingFee: 18000,
+      shippedAt: '2026-11-21T08:30:00+07:00',
+      deliveredAt: '2026-11-21T09:20:00+07:00',
+    });
+    assert.equal(corrected.status, 'DELIVERED');
+    assert.equal(new Date(corrected.delivered_at).toISOString(), '2026-11-21T02:20:00.000Z');
+    await assert.rejects(
+      () => service.updateShipmentDetails(5, {
+        carrier: 'Carrier',
+        trackingCode: 'TRACK-23',
+        shippingFee: 18000,
+        shippedAt: '2026-11-21T08:30:00+07:00',
+        deliveredAt: '2026-11-21T08:00:00+07:00',
+      }),
+      { statusCode: 400, message: 'Delivery time cannot be earlier than handoff time' },
+    );
+  } finally {
+    await db.close();
+  }
+});
+
 test('customers see only their own order shipments while staff can see any order', async () => {
   const db = await setupDatabase();
   try {
@@ -230,6 +284,7 @@ test('shipment routes restrict listing and status changes to staff roles', async
       adminList: handler('list'),
       orderList: handler('orderList'),
       updateStatus: handler('update'),
+      updateDetails: handler('updateDetails'),
     },
   };
   delete require.cache[authMiddlewarePath];
@@ -259,15 +314,31 @@ test('shipment routes restrict listing and status changes to staff roles', async
       headers: { ...staffHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ status: 'IN_TRANSIT' }),
     })).status, 204);
+    assert.equal((await fetch(`${baseUrl}/9/details`, {
+      method: 'PATCH',
+      headers: { ...staffHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        carrier: 'Carrier',
+        trackingCode: 'TRACK-9',
+        shippingFee: 12000,
+        shippedAt: '2026-11-21T08:30:00+07:00',
+      }),
+    })).status, 204);
+    assert.equal((await fetch(`${baseUrl}/9/details`, {
+      method: 'PATCH',
+      headers: { ...customerHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })).status, 403);
     assert.equal((await fetch(baseUrl, {
       method: 'POST',
       headers: { ...staffHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ orderId: 23, address: 'Street', recipientName: 'User', recipientPhone: '0900000000' }),
     })).status, 204);
-    assert.deepEqual(calls.map((call) => call.name), ['list', 'orderList', 'orderList', 'update', 'create']);
+    assert.deepEqual(calls.map((call) => call.name), ['list', 'orderList', 'orderList', 'update', 'updateDetails', 'create']);
     assert.equal(calls[1].params.orderId, '23');
     assert.equal(calls[3].body.status, 'IN_TRANSIT');
-    assert.equal(calls[4].body.orderId, 23);
+    assert.equal(calls[4].body.shippedAt, '2026-11-21T08:30:00+07:00');
+    assert.equal(calls[5].body.orderId, 23);
   } finally {
     await new Promise((resolve) => server.close(resolve));
   }
