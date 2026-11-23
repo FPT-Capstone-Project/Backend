@@ -121,7 +121,7 @@ async function detail(id, actor) {
   return { ...complaint, order: order.rows[0], replies: replies.rows, assigned_staff: staff.rows[0] || null };
 }
 
-async function reply(id, message, actor) {
+async function reply(id, message, actor, uploadImages = async () => []) {
   return transaction(async (client) => {
     const complaint = await ownedComplaint(client, id, actor, true);
     if (Number(actor.role_id) === 2 && complaint.assigned_to !== Number(actor.user_id)) {
@@ -131,11 +131,16 @@ async function reply(id, message, actor) {
       throw new AppError('Complaint has already been resolved', 409);
     }
     if (['RESOLVED', 'REJECTED', 'CLOSED'].includes(complaint.status)) throw new AppError('Complaint no longer accepts replies', 409);
+    if (Number(actor.role_id) === 3 && complaint.status !== 'NEED_MORE_INFO') {
+      throw new AppError('Additional information is accepted only when the complaint requests it', 409);
+    }
+    const imageUrls = await uploadImages();
     const result = await client.query(`INSERT INTO complaint_replies (complaint_id, sender_id, message)
       VALUES ($1, $2, $3) RETURNING *`, [id, actor.user_id, message]);
     await client.query(`UPDATE complaints SET updated_at = CURRENT_TIMESTAMP,
+      image_urls = CASE WHEN $3::jsonb = '[]'::jsonb THEN image_urls ELSE image_urls || $3::jsonb END,
       status = CASE WHEN status = 'NEED_MORE_INFO' AND $2::boolean THEN 'UNDER_REVIEW' ELSE status END
-      WHERE complaint_id = $1`, [id, !isStaff(actor)]);
+      WHERE complaint_id = $1`, [id, !isStaff(actor), JSON.stringify(imageUrls)]);
     if (Number(actor.role_id) === 2) {
       await notify(client, complaint, actor,
         `Nhân viên trang trại đã phản hồi khiếu nại #${id} của bạn.`,

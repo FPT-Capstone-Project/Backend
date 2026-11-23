@@ -106,12 +106,25 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await model.reply(complaint.complaint_id, 'Please provide details', staff);
     await model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, staff);
     await assert.rejects(model.reply(complaint.complaint_id, 'Intrusion', other), { statusCode: 404 });
-    await model.reply(complaint.complaint_id, 'More details', owner);
+    await model.reply(
+      complaint.complaint_id,
+      'More details',
+      owner,
+      async () => ['https://example.test/additional-evidence.jpg'],
+    );
     const detail = await model.detail(complaint.complaint_id, owner);
     assert.equal(detail.status, 'UNDER_REVIEW');
+    assert.deepEqual(detail.image_urls, [
+      'https://example.test/image.jpg',
+      'https://example.test/additional-evidence.jpg',
+    ]);
     assert.equal(detail.order.order_id, 1);
     assert.equal(detail.replies[1].sender_id, 2);
     assert.equal(detail.assigned_staff.user_id, 1);
+    await assert.rejects(
+      model.reply(complaint.complaint_id, 'Unrequested update', owner),
+      { statusCode: 409 },
+    );
     await model.update(complaint.complaint_id, { assignedTo: operator.user_id }, staff);
     assert.equal((await model.list(operator, { limit: 20, offset: 0, queue: 'UNASSIGNED' })).total, 0);
     assert.equal((await model.list(operator, { limit: 20, offset: 0, queue: 'ASSIGNED' })).total, 1);

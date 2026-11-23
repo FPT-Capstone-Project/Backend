@@ -14,7 +14,12 @@ test('complaint routes validate inputs and enforce authenticated role access', a
     create: async (data, actor, images) => { calls.push({ data, actor }); return { ...data, image_urls: await images() }; },
     list: async () => ({ data: [], total: 0 }),
     detail: async (id) => ({ complaint_id: id }),
-    reply: async (id, message, actor) => ({ complaint_id: id, message, sender_id: actor.user_id }),
+    reply: async (id, message, actor, images) => ({
+      complaint_id: id,
+      message,
+      sender_id: actor.user_id,
+      image_urls: await images(),
+    }),
     update: async (id, data) => ({ complaint_id: id, ...data }),
   } };
   require.cache[saved[3][0]] = { exports: {
@@ -62,6 +67,21 @@ test('complaint routes validate inputs and enforce authenticated role access', a
     assert.equal((await request('/1/status', 1, 'PATCH', { status: 'OPEN' })).status, 400);
     assert.equal((await request('/1/replies', 3, 'POST', { message: '' })).status, 400);
     assert.equal((await request('/1/replies', 2, 'POST', { message: 'Staff response' })).status, 201);
+    const replyBody = new FormData();
+    replyBody.append('message', 'Additional customer evidence');
+    replyBody.append('images', new Blob(['image bytes'], { type: 'image/png' }), 'supplement.png');
+    const replyResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/complaints/1/replies`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${jwt.sign({ sub: '3' }, require('../src/config/env').jwtSecret)}`,
+        },
+        body: replyBody,
+      },
+    );
+    assert.equal(replyResponse.status, 201);
+    assert.equal(uploads.some((item) => item.file.originalname === 'supplement.png'), true);
     const payload = { complaintType: 'DAMAGED', description: 'Damaged mushrooms', customer_id: 99, status: 'RESOLVED' };
     assert.equal((await request('/orders/1/complaints', 1, 'POST', payload)).status, 403);
     assert.equal((await request('/orders/1/complaints', 3, 'POST', { ...payload, imageUrls: ['https://example.test/image.jpg'] })).status, 400);
@@ -71,9 +91,9 @@ test('complaint routes validate inputs and enforce authenticated role access', a
     ]);
     assert.equal(response.status, 201);
     assert.deepEqual((await response.json()).data.image_urls, ['https://res.cloudinary.test/evidence.png']);
-    assert.equal(uploads.length, 1);
-    assert.equal(uploads[0].folder, 'harvest-complaints');
-    assert.equal(uploads[0].file.originalname, 'evidence.png');
+    assert.equal(uploads.length, 2);
+    const evidenceUpload = uploads.find((item) => item.file.originalname === 'evidence.png');
+    assert.equal(evidenceUpload.folder, 'harvest-complaints');
     assert.equal(calls[0].actor.user_id, 3);
     assert.equal(calls[0].data.orderId, 1);
     assert.equal(calls[0].data.shipmentId, undefined);

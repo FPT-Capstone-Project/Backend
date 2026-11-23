@@ -1,6 +1,7 @@
 const router = require('express').Router();
 const controller = require('../controllers/complaint.controller');
 const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
+const upload = require('../middlewares/upload.middleware');
 
 /**
  * @openapi
@@ -78,12 +79,16 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             required: [message]
  *             properties:
  *               message: { type: string, maxLength: 10000 }
+ *               images:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items: { type: string, format: binary, description: Additional customer evidence image }
  *     responses:
  *       201: { description: Reply created }
  *       409: { description: Complaint is final }
@@ -132,7 +137,7 @@ router.get('/my', authorizeRoles(3), controller.my);
 router.get('/my/:complaintId', authorizeRoles(3), controller.detail);
 router.get('/', authorizeRoles(1, 2), controller.list);
 router.get('/:complaintId', authorizeRoles(1, 2, 3), controller.detail);
-router.post('/:complaintId/replies', authorizeRoles(1, 2, 3), controller.reply);
+router.post('/:complaintId/replies', authorizeRoles(1, 2, 3), upload.array('images', 10), controller.reply);
 router.patch('/:complaintId', authorizeRoles(1, 2), controller.update);
 router.patch('/:complaintId/assign', authorizeRoles(1), controller.assign);
 router.patch('/:complaintId/status', authorizeRoles(1, 2), controller.status);

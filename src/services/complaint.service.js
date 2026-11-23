@@ -19,6 +19,22 @@ function status(value) {
   if (!STATUSES.includes(value)) throw new AppError(`status must be one of: ${STATUSES.join(', ')}`, 400);
   return value;
 }
+async function uploadComplaintImages(files, folder) {
+  const uploaded = [];
+  try {
+    for (const file of files) uploaded.push(await cloudinary.uploadMedia(file, folder));
+    return uploaded;
+  } catch (error) {
+    const cleanup = await Promise.allSettled(
+      uploaded.map((image) => cloudinary.deleteMedia(image.publicId, image.resourceType)),
+    );
+    cleanup.forEach((result) => {
+      if (result.status === 'rejected') console.error('Complaint image cleanup failed:', result.reason.message);
+    });
+    throw error;
+  }
+}
+
 async function create(orderId, body, files, actor) {
   const data = { orderId: id(orderId), type: text(body.complaintType ?? body.complaint_type, 'complaintType', 100), description: text(body.description, 'description') };
   if (body.imageUrls !== undefined) throw new AppError('Upload images using the multipart "images" field', 400);
@@ -26,7 +42,7 @@ async function create(orderId, body, files, actor) {
   const uploaded = [];
   try {
     return await model.create(data, actor, async () => {
-      for (const file of files) uploaded.push(await cloudinary.uploadMedia(file, 'harvest-complaints'));
+      uploaded.push(...await uploadComplaintImages(files, 'harvest-complaints'));
       return uploaded.map((image) => image.mediaUrl);
     });
   } catch (error) {
@@ -58,7 +74,32 @@ function update(complaintId, body, actor) {
   if (!Object.keys(data).length) throw new AppError('Provide status, assigned_to or resolution', 400);
   return model.update(id(complaintId), data, actor);
 }
-module.exports = { create, list, update,
+async function reply(complaintId, body, files, actor) {
+  if (!Array.isArray(files) || files.length > 10) throw new AppError('A maximum of 10 images may be uploaded', 400);
+  if (files.length && Number(actor.role_id) !== 3) {
+    throw new AppError('Only customers may attach additional complaint images', 403);
+  }
+  const uploaded = [];
+  try {
+    return await model.reply(
+      id(complaintId),
+      text(body.message, 'message'),
+      actor,
+      async () => {
+        uploaded.push(...await uploadComplaintImages(files, 'harvest-complaints'));
+        return uploaded.map((image) => image.mediaUrl);
+      },
+    );
+  } catch (error) {
+    const cleanup = await Promise.allSettled(
+      uploaded.map((image) => cloudinary.deleteMedia(image.publicId, image.resourceType)),
+    );
+    cleanup.forEach((result) => {
+      if (result.status === 'rejected') console.error('Complaint image cleanup failed:', result.reason.message);
+    });
+    throw error;
+  }
+}
+module.exports = { create, list, update, reply,
   detail: (complaintId, actor) => model.detail(id(complaintId), actor),
-  reply: (complaintId, body, actor) => model.reply(id(complaintId), text(body.message, 'message'), actor),
 };
