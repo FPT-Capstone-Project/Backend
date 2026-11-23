@@ -184,7 +184,7 @@ async function update(id, data, actor) {
       throw new AppError('A resolution is required for a final status', 400);
     }
     const result = await client.query(`UPDATE complaints SET status = $2, assigned_to = $3, resolution = $4,
-      updated_at = CURRENT_TIMESTAMP, resolved_at = CASE WHEN $2 IN ('RESOLVED', 'CLOSED')
+      updated_at = CURRENT_TIMESTAMP, resolved_at = CASE WHEN $2::varchar IN ('RESOLVED', 'CLOSED')
       THEN COALESCE(resolved_at, CURRENT_TIMESTAMP) ELSE NULL END WHERE complaint_id = $1 RETURNING *`,
     [id, status, assigned, resolution]);
     if (Number(actor.role_id) === 2 && data.resolution !== undefined && data.resolution !== complaint.resolution) {
