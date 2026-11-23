@@ -121,6 +121,22 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Unauthorized' }, otherOperator),
       { statusCode: 404 },
     );
+    assert.equal(
+      (await model.update(complaint.complaint_id, { status: 'UNDER_REVIEW' }, operator)).status,
+      'UNDER_REVIEW',
+    );
+    assert.equal(
+      (await model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, operator)).status,
+      'NEED_MORE_INFO',
+    );
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'REJECTED', resolution: 'Rejected' }, operator),
+      { statusCode: 400 },
+    );
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'CLOSED', resolution: 'Closed' }, operator),
+      { statusCode: 400 },
+    );
     const beforeReply = (await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length;
     await db.exec("ALTER TABLE notifications ADD CONSTRAINT reject_operator_notification CHECK (title <> 'Khiếu nại đã có phản hồi')");
     await assert.rejects(model.reply(complaint.complaint_id, 'Operator reply', operator));
@@ -128,6 +144,10 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal((await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length, beforeReply);
     await db.exec('ALTER TABLE notifications DROP CONSTRAINT reject_operator_notification');
     await model.reply(complaint.complaint_id, 'Operator reply', operator);
+    assert.equal(
+      (await model.update(complaint.complaint_id, { status: 'RESOLVING' }, operator)).status,
+      'RESOLVING',
+    );
     const operatorNotifications = await db.query(
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
       [owner.user_id, 'Khiếu nại đã có phản hồi']);

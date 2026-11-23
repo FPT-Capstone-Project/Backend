@@ -110,7 +110,7 @@ const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware
  * /api/complaints/{id}/status:
  *   patch:
  *     tags: [Complaints]
- *     summary: Admin updates status; the assigned Farm Operator submits the resolution
+ *     summary: Admin updates status; the assigned Farm Operator updates active processing states or submits the resolution
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - { in: path, name: id, required: true, schema: { type: integer, minimum: 1 } }
