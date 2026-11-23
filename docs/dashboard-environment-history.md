@@ -30,6 +30,13 @@ Trả 400 nếu sai khoảng thời gian, 401 nếu thiếu/sai JWT, 403 nếu k
 
 ## Response
 
+Tham số tùy chọn `bucketMinutes=15|30|60` chọn độ phân giải: 96, 48 hoặc 24 điểm
+cho 24 giờ. Mặc định là 15 phút để tương thích client cũ. Mobile dùng 30 phút,
+chia sẻ cache giữa trang chủ và màn cảm biến. Các điểm là trung bình trong bucket,
+không phải mẫu đo tức thời; bucket rộng hơn làm giảm độ chi tiết của biến động ngắn.
+Backend tổng hợp các tầng cùng nhau và cache kết quả cùng khoảng thời gian/độ phân
+giải trong 60 giây. Không cần bảng mới hay migration.
+
 Ví dụ dưới đây rút gọn mảng points; API thực tế trả toàn bộ bucket:
 
 ```json
