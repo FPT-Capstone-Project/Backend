@@ -139,7 +139,7 @@ async function reply(id, message, actor, uploadImages = async () => []) {
       VALUES ($1, $2, $3) RETURNING *`, [id, actor.user_id, message]);
     await client.query(`UPDATE complaints SET updated_at = CURRENT_TIMESTAMP,
       image_urls = CASE WHEN $3::jsonb = '[]'::jsonb THEN image_urls ELSE image_urls || $3::jsonb END,
-      status = CASE WHEN status = 'NEED_MORE_INFO' AND $2::boolean THEN 'UNDER_REVIEW' ELSE status END
+      status = CASE WHEN $2::boolean THEN 'RESOLVING' ELSE 'NEED_MORE_INFO' END
       WHERE complaint_id = $1`, [id, !isStaff(actor), JSON.stringify(imageUrls)]);
     if (Number(actor.role_id) === 2) {
       await notify(client, complaint, actor,
@@ -165,12 +165,11 @@ async function update(id, data, actor) {
       if (data.assignedTo !== undefined) {
         throw new AppError('Only admins can assign complaints', 403);
       }
-      const allowedStatuses = ['UNDER_REVIEW', 'NEED_MORE_INFO', 'RESOLVING', 'RESOLVED'];
-      if (!allowedStatuses.includes(data.status)) {
-        throw new AppError('Assigned operators may only update an active complaint status or resolve it', 400);
+      if (data.status !== undefined) {
+        throw new AppError('Complaint status is updated automatically', 403);
       }
-      if (data.status === 'RESOLVED' && data.resolution === undefined) {
-        throw new AppError('A resolution is required to resolve the complaint', 400);
+      if (data.resolution === undefined) {
+        throw new AppError('A resolution is required', 400);
       }
     }
     const assigned = data.assignedTo === undefined ? complaint.assigned_to : data.assignedTo;
@@ -178,7 +177,14 @@ async function update(id, data, actor) {
       const staff = await client.query("SELECT user_id FROM users WHERE user_id = $1 AND role_id IN (1, 2) AND status = 'ACTIVE'", [assigned]);
       if (!staff.rows.length) throw new AppError('assigned_to must be active farm staff', 400);
     }
-    const status = data.status || complaint.status;
+    let status = data.status || complaint.status;
+    if (data.assignedTo !== undefined && data.assignedTo !== null &&
+        data.assignedTo !== complaint.assigned_to && complaint.status === 'PENDING') {
+      status = 'UNDER_REVIEW';
+    }
+    if (Number(actor.role_id) === 2 && data.resolution !== undefined) {
+      status = 'RESOLVED';
+    }
     const resolution = data.resolution === undefined ? complaint.resolution : data.resolution;
     if (['RESOLVED', 'REJECTED', 'CLOSED'].includes(status) && !resolution?.trim()) {
       throw new AppError('A resolution is required for a final status', 400);
