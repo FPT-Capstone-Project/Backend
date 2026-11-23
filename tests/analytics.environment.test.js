@@ -110,6 +110,34 @@ test('environment charts aggregate sensor readings without cultivation sessions 
       timestamp: Date.parse('2026-11-01T00:05:00Z'), temperature: 32.5, humidity: 85,
     }]);
     const swagger = require('../src/config/swagger');
+    const liveRequest = async (role = 1) => {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/analytics/dashboard/environment-latest`, {
+        headers: role ? { authorization: `Bearer ${jwt.sign({ sub: String(role) }, require('../src/config/env').jwtSecret)}` } : {},
+      });
+      return { status: response.status, body: await response.json() };
+    };
+    assert.equal((await liveRequest(0)).status, 401);
+    assert.equal((await liveRequest(3)).status, 403);
+    await db.exec(`
+      UPDATE iot_masters SET last_seen_at=now(), reported_status='online', status_received_at=now();
+      INSERT INTO iot_sensor_latest(master_id,node_address,sensor_address,temperature,humidity,is_valid,last_received_at,retained)
+      VALUES (1,1,1,20,60,true,now(),false), (1,1,2,30,NULL,true,now(),false),
+        (1,1,3,100,100,true,now(),true),
+        (1,2,1,25,70,true,now()-interval '2 minutes',false),
+        (1,2,2,25,70,false,now(),false),
+        (2,1,1,28,80,true,now(),false);
+      UPDATE iot_masters SET reported_status='offline', status_received_at=now()+interval '1 second' WHERE id=2;
+    `);
+    const live = await liveRequest(2);
+    assert.equal(live.status, 200);
+    assert.equal(live.body.data.floors.length, 3);
+    assert.equal(live.body.data.floors[0].points[0].temperature, 25);
+    assert.equal(live.body.data.floors[0].points[0].humidity, 60);
+    assert.ok(live.body.data.floors[0].points[0].timestamp > Date.now()-60000);
+    assert.deepEqual(live.body.data.floors[1].points, []);
+    assert.deepEqual(live.body.data.floors[2].points, []);
+    await db.exec('UPDATE iot_sensor_latest SET temperature=24 WHERE master_id=1 AND node_address=1 AND sensor_address=1');
+    assert.equal((await liveRequest()).body.data.floors[0].points[0].temperature, 27, 'live data must not use history cache');
     assert.ok(swagger.paths['/api/analytics/dashboard/environment-history'].get.responses[200]);
   } finally {
     if (server) await new Promise(resolve => server.close(resolve));

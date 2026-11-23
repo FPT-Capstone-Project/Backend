@@ -30,6 +30,23 @@ Trả 400 nếu sai khoảng thời gian, 401 nếu thiếu/sai JWT, 403 nếu k
 
 ## Response
 
+### Biểu đồ trực tiếp trên mobile
+
+Mobile gọi `GET /api/analytics/dashboard/environment-latest` mỗi 5 giây khi mở
+trang chủ hoặc màn cảm biến. Endpoint đọc `iot_sensor_latest`, không đọc lịch sử
+24 giờ, không cần bảng mới. Chỉ Admin/Farm Operator được truy cập.
+
+Response `{ data: { fetchedAt, floors } }` trả metadata tầng như API lịch sử;
+`points` có tối đa một số đo trung bình giữa các sensor hợp lệ, không retained,
+nhận trong 60 giây gần nhất và master còn online. Timestamp là thời gian nhận
+mới nhất trong các sensor hợp lệ; tầng không có số đo đủ mới trả `points: []`.
+
+Mobile nối các mẫu mới thành đường vẽ, giữ tối đa 15 phút trong cache bộ nhớ
+theo tài khoản; không thêm mẫu trùng timestamp. Khoảng mất tín hiệu được để trống.
+Đường biểu đồ bắt đầu tích lũy khi mở màn hình, không backfill 24 giờ. Polling
+dừng khi rời màn hình hoặc app xuống nền; đổi giữa hai màn dùng chung chuỗi điểm.
+API lịch sử cũ vẫn giữ nguyên cho các client khác.
+
 Tham số tùy chọn `bucketMinutes=15|30|60` chọn độ phân giải: 96, 48 hoặc 24 điểm
 cho 24 giờ. Mặc định là 15 phút để tương thích client cũ. Mobile dùng 30 phút,
 chia sẻ cache giữa trang chủ và màn cảm biến. Các điểm là trung bình trong bucket,
