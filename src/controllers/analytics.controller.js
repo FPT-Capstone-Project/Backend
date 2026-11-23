@@ -9,4 +9,9 @@ async function environmentHistory(req, res) {
   res.json({ data: await analyticsService.getEnvironmentHistory(req.query) });
 }
 
-module.exports = { dashboard, environmentHistory };
+async function latestEnvironment(req, res) {
+  res.set('Cache-Control', 'no-store');
+  res.json({ data: await analyticsService.getLatestEnvironment() });
+}
+
+module.exports = { dashboard, environmentHistory, latestEnvironment };

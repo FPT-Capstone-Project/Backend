@@ -55,4 +55,9 @@ async function getEnvironmentHistory(query = {}) {
   };
 }
 
-module.exports = { getDashboard, getEnvironmentHistory };
+async function getLatestEnvironment() {
+  const floors = await analyticsModel.getLatestEnvironment();
+  return { fetchedAt: Date.now(), floors };
+}
+
+module.exports = { getDashboard, getEnvironmentHistory, getLatestEnvironment };

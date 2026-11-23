@@ -109,5 +109,19 @@ router.get('/dashboard', authenticate, authorizeRoles(1, 2), analyticsController
  *       403: { description: Admin or Farm Operator only }
  */
 router.get('/dashboard/environment-history', authenticate, authorizeRoles(1, 2), analyticsController.environmentHistory);
+/**
+ * @openapi
+ * /api/analytics/dashboard/environment-latest:
+ *   get:
+ *     tags: [Analytics]
+ *     summary: Latest fresh sensor average per active floor for live charts
+ *     description: 'Reads only iot_sensor_latest. Averages valid non-retained sensors 1-3 received within 60 seconds, on online masters seen within 60 seconds. Returns data.fetchedAt (epoch milliseconds) and data.floors with the same metadata as environment-history. Each floor has zero or one point, timestamped by its newest eligible sensor. Empty points means unavailable, not zero. No response cache. Intended for 5-second polling while the screen is visible.'
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Latest floor readings; unavailable floors have empty points }
+ *       401: { description: Missing or invalid JWT }
+ *       403: { description: Admin or Farm Operator only }
+ */
+router.get('/dashboard/environment-latest', authenticate, authorizeRoles(1, 2), analyticsController.latestEnvironment);
 
 module.exports = router;

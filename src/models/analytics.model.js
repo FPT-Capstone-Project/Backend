@@ -80,4 +80,34 @@ async function getEnvironmentHistory({ from, to, bucketMs }) {
   return result.rows;
 }
 
-module.exports = { getDashboardRevenue, getDashboardTraysUsed, getDashboardHarvestQuality, getEnvironmentHistory };
+async function getLatestEnvironment() {
+  const result = await pool.query(`
+    SELECT f.floor_id AS "floorId", f.floor_name AS "floorName",
+      f.floor_number AS "floorNumber", f.room_id AS "roomId",
+      f.master_id AS "masterDbId", m.master_identifier AS "masterId",
+      f.node_address AS "nodeId",
+      json_build_object('temperature_min', c.temperature_min, 'temperature_max', c.temperature_max,
+        'humidity_min', c.humidity_min, 'humidity_max', c.humidity_max) AS thresholds,
+      CASE WHEN live.timestamp IS NULL THEN '[]'::json ELSE json_build_array(json_build_object(
+        'timestamp', live.timestamp, 'temperature', live.temperature, 'humidity', live.humidity
+      )) END AS points
+    FROM cultivation_floors f
+    JOIN iot_masters m ON m.id=f.master_id
+    LEFT JOIN iot_auto_control_configs c ON c.floor_id=f.floor_id
+    CROSS JOIN LATERAL (
+      SELECT (extract(epoch FROM max(s.last_received_at))*1000)::double precision AS timestamp,
+        avg(s.temperature) FILTER (WHERE s.temperature BETWEEN -40 AND 125) AS temperature,
+        avg(s.humidity) FILTER (WHERE s.humidity BETWEEN 0 AND 100) AS humidity
+      FROM iot_sensor_latest s
+      WHERE s.master_id=f.master_id AND s.node_address=f.node_address
+        AND s.sensor_address BETWEEN 1 AND 3 AND s.is_valid AND NOT s.retained
+        AND s.last_received_at >= now()-interval '60 seconds' AND s.last_received_at <= now()
+        AND m.last_seen_at >= now()-interval '60 seconds'
+        AND NOT COALESCE(m.reported_status='offline' AND m.status_received_at >= m.last_seen_at, false)
+    ) live
+    WHERE f.status='ACTIVE'
+    ORDER BY f.room_id, f.floor_number, f.floor_id`);
+  return result.rows;
+}
+
+module.exports = { getDashboardRevenue, getDashboardTraysUsed, getDashboardHarvestQuality, getEnvironmentHistory, getLatestEnvironment };
