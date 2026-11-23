@@ -1,5 +1,7 @@
 const analyticsModel = require('../models/analytics.model');
 const AppError = require('../utils/app-error');
+const { createAsyncCache } = require('../utils/asyncCache');
+const cachedEnvironmentHistory = createAsyncCache({ ttlMs: 60_000 });
 
 async function getDashboard() {
   const [revenue, trays, harvest] = await Promise.all([
@@ -42,9 +44,9 @@ async function getEnvironmentHistory(query = {}) {
   }
   return {
     from, to, bucketMs, refreshAfterMs: refreshMs,
-    floors: await analyticsModel.getEnvironmentHistory({
+    floors: await cachedEnvironmentHistory(`${from}:${to}:${bucketMs}`, () => analyticsModel.getEnvironmentHistory({
       from: new Date(from).toISOString(), to: new Date(to).toISOString(), bucketMs,
-    }),
+    })),
   };
 }
 
