@@ -25,7 +25,12 @@ async function getDashboard() {
 
 async function getEnvironmentHistory(query = {}) {
   const windowMs = 24 * 60 * 60 * 1000;
-  const bucketMs = 15 * 60 * 1000;
+  const bucketMinutes = query.bucketMinutes === undefined ? 15 : Number(query.bucketMinutes);
+  if ((query.bucketMinutes !== undefined && typeof query.bucketMinutes !== 'string') ||
+      ![15, 30, 60].includes(bucketMinutes)) {
+    throw new AppError('bucketMinutes must be 15, 30 or 60', 400);
+  }
+  const bucketMs = bucketMinutes * 60 * 1000;
   const refreshMs = 5 * 60 * 1000;
   const hasFrom = query.from !== undefined;
   const hasTo = query.to !== undefined;

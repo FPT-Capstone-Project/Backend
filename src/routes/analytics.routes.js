@@ -53,6 +53,10 @@ router.get('/dashboard', authenticate, authorizeRoles(1, 2), analyticsController
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: query
+ *         name: bucketMinutes
+ *         description: 'Minutes per averaged point. 24h returns 96, 48 or 24 points per floor.'
+ *         schema: { type: integer, enum: [15, 30, 60], default: 15 }
+ *       - in: query
  *         name: from
  *         schema: { type: string, format: date-time }
  *       - in: query

@@ -92,6 +92,19 @@ test('environment charts aggregate sensor readings without cultivation sessions 
     assert.equal(floors[2].thresholds.temperature_min, null);
     const partial = await request('?from=2026-11-01T00:00:00Z&to=2026-11-01T00:16:00Z');
     assert.equal(partial.body.data.floors[0].points.length, 2);
+    for (const minutes of [30, 60]) {
+      const reduced = await request(`?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z&bucketMinutes=${minutes}`);
+      assert.equal(reduced.status, 200);
+      assert.equal(reduced.body.data.bucketMs, minutes * 60000);
+      assert.equal(reduced.body.data.floors[0].points.length, 1440 / minutes);
+      assert.equal(reduced.body.data.floors[0].points[0].temperature, 30);
+      assert.ok(Math.abs(reduced.body.data.floors[0].points[0].humidity - (190 / 3 + 90) / 2) < 0.00001);
+      assert.equal(reduced.body.data.floors[1].points[0].temperature, 22);
+      assert.ok(reduced.body.data.floors[2].points.every(p => p.temperature === null));
+    }
+    for (const value of ['0', '10', 'abc', '30&bucketMinutes=60']) {
+      assert.equal((await request(`?bucketMinutes=${value}`)).status, 400);
+    }
     const shifted = await request('?from=2026-11-01T00:05:00Z&to=2026-11-01T00:15:00Z');
     assert.deepEqual(shifted.body.data.floors[0].points, [{
       timestamp: Date.parse('2026-11-01T00:05:00Z'), temperature: 32.5, humidity: 85,
