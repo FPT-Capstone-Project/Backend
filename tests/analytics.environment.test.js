@@ -70,6 +70,11 @@ test('environment charts aggregate sensor readings without cultivation sessions 
     const result = await request('?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z');
     assert.equal(result.status, 200);
     assert.equal(queryCount - before, 1);
+    const cachedBefore = queryCount;
+    const repeated = await request('?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z', 2);
+    assert.deepEqual(repeated.body, result.body);
+    assert.equal(queryCount, cachedBefore, 'same range should reuse the cached aggregation');
+    assert.equal((await request('?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z', 3)).status, 403);
     const { floors, from, to } = result.body.data;
     assert.equal(floors.length, 3);
     assert.equal(floors[0].floorName, 'Tầng 1');
