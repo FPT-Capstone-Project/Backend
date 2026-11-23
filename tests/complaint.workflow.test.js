@@ -163,6 +163,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
       [owner.user_id, 'Khiếu nại đã có phản hồi']);
     assert.equal(operatorNotifications.rows.length, 1);
+    assert.equal(operatorNotifications.rows[0].title, 'Khiếu nại đã có phản hồi');
     assert.match(operatorNotifications.rows[0].message, /Nhân viên trang trại đã phản hồi/);
     assert.equal(operatorNotifications.rows[0].created_by, operator.user_id);
     assert.equal(operatorNotifications.rows[0].reference_id, complaint.complaint_id);
@@ -198,6 +199,11 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.ok(closed.resolved_at);
     await assert.rejects(model.reply(complaint.complaint_id, 'Late reply', owner), { statusCode: 409 });
     assert.ok((await db.query('SELECT * FROM notifications WHERE user_id = 1')).rows.length);
+    const englishNotifications = await db.query(
+      `SELECT * FROM notifications WHERE title ~* 'harvest delivery complaint'
+        OR message ~* 'harvest delivery complaint|a customer submitted|a new reply was added|your complaint'`,
+    );
+    assert.equal(englishNotifications.rows.length, 0);
   } finally {
     if (previous) require.cache[dbPath] = previous;
     else delete require.cache[dbPath];

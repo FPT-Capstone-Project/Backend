@@ -33,7 +33,7 @@ async function ownedComplaint(client, id, actor, lock = false) {
   return rows[0];
 }
 
-async function notify(client, complaint, actor, message, title = 'Harvest delivery complaint') {
+async function notify(client, complaint, actor, message, title = 'Cập nhật khiếu nại') {
   await client.query(
     `INSERT INTO notifications (user_id, notification_type, title, message, created_by, reference_type, reference_id)
      SELECT user_id, 'COMPLAINT_UPDATE', $7, $1, $2, 'COMPLAINT', $3
@@ -81,7 +81,13 @@ async function create(data, actor, uploadImages) {
       [actor.user_id, 'Đã gửi khiếu nại',
         `Khiếu nại #${result.rows[0].complaint_id} của đơn hàng #${data.orderId} đã được gửi thành công.`,
         result.rows[0].complaint_id]);
-    await notify(client, result.rows[0], actor, 'A customer submitted a harvest delivery complaint.');
+    await notify(
+      client,
+      result.rows[0],
+      actor,
+      `Khách hàng vừa gửi khiếu nại #${result.rows[0].complaint_id} cho đơn hàng #${data.orderId}.`,
+      'Có khiếu nại mới',
+    );
     return result.rows[0];
   });
 }
@@ -146,7 +152,13 @@ async function reply(id, message, actor, uploadImages = async () => []) {
         `Nhân viên trang trại đã phản hồi khiếu nại #${id} của bạn.`,
         'Khiếu nại đã có phản hồi');
     } else {
-      await notify(client, complaint, actor, 'A new reply was added to your harvest delivery complaint.');
+      await notify(
+        client,
+        complaint,
+        actor,
+        `Khách hàng đã bổ sung thông tin cho khiếu nại #${id}.`,
+        'Khiếu nại có thông tin bổ sung',
+      );
     }
     return result.rows[0];
   });
@@ -198,7 +210,13 @@ async function update(id, data, actor) {
         `Nhân viên trang trại đã cập nhật nội dung xử lý khiếu nại #${id} của bạn.`,
         'Khiếu nại đã có phản hồi');
     } else {
-      await notify(client, result.rows[0], actor, 'Your harvest delivery complaint was updated.');
+      await notify(
+        client,
+        result.rows[0],
+        actor,
+        `Khiếu nại #${id} đã được cập nhật thành trạng thái ${result.rows[0].status}.`,
+        'Khiếu nại đã cập nhật',
+      );
     }
     return result.rows[0];
   });
