@@ -21,7 +21,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       CREATE TABLE harvest_requests (session_id INT, harvest_method TEXT);
       CREATE TABLE complaints (complaint_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         shipment_id INT UNIQUE REFERENCES shipments, customer_id INT, complaint_type VARCHAR(100),
-        description TEXT, image_urls JSONB DEFAULT '[]', status TEXT DEFAULT 'PENDING', assigned_to INT,
+        description TEXT, image_urls JSONB DEFAULT '[]', status VARCHAR(30) DEFAULT 'PENDING', assigned_to INT,
         resolution TEXT, created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW(), resolved_at TIMESTAMPTZ);
       CREATE TABLE complaint_replies (reply_id INT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
         complaint_id INT REFERENCES complaints, sender_id INT, message TEXT, created_at TIMESTAMPTZ DEFAULT NOW());
