@@ -65,6 +65,7 @@ test('complaint routes validate inputs and enforce authenticated role access', a
     assert.equal((await request('/1/assign', 1, 'PATCH', { assignedTo: 'bad' })).status, 400);
     assert.equal((await request('/1/status', 1, 'PATCH', { status: 'PENDING' })).status, 200);
     assert.equal((await request('/1/status', 1, 'PATCH', { status: 'OPEN' })).status, 400);
+    assert.equal((await request('/1/status', 2, 'PATCH', { resolution: 'Operator resolution' })).status, 200);
     assert.equal((await request('/1/replies', 3, 'POST', { message: '' })).status, 400);
     assert.equal((await request('/1/replies', 2, 'POST', { message: 'Staff response' })).status, 201);
     const replyBody = new FormData();

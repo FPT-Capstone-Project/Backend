@@ -102,9 +102,10 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     await model.update(complaint.complaint_id, { status: 'PENDING' }, staff);
     await db.query('UPDATE complaints SET resolution = NULL WHERE complaint_id = $1', [complaint.complaint_id]);
     await assert.rejects(model.update(complaint.complaint_id, { assignedTo: 3 }, staff), { statusCode: 400 });
-    await model.update(complaint.complaint_id, { status: 'UNDER_REVIEW', assignedTo: 1 }, staff);
+    const assignedAdmin = await model.update(complaint.complaint_id, { assignedTo: 1 }, staff);
+    assert.equal(assignedAdmin.status, 'UNDER_REVIEW');
     await model.reply(complaint.complaint_id, 'Please provide details', staff);
-    await model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, staff);
+    assert.equal((await model.detail(complaint.complaint_id, staff)).status, 'NEED_MORE_INFO');
     await assert.rejects(model.reply(complaint.complaint_id, 'Intrusion', other), { statusCode: 404 });
     await model.reply(
       complaint.complaint_id,
@@ -113,7 +114,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       async () => ['https://example.test/additional-evidence.jpg'],
     );
     const detail = await model.detail(complaint.complaint_id, owner);
-    assert.equal(detail.status, 'UNDER_REVIEW');
+    assert.equal(detail.status, 'RESOLVING');
     assert.deepEqual(detail.image_urls, [
       'https://example.test/image.jpg',
       'https://example.test/additional-evidence.jpg',
@@ -134,21 +135,21 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
       model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Unauthorized' }, otherOperator),
       { statusCode: 404 },
     );
-    assert.equal(
-      (await model.update(complaint.complaint_id, { status: 'UNDER_REVIEW' }, operator)).status,
-      'UNDER_REVIEW',
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'UNDER_REVIEW' }, operator),
+      { statusCode: 403 },
     );
-    assert.equal(
-      (await model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, operator)).status,
-      'NEED_MORE_INFO',
+    await assert.rejects(
+      model.update(complaint.complaint_id, { status: 'NEED_MORE_INFO' }, operator),
+      { statusCode: 403 },
     );
     await assert.rejects(
       model.update(complaint.complaint_id, { status: 'REJECTED', resolution: 'Rejected' }, operator),
-      { statusCode: 400 },
+      { statusCode: 403 },
     );
     await assert.rejects(
       model.update(complaint.complaint_id, { status: 'CLOSED', resolution: 'Closed' }, operator),
-      { statusCode: 400 },
+      { statusCode: 403 },
     );
     const beforeReply = (await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length;
     await db.exec("ALTER TABLE notifications ADD CONSTRAINT reject_operator_notification CHECK (title <> 'Khiếu nại đã có phản hồi')");
@@ -157,10 +158,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal((await db.query('SELECT * FROM notifications WHERE user_id = $1', [owner.user_id])).rows.length, beforeReply);
     await db.exec('ALTER TABLE notifications DROP CONSTRAINT reject_operator_notification');
     await model.reply(complaint.complaint_id, 'Operator reply', operator);
-    assert.equal(
-      (await model.update(complaint.complaint_id, { status: 'RESOLVING' }, operator)).status,
-      'RESOLVING',
-    );
+    assert.equal((await model.detail(complaint.complaint_id, owner)).status, 'NEED_MORE_INFO');
     const operatorNotifications = await db.query(
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
       [owner.user_id, 'Khiếu nại đã có phản hồi']);
@@ -170,9 +168,10 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal(operatorNotifications.rows[0].reference_id, complaint.complaint_id);
     const operatorResolution = await model.update(
       complaint.complaint_id,
-      { status: 'RESOLVED', resolution: 'Replacement proposed' },
+      { resolution: 'Replacement proposed' },
       operator,
     );
+    assert.equal(operatorResolution.status, 'RESOLVED');
     assert.ok(operatorResolution.resolved_at);
     const resolutionNotifications = await db.query(
       'SELECT * FROM notifications WHERE user_id = $1 AND title = $2',
@@ -182,7 +181,7 @@ test('harvest complaint ownership, delivery eligibility, replies and resolution'
     assert.equal((await model.list(otherOperator, { limit: 20, offset: 0, queue: 'RESPONDED' })).total, 1);
     assert.ok((await model.detail(complaint.complaint_id, otherOperator)).resolved_at);
     await assert.rejects(
-      model.update(complaint.complaint_id, { status: 'RESOLVED', resolution: 'Second response' }, operator),
+      model.update(complaint.complaint_id, { resolution: 'Second response' }, operator),
       { statusCode: 409 },
     );
     assert.equal((await db.query(
