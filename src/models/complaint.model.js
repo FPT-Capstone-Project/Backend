@@ -160,8 +160,12 @@ async function update(id, data, actor) {
       if (data.assignedTo !== undefined) {
         throw new AppError('Only admins can assign complaints', 403);
       }
-      if (data.status !== 'RESOLVED' || data.resolution === undefined) {
-        throw new AppError('Assigned operators must submit a resolution to resolve the complaint', 400);
+      const allowedStatuses = ['UNDER_REVIEW', 'NEED_MORE_INFO', 'RESOLVING', 'RESOLVED'];
+      if (!allowedStatuses.includes(data.status)) {
+        throw new AppError('Assigned operators may only update an active complaint status or resolve it', 400);
+      }
+      if (data.status === 'RESOLVED' && data.resolution === undefined) {
+        throw new AppError('A resolution is required to resolve the complaint', 400);
       }
     }
     const assigned = data.assignedTo === undefined ? complaint.assigned_to : data.assignedTo;
