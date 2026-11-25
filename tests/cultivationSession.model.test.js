@@ -11,6 +11,8 @@ function loadInspectionModel({
     harvest_date: '2026-10-21',
   },
   latestProgress = { progress_id: 9, current_stage: 'FRUITING_INITIATION', progress_percent: '40' },
+  qrTray = { tray_id: 4 },
+  qrAssignments = [{ session_tray_id: 14, status: 'ACTIVE' }],
 } = {}) {
   const dbPath = require.resolve('../src/config/db');
   const modelPath = require.resolve('../src/models/cultivationSession.model');
@@ -20,6 +22,12 @@ function loadInspectionModel({
       const statement = query.trim().replace(/\s+/g, ' ');
       statements.push({ statement, values });
       if (['BEGIN', 'COMMIT', 'ROLLBACK'].includes(statement)) return { rows: [] };
+      if (statement.startsWith('SELECT tray_id FROM cultivation_trays WHERE qr_token = $1')) {
+        return { rows: qrTray ? [qrTray] : [] };
+      }
+      if (statement.startsWith('SELECT session_tray_id, status FROM cultivation_session_trays')) {
+        return { rows: qrAssignments };
+      }
       if (statement.startsWith('SELECT st.session_tray_id, st.session_id')) {
         return { rows: assignment ? [assignment] : [] };
       }
@@ -201,10 +209,51 @@ test('does not record inspections for a released or completed tray assignment', 
     () => model.createInspectionForAdmin(14, {
       trayCondition: 'Clean',
     }, 3),
-    { statusCode: 409, code: 'SESSION_TRAY_NOT_ACTIVE', message: 'Only active session trays can be inspected' },
+    { statusCode: 409, code: 'SESSION_TRAY_NOT_ACTIVE', message: 'Khay đã được RELEASED.' },
   );
   assert.ok(statements.some(({ statement }) => statement === 'ROLLBACK'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections')));
+});
+
+test('creates an inspection from a QR token only through the active session-tray assignment', async () => {
+  const { model, statements } = loadInspectionModel();
+  const result = await model.createInspectionFromQrForAdmin('valid-token', {
+    mushroomCondition: 'Healthy',
+  }, 3);
+
+  assert.equal(result.inspection.session_tray_id, 14);
+  assert.equal(result.inspection.inspected_by, 3);
+  assert.deepEqual(statements[1].values, ['valid-token']);
+  assert.deepEqual(statements[2].values, [4]);
+  assert.ok(statements.some(({ statement }) => statement === 'COMMIT'));
+});
+
+test('returns distinct errors for invalid QR, unassigned tray and released assignment', async (t) => {
+  await t.test('invalid token', async () => {
+    const { model } = loadInspectionModel({ qrTray: null });
+    await assert.rejects(
+      () => model.createInspectionFromQrForAdmin('invalid-token', {}, 3),
+      { statusCode: 404, code: 'INVALID_QR_TOKEN', message: 'QR không hợp lệ.' },
+    );
+  });
+
+  await t.test('tray has never been assigned', async () => {
+    const { model } = loadInspectionModel({ qrAssignments: [] });
+    await assert.rejects(
+      () => model.createInspectionFromQrForAdmin('valid-token', {}, 3),
+      { statusCode: 404, code: 'TRAY_NOT_ASSIGNED', message: 'Khay chưa được gắn vào phiên trồng.' },
+    );
+  });
+
+  await t.test('all assignments were released', async () => {
+    const { model } = loadInspectionModel({
+      qrAssignments: [{ session_tray_id: 14, status: 'RELEASED' }],
+    });
+    await assert.rejects(
+      () => model.createInspectionFromQrForAdmin('valid-token', {}, 3),
+      { statusCode: 409, code: 'SESSION_TRAY_NOT_ACTIVE', message: 'Khay đã được RELEASED.' },
+    );
+  });
 });
 
 test('does not record inspections when the tray is active but its session is not cultivating', async () => {

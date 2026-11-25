@@ -761,74 +761,124 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
   }
 }
 
+async function insertInspectionForActiveSessionTray(client, sessionTrayId, data, inspectedBy) {
+  const assignmentResult = await client.query(
+    `SELECT st.session_tray_id, st.session_id, st.status AS assignment_status,
+            s.start_at, s.harvest_date, s.status AS session_status
+     FROM cultivation_session_trays st
+     INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
+     WHERE st.session_tray_id = $1
+     FOR UPDATE OF st, s`,
+    [sessionTrayId],
+  );
+  const assignment = assignmentResult.rows[0];
+  if (!assignment) throw new AppError('Cultivation session tray not found', 404);
+  if (assignment.assignment_status !== 'ACTIVE') {
+    throw new AppError('Khay đã được RELEASED.', 409, 'SESSION_TRAY_NOT_ACTIVE');
+  }
+  if (assignment.session_status !== 'CULTIVATING') {
+    throw new AppError(
+      'Daily inspections can only be created while the session is CULTIVATING',
+      409,
+      'INVALID_SESSION_STATUS',
+    );
+  }
+
+  const existingInspection = await client.query(
+    `SELECT inspection_id
+     FROM cultivation_inspections
+     WHERE session_tray_id = $1
+       AND inspection_date >= (
+         date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
+         AT TIME ZONE 'Asia/Ho_Chi_Minh'
+       )
+       AND inspection_date < (
+         (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') + INTERVAL '1 day')
+         AT TIME ZONE 'Asia/Ho_Chi_Minh'
+       )
+     LIMIT 1`,
+    [sessionTrayId],
+  );
+  if (existingInspection.rows.length > 0) {
+    throw new AppError(
+      'A daily inspection has already been recorded for this tray today',
+      409,
+      'DUPLICATE_DAILY_INSPECTION',
+    );
+  }
+
+  const inspectionResult = await client.query(
+    `INSERT INTO cultivation_inspections (
+       session_tray_id, inspected_by, tray_condition,
+       mushroom_condition, notes
+     )
+     VALUES ($1, $2, $3, $4, $5)
+     RETURNING *`,
+    [
+      sessionTrayId,
+      inspectedBy,
+      data.trayCondition ?? null,
+      data.mushroomCondition ?? null,
+      data.notes ?? null,
+    ],
+  );
+  return { inspection: inspectionResult.rows[0] };
+}
+
 async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const assignmentResult = await client.query(
-      `SELECT st.session_tray_id, st.session_id, st.status AS assignment_status,
-              s.start_at, s.harvest_date, s.status AS session_status
-       FROM cultivation_session_trays st
-       INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
-       WHERE st.session_tray_id = $1
-       FOR UPDATE OF st, s`,
-      [sessionTrayId],
+    const result = await insertInspectionForActiveSessionTray(client, sessionTrayId, data, inspectedBy);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function createInspectionFromQrForAdmin(qrToken, data, inspectedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const trayResult = await client.query(
+      'SELECT tray_id FROM cultivation_trays WHERE qr_token = $1 FOR UPDATE',
+      [qrToken],
     );
-    const assignment = assignmentResult.rows[0];
-    if (!assignment) throw new AppError('Cultivation session tray not found', 404);
-    if (assignment.assignment_status !== 'ACTIVE') {
-      throw new AppError('Only active session trays can be inspected', 409, 'SESSION_TRAY_NOT_ACTIVE');
-    }
-    if (assignment.session_status !== 'CULTIVATING') {
-      throw new AppError(
-        'Daily inspections can only be created while the session is CULTIVATING',
-        409,
-        'INVALID_SESSION_STATUS',
-      );
+    const tray = trayResult.rows[0];
+    if (!tray) throw new AppError('QR không hợp lệ.', 404, 'INVALID_QR_TOKEN');
+
+    const assignments = await client.query(
+      `SELECT session_tray_id, status
+       FROM cultivation_session_trays
+       WHERE tray_id = $1
+       ORDER BY assigned_at DESC, session_tray_id DESC
+       FOR UPDATE`,
+      [tray.tray_id],
+    );
+    if (assignments.rows.length === 0) {
+      throw new AppError('Khay chưa được gắn vào phiên trồng.', 404, 'TRAY_NOT_ASSIGNED');
     }
 
-    const existingInspection = await client.query(
-      `SELECT inspection_id
-       FROM cultivation_inspections
-       WHERE session_tray_id = $1
-         AND inspection_date >= (
-           date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
-           AT TIME ZONE 'Asia/Ho_Chi_Minh'
-         )
-         AND inspection_date < (
-           (date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh') + INTERVAL '1 day')
-           AT TIME ZONE 'Asia/Ho_Chi_Minh'
-         )
-       LIMIT 1`,
-      [sessionTrayId],
-    );
-    if (existingInspection.rows.length > 0) {
-      throw new AppError(
-        'A daily inspection has already been recorded for this tray today',
-        409,
-        'DUPLICATE_DAILY_INSPECTION',
-      );
+    const activeAssignment = assignments.rows.find((assignment) => assignment.status === 'ACTIVE');
+    if (!activeAssignment) {
+      if (assignments.rows.some((assignment) => assignment.status === 'RELEASED')) {
+        throw new AppError('Khay đã được RELEASED.', 409, 'SESSION_TRAY_NOT_ACTIVE');
+      }
+      throw new AppError('Khay chưa được gắn vào phiên trồng.', 404, 'TRAY_NOT_ASSIGNED');
     }
 
-    const inspectionResult = await client.query(
-      `INSERT INTO cultivation_inspections (
-         session_tray_id, inspected_by, tray_condition,
-         mushroom_condition, notes
-       )
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING *`,
-      [
-        sessionTrayId,
-        inspectedBy,
-        data.trayCondition ?? null,
-        data.mushroomCondition ?? null,
-        data.notes ?? null,
-      ],
+    const result = await insertInspectionForActiveSessionTray(
+      client,
+      activeAssignment.session_tray_id,
+      data,
+      inspectedBy,
     );
     await client.query('COMMIT');
-    return {
-      inspection: inspectionResult.rows[0],
-    };
+    return result;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -1090,6 +1140,7 @@ module.exports = {
   updateGrowthForAdmin,
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
+  createInspectionFromQrForAdmin,
   updateInspectionForAdmin,
   cancelForAdmin,
   findSessionRecipient,

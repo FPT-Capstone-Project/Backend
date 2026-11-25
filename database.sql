@@ -211,6 +211,7 @@ CREATE TABLE public.cultivation_trays (
   room_id     INTEGER NOT NULL,
   tray_code   VARCHAR NOT NULL UNIQUE,
   tray_name   VARCHAR,
+  qr_token    TEXT,
   status      VARCHAR NOT NULL DEFAULT 'AVAILABLE'
     CHECK (status IN ('AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE')),
   created_at  TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -496,7 +497,18 @@ CREATE TABLE public.cultivation_inspections (
   inspection_date    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
   tray_condition     VARCHAR,
   mushroom_condition VARCHAR,
-  notes              TEXT
+  growth_status      VARCHAR(50),
+  notes              TEXT,
+  CONSTRAINT cultivation_inspections_growth_status_check
+    CHECK (
+      growth_status IS NULL
+      OR growth_status IN (
+        'FRUITING_INITIATION',
+        'PINNING',
+        'YOUNG_FRUITING',
+        'MATURATION'
+      )
+    )
 );
 
 CREATE TABLE public.cultivation_inspection_images (
@@ -895,6 +907,9 @@ CREATE INDEX idx_treatment_logs_consultation_id
 CREATE INDEX idx_treatment_media_log_id
   ON public.treatment_media(treatment_log_id, uploaded_at);
 CREATE INDEX idx_trays_room_id               ON public.cultivation_trays(room_id);
+CREATE UNIQUE INDEX uq_cultivation_trays_qr_token
+  ON public.cultivation_trays(qr_token)
+  WHERE qr_token IS NOT NULL;
 CREATE INDEX idx_notifications_user_unread   ON public.notifications(user_id, is_read);
 CREATE INDEX idx_sensor_readings_master_time ON public.iot_sensor_readings(master_id, received_at DESC);
 CREATE INDEX idx_ssr_states_master_channel   ON public.iot_ssr_states(master_id, channel);

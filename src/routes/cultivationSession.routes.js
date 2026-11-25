@@ -162,11 +162,55 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
 
 /**
  * @openapi
+ * /api/cultivation-sessions/admin/inspections:
+ *   post:
+ *     tags: [Cultivation Audit]
+ *     summary: Record a daily tray inspection using a QR token or session tray ID
+ *     description: Send exactly one of qr_token or session_tray_id. Blank optional fields, including values sent by Swagger UI's Send empty value option, are treated as omitted. QR mode resolves the tray and its ACTIVE session-tray assignment; manual mode looks up the supplied session_tray_id directly and requires it to be ACTIVE. The session must be CULTIVATING and may have at most one inspection per Vietnam calendar day. The inspector is taken from the authenticated user; tray_id, session_id, and inspected_by are not required. Each uploaded image is stored as a separate record linked to the new inspection_id.
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               qr_token: { type: string, description: QR mode; backend finds the tray and its active session-tray assignment }
+ *               session_tray_id: { type: integer, description: Manual mode; must identify an ACTIVE session-tray assignment }
+ *               trayCondition: { type: string }
+ *               mushroomCondition: { type: string }
+ *               notes: { type: string }
+ *               caption: { type: string, description: Optional caption applied to each uploaded image }
+ *               images:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items: { type: string, format: binary }
+ *             oneOf:
+ *               - required: [qr_token]
+ *               - required: [session_tray_id]
+ *     responses:
+ *       201: { description: Inspection and uploaded images created }
+ *       400: { description: Send exactly one non-empty qr_token or session_tray_id; sending both or neither is invalid }
+ *       401: { description: Missing or invalid JWT token }
+ *       403: { description: Admin or Farm Operator role required }
+ *       404: { description: QR không hợp lệ, Khay chưa được gắn vào phiên trồng, or session_tray_id does not exist }
+ *       409: { description: Khay đã được RELEASED, session is not CULTIVATING, or an inspection already exists today }
+ */
+router.post(
+  '/admin/inspections',
+  adminOrFarmOperator,
+  upload.array('images', 10),
+  cultivationSessionController.adminCreateInspection,
+);
+
+/**
+ * @openapi
  * /api/cultivation-sessions/admin/session-trays/{sessionTrayId}/inspections:
  *   post:
  *     tags: [Cultivation Audit]
- *     summary: Record a daily tray inspection with optional images
- *     description: Records at most one inspection per assigned tray per Vietnam calendar day, with up to 10 optional images. Images are uploaded to Cloudinary and linked to this inspection. Use the session progress API to update cultivation progress and lifecycle status.
+ *     summary: Record a daily tray inspection for a session tray (legacy route)
+ *     description: Legacy route; new clients should POST to /api/cultivation-sessions/admin/inspections with session_tray_id or qr_token. Records at most one inspection per assigned tray per Vietnam calendar day.
  *     security:
  *       - bearerAuth: []
  *     parameters:

@@ -55,6 +55,7 @@ test('session management allows operator inspections and restricts cancellation 
         inspectionCalls += 1;
         res.sendStatus(204);
       },
+      adminUpdateInspection: noop,
       adminAddInspectionImage: noop,
       adminAssignTrays: (req, res) => {
         assignmentCalls += 1;
@@ -113,6 +114,7 @@ test('session management allows operator inspections and restricts cancellation 
     }
     assert.equal((await fetch(`http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin`)).status, 401);
     const operatorToken = jwt.sign({ sub: '2' }, env.jwtSecret);
+    const customerToken = jwt.sign({ sub: '3' }, env.jwtSecret);
     const inspectionResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/session-trays/14/inspections`,
       {
@@ -141,6 +143,20 @@ test('session management allows operator inspections and restricts cancellation 
     );
     assert.equal(inspectionWithImagesResponse.status, 204);
     assert.equal(inspectionCalls, 2);
+
+    const qrInspectionResponse = await fetch(
+      `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/inspections`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${operatorToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ qr_token: 'opaque-qr-token' }),
+      },
+    );
+    assert.equal(qrInspectionResponse.status, 204);
+    assert.equal(inspectionCalls, 3);
 
     const availableTraysResponse = await fetch(
       `http://127.0.0.1:${server.address().port}/api/cultivation-sessions/admin/available-trays?floorId=2`,
