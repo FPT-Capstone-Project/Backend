@@ -1,11 +1,25 @@
 const express = require('express');
+const multer = require('multer');
 const cultivationSessionController = require('../controllers/cultivationSession.controller');
 const { authenticate, authorizeRoles } = require('../middlewares/auth.middleware');
 const upload = require('../middlewares/upload.middleware');
+const AppError = require('../utils/app-error');
 
 const router = express.Router();
 const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
 const adminOnly = [authenticate, authorizeRoles(1)];
+const parseTrayGrowthForm = multer({ limits: { fields: 5, fieldSize: 4096 } }).none();
+
+function trayGrowthForm(req, res, next) {
+  if (!req.is('multipart/form-data')) {
+    return next(new AppError('Content-Type must be multipart/form-data', 400));
+  }
+  parseTrayGrowthForm(req, res, (error) => {
+    next(error && !(error instanceof multer.MulterError)
+      ? new AppError('Invalid multipart form data', 400)
+      : error);
+  });
+}
 
 /**
  * @openapi
@@ -440,6 +454,162 @@ router.get('/admin/:sessionId/incidents', adminOrFarmOperator, cultivationSessio
  *       409: { description: Invalid session state or growth regression }
  */
 router.patch('/admin/:sessionId/growth', adminOrFarmOperator, cultivationSessionController.adminUpdateGrowth);
+
+/**
+ * @openapi
+ * components:
+ *   schemas:
+ *     CultivationTrayGrowthStage:
+ *       type: string
+ *       enum: [FRUITING_INITIATION, PINNING, YOUNG_FRUITING, MATURATION]
+ *     CultivationTrayGrowthSynchronization:
+ *       type: object
+ *       required: [is_synchronized, total_trays, updated_trays, matching_trays]
+ *       properties:
+ *         is_synchronized: { type: boolean, description: True when at least one tray is active and every active tray shares a recorded stage }
+ *         total_trays: { type: integer, minimum: 0 }
+ *         updated_trays: { type: integer, minimum: 0, description: Active trays with a recorded growth stage }
+ *         matching_trays: { type: integer, minimum: 0, description: Number of active trays at the scan target for POST or in the largest group sharing a stage for GET }
+ * /api/cultivation-sessions/admin/qr-growth-update:
+ *   post:
+ *     tags: [Cultivation Sessions]
+ *     summary: Record a tray's growth stage by QR code
+ *     description: Admin and Farm Operator only. Updates the tray's inspection for the current Vietnam calendar day or creates one. A shared stage across all active trays is appended to session progress when it differs from the latest session stage.
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             additionalProperties: false
+ *             required: [qr_token, growth_status]
+ *             properties:
+ *               qr_token: { type: string, minLength: 1, maxLength: 256 }
+ *               growth_status: { $ref: '#/components/schemas/CultivationTrayGrowthStage' }
+ *               trayCondition: { type: string, maxLength: 500 }
+ *               mushroomCondition: { type: string, maxLength: 500 }
+ *               notes: { type: string, maxLength: 1000 }
+ *     responses:
+ *       200:
+ *         description: Tray growth recorded
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, message, data]
+ *               properties:
+ *                 success: { type: boolean }
+ *                 message: { type: string }
+ *                 data:
+ *                   type: object
+ *                   required: [session_id, tray_id, tray_code, growth_status, synchronization]
+ *                   properties:
+ *                     session_id: { type: integer }
+ *                     tray_id: { type: integer }
+ *                     tray_code: { type: string }
+ *                     growth_status: { $ref: '#/components/schemas/CultivationTrayGrowthStage' }
+ *                     synchronization:
+ *                       allOf:
+ *                         - $ref: '#/components/schemas/CultivationTrayGrowthSynchronization'
+ *                         - type: object
+ *                           required: [session_stage]
+ *                           properties:
+ *                             session_stage: { type: string, nullable: true }
+ *             examples:
+ *               pending:
+ *                 value:
+ *                   success: true
+ *                   message: Tray growth status updated successfully
+ *                   data:
+ *                     session_id: 21
+ *                     tray_id: 1
+ *                     tray_code: TRAY-001
+ *                     growth_status: PINNING
+ *                     synchronization: { is_synchronized: false, session_stage: FRUITING_INITIATION, total_trays: 3, updated_trays: 3, matching_trays: 2 }
+ *               synchronized:
+ *                 value:
+ *                   success: true
+ *                   message: All trays synchronized. Session growth stage updated successfully
+ *                   data:
+ *                     session_id: 21
+ *                     tray_id: 3
+ *                     tray_code: TRAY-003
+ *                     growth_status: PINNING
+ *                     synchronization: { is_synchronized: true, session_stage: PINNING, total_trays: 3, updated_trays: 3, matching_trays: 3 }
+ *       400: { description: Invalid multipart form, fields, QR token, or growth stage }
+ *       401: { description: Authentication required }
+ *       403: { description: Admin or Farm Operator role required }
+ *       404: { description: QR token not found }
+ *       409: { description: Tray has no active assignment or session is outside the CULTIVATING lifecycle state }
+ *       500: { description: Internal server error }
+ */
+router.post(
+  '/admin/qr-growth-update',
+  adminOrFarmOperator,
+  trayGrowthForm,
+  cultivationSessionController.adminUpdateTrayGrowthFromQr,
+);
+
+/**
+ * @openapi
+ * /api/cultivation-sessions/admin/{sessionId}/growth-status:
+ *   get:
+ *     tags: [Cultivation Sessions]
+ *     summary: Get the recorded growth status of every active tray
+ *     description: Admin and Farm Operator only. Reports the latest non-null growth stage and its inspection timestamp for each active tray. Sessions with zero active trays return an empty array and false synchronization.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: integer, minimum: 1, maximum: 2147483647 }
+ *     responses:
+ *       200:
+ *         description: Current session stage and active tray growth
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               required: [success, data]
+ *               properties:
+ *                 success: { type: boolean }
+ *                 data:
+ *                   type: object
+ *                   required: [session_id, session_stage, synchronization, trays]
+ *                   properties:
+ *                     session_id: { type: integer }
+ *                     session_stage: { type: string, nullable: true }
+ *                     synchronization: { $ref: '#/components/schemas/CultivationTrayGrowthSynchronization' }
+ *                     trays:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         required: [session_tray_id, tray_id, tray_code, tray_status, growth_status, updated, last_inspection_at]
+ *                         properties:
+ *                           session_tray_id: { type: integer }
+ *                           tray_id: { type: integer }
+ *                           tray_code: { type: string }
+ *                           tray_status: { type: string, enum: [AVAILABLE, OCCUPIED, MAINTENANCE, INACTIVE] }
+ *                           growth_status: { type: string, nullable: true, enum: [FRUITING_INITIATION, PINNING, YOUNG_FRUITING, MATURATION, null] }
+ *                           updated: { type: boolean }
+ *                           last_inspection_at: { type: string, format: date-time, nullable: true }
+ *             example:
+ *               success: true
+ *               data:
+ *                 session_id: 21
+ *                 session_stage: FRUITING_INITIATION
+ *                 synchronization: { is_synchronized: false, total_trays: 2, updated_trays: 1, matching_trays: 1 }
+ *                 trays:
+ *                   - { session_tray_id: 15, tray_id: 1, tray_code: TRAY-001, tray_status: OCCUPIED, growth_status: PINNING, updated: true, last_inspection_at: '2026-11-25T10:00:00+07:00' }
+ *                   - { session_tray_id: 16, tray_id: 2, tray_code: TRAY-002, tray_status: OCCUPIED, growth_status: null, updated: false, last_inspection_at: null }
+ *       400: { description: Invalid session ID }
+ *       401: { description: Authentication required }
+ *       403: { description: Admin or Farm Operator role required }
+ *       404: { description: Cultivation session not found }
+ *       500: { description: Internal server error }
+ */
+router.get('/admin/:sessionId/growth-status', adminOrFarmOperator, cultivationSessionController.adminGetTrayGrowthStatus);
 
 /**
  * @openapi

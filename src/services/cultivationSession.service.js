@@ -308,6 +308,30 @@ async function updateHarvestReadinessForAdmin(sessionId, payload = {}, confirmed
   });
 }
 
+async function updateTrayGrowthFromQrForAdmin(payload, inspectedBy) {
+  const allowedFields = ['qr_token', 'growth_status', 'trayCondition', 'mushroomCondition', 'notes'];
+  const unexpectedField = Object.keys(payload).find((field) => !allowedFields.includes(field));
+  if (unexpectedField !== undefined) {
+    throw new AppError(`Unexpected field: ${unexpectedField}`, 400);
+  }
+
+  const qrToken = parseText(payload.qr_token, 'qr_token', { required: true, maxLength: 256 });
+  const growthStatus = parseGrowthStage(payload.growth_status, 'growth_status');
+  return cultivationSessionModel.updateTrayGrowthFromQrForAdmin(
+    qrToken,
+    { ...parseDailyInspectionPayload(payload), growthStatus },
+    inspectedBy,
+  );
+}
+
+async function getTrayGrowthStatusForAdmin(sessionId) {
+  const id = parseId(sessionId, 'sessionId');
+  if (id > 2147483647) throw new AppError('sessionId exceeds the supported range', 400);
+  const session = await cultivationSessionModel.findTrayGrowthStatusForAdmin(id);
+  if (!session) throw new AppError('Cultivation session not found', 404);
+  return session;
+}
+
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
   return cultivationSessionModel.createInspectionForAdmin(
     parseId(sessionTrayId, 'sessionTrayId'),
@@ -487,6 +511,8 @@ module.exports = {
   getTrayDailyInspectionHistory,
   assignTraysForAdmin,
   updateGrowthForAdmin,
+  updateTrayGrowthFromQrForAdmin,
+  getTrayGrowthStatusForAdmin,
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
   updateInspectionForAdmin,

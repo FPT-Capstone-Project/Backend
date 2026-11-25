@@ -887,6 +887,172 @@ async function createInspectionFromQrForAdmin(qrToken, data, inspectedBy) {
   }
 }
 
+async function findTrayGrowthStatusForAdmin(sessionId, db = pool) {
+  const result = await db.query(
+    `SELECT s.session_id, (
+       SELECT current_stage
+       FROM cultivation_progress
+       WHERE session_id = s.session_id
+       ORDER BY progress_id DESC
+       LIMIT 1
+     ) AS session_stage, (
+       SELECT COALESCE(json_agg(tray ORDER BY tray.session_tray_id), '[]'::json)
+       FROM (
+         SELECT st.session_tray_id, t.tray_id, t.tray_code, t.status AS tray_status,
+                i.growth_status, (i.growth_status IS NOT NULL) AS updated,
+                i.inspection_date AS last_inspection_at
+         FROM cultivation_session_trays st
+         JOIN cultivation_trays t ON t.tray_id = st.tray_id
+         LEFT JOIN LATERAL (
+           SELECT growth_status, inspection_date
+           FROM cultivation_inspections
+           WHERE session_tray_id = st.session_tray_id AND growth_status IS NOT NULL
+           ORDER BY inspection_date DESC, inspection_id DESC
+           LIMIT 1
+         ) i ON TRUE
+         WHERE st.session_id = s.session_id AND st.status = 'ACTIVE'
+       ) tray
+     ) AS trays
+     FROM cultivation_sessions s
+     WHERE s.session_id = $1`,
+    [sessionId],
+  );
+  const session = result.rows[0];
+  if (!session) return null;
+
+  const counts = new Map();
+  let updatedTrays = 0;
+  let matchingTrays = 0;
+  for (const tray of session.trays) {
+    if (!tray.updated) continue;
+    updatedTrays += 1;
+    const count = (counts.get(tray.growth_status) ?? 0) + 1;
+    counts.set(tray.growth_status, count);
+    matchingTrays = Math.max(matchingTrays, count);
+  }
+
+  return {
+    ...session,
+    synchronization: {
+      is_synchronized: session.trays.length > 0 && matchingTrays === session.trays.length,
+      total_trays: session.trays.length,
+      updated_trays: updatedTrays,
+      // GET reports the largest group sharing a stage. POST counts trays matching the scan target.
+      matching_trays: matchingTrays,
+    },
+  };
+}
+
+async function saveDailyTrayGrowth(client, sessionTrayId, data, inspectedBy) {
+  // The original inspection API checks the same Vietnam day while holding the assignment lock.
+  await client.query(
+    `WITH local_day AS (
+       SELECT date_trunc('day', statement_timestamp() AT TIME ZONE 'Asia/Ho_Chi_Minh') AS start_at
+     ), daily_inspection AS (
+       SELECT inspection_id
+       FROM cultivation_inspections, local_day
+       WHERE session_tray_id = $1
+         AND inspection_date >= (start_at AT TIME ZONE 'Asia/Ho_Chi_Minh')
+         AND inspection_date < ((start_at + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
+       ORDER BY inspection_date DESC, inspection_id DESC
+       LIMIT 1
+     ), updated AS (
+       UPDATE cultivation_inspections
+       SET growth_status = $2, inspected_by = $3,
+           tray_condition = COALESCE($4, tray_condition),
+           mushroom_condition = COALESCE($5, mushroom_condition),
+           notes = COALESCE($6, notes)
+       WHERE inspection_id = (SELECT inspection_id FROM daily_inspection)
+       RETURNING inspection_id
+     )
+     INSERT INTO cultivation_inspections (
+       session_tray_id, growth_status, inspected_by, tray_condition, mushroom_condition, notes, inspection_date
+     )
+     SELECT $1, $2, $3, $4, $5, $6, statement_timestamp()
+     WHERE NOT EXISTS (SELECT 1 FROM updated)`,
+    [sessionTrayId, data.growthStatus, inspectedBy, data.trayCondition, data.mushroomCondition, data.notes],
+  );
+}
+
+async function updateTrayGrowthFromQrForAdmin(qrToken, data, inspectedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const trayResult = await client.query(
+      'SELECT tray_id, tray_code FROM cultivation_trays WHERE qr_token = $1',
+      [qrToken],
+    );
+    const tray = trayResult.rows[0];
+    if (!tray) throw new AppError('QR không hợp lệ.', 404, 'INVALID_QR_TOKEN');
+
+    // The session row serializes scans across different trays. Read growth in a
+    // separate statement after locking so it sees the preceding scan's commit.
+    const assignmentResult = await client.query(
+      `SELECT st.session_tray_id, st.session_id, s.status
+       FROM cultivation_session_trays st
+       JOIN cultivation_sessions s ON s.session_id = st.session_id
+       WHERE st.tray_id = $1 AND st.status = 'ACTIVE'
+       FOR UPDATE OF st, s`,
+      [tray.tray_id],
+    );
+    const assignment = assignmentResult.rows[0];
+    if (!assignment) {
+      throw new AppError('Tray does not have an active cultivation session assignment', 409, 'SESSION_TRAY_NOT_ACTIVE');
+    }
+    if (assignment.status !== 'CULTIVATING') {
+      throw new AppError('Only cultivating sessions can update growth', 409, 'INVALID_SESSION_STATUS');
+    }
+
+    const { session_id: sessionId, session_tray_id: sessionTrayId } = assignment;
+    await saveDailyTrayGrowth(client, sessionTrayId, data, inspectedBy);
+    const { trays, synchronization, session_stage: previousStage } = await findTrayGrowthStatusForAdmin(sessionId, client);
+    const growthStatus = trays.find((item) => item.session_tray_id === sessionTrayId).growth_status;
+    const stageChanged = synchronization.is_synchronized && growthStatus !== previousStage;
+    if (stageChanged) {
+      await client.query(
+        `INSERT INTO cultivation_progress (
+           session_id, current_stage, progress_percent, start_date, expected_harvest_date,
+           condition, description, updated_at
+         )
+         SELECT s.session_id, $2, COALESCE(p.progress_percent, 0),
+                CASE WHEN p.progress_id IS NULL THEN s.start_at::date ELSE p.start_date END,
+                CASE WHEN p.progress_id IS NULL THEN s.harvest_date ELSE p.expected_harvest_date END,
+                p.condition, p.description, statement_timestamp()
+         FROM cultivation_sessions s
+         LEFT JOIN LATERAL (
+           SELECT progress_id, progress_percent, start_date, expected_harvest_date, condition, description
+           FROM cultivation_progress
+           WHERE session_id = s.session_id
+           ORDER BY progress_id DESC
+           LIMIT 1
+         ) p ON TRUE
+         WHERE s.session_id = $1`,
+        [sessionId, growthStatus],
+      );
+    }
+
+    await client.query('COMMIT');
+    return {
+      stageChanged,
+      data: {
+        session_id: sessionId,
+        ...tray,
+        growth_status: growthStatus,
+        synchronization: {
+          ...synchronization,
+          session_stage: stageChanged ? growthStatus : previousStage,
+          matching_trays: trays.filter((item) => item.growth_status === data.growthStatus).length,
+        },
+      },
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function updateInspectionForAdmin(sessionTrayId, inspectionId, data) {
   const client = await pool.connect();
   try {
@@ -1141,6 +1307,8 @@ module.exports = {
   updateHarvestReadinessForAdmin,
   createInspectionForAdmin,
   createInspectionFromQrForAdmin,
+  findTrayGrowthStatusForAdmin,
+  updateTrayGrowthFromQrForAdmin,
   updateInspectionForAdmin,
   cancelForAdmin,
   findSessionRecipient,

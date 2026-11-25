@@ -51,6 +51,8 @@ test('session management allows operator inspections and restricts cancellation 
         res.sendStatus(204);
       },
       adminUpdateGrowth: (req, res) => { progressCalls += 1; res.sendStatus(204); },
+      adminUpdateTrayGrowthFromQr: noop,
+      adminGetTrayGrowthStatus: noop,
       adminCreateInspection: (req, res) => {
         inspectionCalls += 1;
         res.sendStatus(204);

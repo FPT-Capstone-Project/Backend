@@ -55,6 +55,25 @@ async function adminUpdateGrowth(req, res) {
   res.json({ message: 'Cultivation growth updated successfully', data: progress });
 }
 
+async function adminUpdateTrayGrowthFromQr(req, res) {
+  const { stageChanged, data } = await cultivationSessionService.updateTrayGrowthFromQrForAdmin(
+    req.body || {},
+    req.user.user_id,
+  );
+  res.json({
+    success: true,
+    message: stageChanged
+      ? 'All trays synchronized. Session growth stage updated successfully'
+      : 'Tray growth status updated successfully',
+    data,
+  });
+}
+
+async function adminGetTrayGrowthStatus(req, res) {
+  const data = await cultivationSessionService.getTrayGrowthStatusForAdmin(req.params.sessionId);
+  res.json({ success: true, data });
+}
+
 async function adminUpdateHarvestReadiness(req, res) {
   const session = await cultivationSessionService.updateHarvestReadinessForAdmin(
     req.params.sessionId, req.body || {}, req.user.user_id,
@@ -130,6 +149,8 @@ module.exports = {
   getTrayDailyInspectionHistory,
   adminAssignTrays,
   adminUpdateGrowth,
+  adminUpdateTrayGrowthFromQr,
+  adminGetTrayGrowthStatus,
   adminUpdateHarvestReadiness,
   adminCreateInspection,
   adminUpdateInspection,
