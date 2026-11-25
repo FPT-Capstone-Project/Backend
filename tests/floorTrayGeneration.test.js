@@ -29,6 +29,7 @@ test('floor tray generation preserves coordinates, repeats safely and rolls back
     assert.deepEqual(first.trays.map(t => [t.row_number, t.column_number]),
       [[1, 1], [1, 2], [1, 3], [2, 1], [2, 2], [2, 3]]);
     assert.ok(first.trays.every(t => t.floor_id === 1 && t.room_id === 1 && t.position_id && t.status === 'AVAILABLE'));
+    assert.ok(first.trays.every(t => /^[0-9a-f]{64}$/.test(t.qr_token)));
     const repeated = await service.generateTrays(1);
     assert.equal(repeated.created_count, 0);
     assert.deepEqual(repeated.trays, first.trays);

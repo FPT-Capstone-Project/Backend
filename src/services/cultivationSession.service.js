@@ -325,7 +325,58 @@ async function updateInspectionForAdmin(sessionTrayId, inspectionId, payload = {
 }
 
 async function createInspectionWithImagesForAdmin(sessionTrayId, payload = {}, inspectedBy, files = []) {
-  const inspectionResult = await createInspectionForAdmin(sessionTrayId, payload, inspectedBy);
+  const rawQrToken = payload.qr_token !== undefined ? payload.qr_token : payload.qrToken;
+  const qrToken = typeof rawQrToken === 'string' ? rawQrToken.trim() : rawQrToken;
+  const qrTokenSupplied = qrToken !== undefined
+    && qrToken !== null
+    && !(typeof qrToken === 'string' && qrToken === '');
+  const rawBodySessionTrayId = payload.session_tray_id !== undefined
+    ? payload.session_tray_id
+    : payload.sessionTrayId;
+  const bodySessionTrayIdSupplied = rawBodySessionTrayId !== undefined
+    && rawBodySessionTrayId !== null
+    && !(typeof rawBodySessionTrayId === 'string' && rawBodySessionTrayId.trim() === '');
+  const bodySessionTrayId = bodySessionTrayIdSupplied ? rawBodySessionTrayId : undefined;
+  const pathSessionTrayIdSupplied = sessionTrayId !== undefined
+    && sessionTrayId !== null
+    && String(sessionTrayId).trim() !== '';
+
+  if (qrTokenSupplied && (bodySessionTrayId !== undefined || pathSessionTrayIdSupplied)) {
+    throw new AppError('Send either qr_token or session_tray_id, not both', 400);
+  }
+
+  const inspectionData = parseDailyInspectionPayload(payload);
+  const inspectedById = parseId(inspectedBy, 'inspectedBy');
+  let inspectionResult;
+  if (qrTokenSupplied) {
+    if (typeof qrToken !== 'string' || qrToken.length > 256) {
+      throw new AppError('QR không hợp lệ.', 400, 'INVALID_QR_TOKEN');
+    }
+    inspectionResult = await cultivationSessionModel.createInspectionFromQrForAdmin(
+      qrToken,
+      inspectionData,
+      inspectedById,
+    );
+  } else {
+    if (bodySessionTrayId === undefined && !pathSessionTrayIdSupplied) {
+      throw new AppError('qr_token or session_tray_id is required', 400);
+    }
+    const bodyId = bodySessionTrayId === undefined
+      ? undefined
+      : parseId(bodySessionTrayId, 'session_tray_id');
+    const pathId = pathSessionTrayIdSupplied
+      ? parseId(sessionTrayId, 'sessionTrayId')
+      : undefined;
+    if (bodyId !== undefined && pathId !== undefined && bodyId !== pathId) {
+      throw new AppError('session_tray_id does not match the sessionTrayId path parameter', 400);
+    }
+    inspectionResult = await cultivationSessionModel.createInspectionForAdmin(
+      bodyId ?? pathId,
+      inspectionData,
+      inspectedById,
+    );
+  }
+
   const inspectionId = inspectionResult.inspection.inspection_id;
   const images = await Promise.all(files.map(file => addInspectionImageForAdmin(
     inspectionId,

@@ -29,6 +29,69 @@ router.post('/:id/complete-sanitation', authenticate, authorizeRoles(1, 2), cult
 
 /**
  * @openapi
+ * /api/cultivation-trays/qr/backfill:
+ *   post:
+ *     tags: [Cultivation Trays]
+ *     summary: Generate QR tokens for trays that do not have one
+ *     description: Admin and Farm Operator only. Existing QR tokens are preserved; safe to call repeatedly.
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200: { description: Number and IDs of trays updated }
+ *       401: { description: Authentication required }
+ *       403: { description: Staff role required }
+ */
+router.post('/qr/backfill', authenticate, authorizeRoles(1, 2), cultivationTrayController.generateMissingQrTokens);
+
+/**
+ * @openapi
+ * /api/cultivation-trays/qr/scan:
+ *   post:
+ *     tags: [Cultivation Trays]
+ *     summary: Find a tray and its current cultivation sessions from a scanned QR token
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [qrToken]
+ *             properties:
+ *                qrToken: { type: string, example: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" }
+ *     responses:
+ *       200: { description: Tray information and currently active sessions }
+ *       400: { description: QR token is missing or invalid }
+ *       401: { description: Authentication required }
+ *       404: { description: No tray matches the QR token }
+ */
+router.post('/qr/scan', authenticate, cultivationTrayController.scanQr);
+
+/**
+ * @openapi
+ * /api/cultivation-trays/{id}/qr:
+ *   get:
+ *     tags: [Cultivation Trays]
+ *     summary: Get the tray QR code as a PNG image
+ *     description: The QR code encodes the opaque qrToken accepted by POST /api/cultivation-trays/qr/scan.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: QR code PNG image, content: { image/png: { schema: { type: string, format: binary } } } }
+ *       401: { description: Authentication required }
+ *       404: { description: Tray not found }
+ *       409: { description: Tray has no QR token yet }
+ */
+router.get('/:id/qr', authenticate, cultivationTrayController.getQrImage);
+
+/**
+ * @openapi
  * /api/cultivation-trays:
  *   get:
  *     tags: [Cultivation Trays]

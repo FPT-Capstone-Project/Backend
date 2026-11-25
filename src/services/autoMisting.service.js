@@ -2,6 +2,7 @@ const repository = require('../models/autoMisting.model');
 const mqtt = require('./iotMqtt.service');
 const AppError = require('../utils/app-error');
 const {randomUUID}=require('node:crypto');
+const createQrToken=require('../utils/qr-token');
 const {performance}=require('node:perf_hooks');
 const {validateConfig,aggregate,decide}=require('./autoMisting.algorithm');
 const {suggest,assertCompatible}=require('./autoMisting.profile');
@@ -236,6 +237,12 @@ function createService(repo=repository, publisher=mqtt, command=(...args)=>requi
      FROM tray_positions p WHERE p.floor_id=$1
       AND NOT EXISTS(SELECT 1 FROM cultivation_trays t WHERE t.position_id=p.position_id)
      ORDER BY p.row_number,p.column_number RETURNING tray_id`,[id,f.floor_number]);
+    if(created.length) {
+     await repo.rows(`UPDATE cultivation_trays t SET qr_token=tokens.qr_token
+      FROM unnest($1::int[],$2::text[]) AS tokens(tray_id,qr_token)
+      WHERE t.tray_id=tokens.tray_id AND t.qr_token IS NULL`,
+     [created.map(tray=>tray.tray_id),created.map(()=>createQrToken())]);
+    }
     const trays=await repo.rows(`SELECT t.*,p.row_number,p.column_number
      FROM cultivation_trays t JOIN tray_positions p ON p.position_id=t.position_id
      WHERE t.floor_id=$1 ORDER BY p.row_number,p.column_number`,[id]);

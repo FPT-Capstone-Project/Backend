@@ -1,12 +1,20 @@
 const cultivationTrayModel = require('../models/cultivationTray.model');
 const cultivationRoomModel = require('../models/cultivationRoom.model');
 const AppError = require('../utils/app-error');
+const QRCode = require('qrcode');
+const createQrToken = require('../utils/qr-token');
 
 const VALID_STATUSES = ['AVAILABLE', 'OCCUPIED', 'MAINTENANCE', 'INACTIVE'];
 
 async function completeSanitation(trayId, actor) {
   if (!actor || ![1, 2].includes(Number(actor.role_id))) throw new AppError('Chỉ Admin hoặc Farm Operator được xác nhận vệ sinh khay', 403);
   return cultivationTrayModel.completeSanitation(parseId(trayId, 'trayId'), actor.user_id);
+}
+
+function requireStaff(actor) {
+  if (!actor || ![1, 2].includes(Number(actor.role_id))) {
+    throw new AppError('Chỉ Admin hoặc Farm Operator được thao tác QR khay', 403);
+  }
 }
 
 function parseId(value, fieldName) {
@@ -43,6 +51,9 @@ async function ensureFloorBelongsToRoom(floorId, roomId) {
 }
 
 function handleDatabaseError(error, operation) {
+  if (error.code === '23505' && error.constraint === 'uq_cultivation_trays_qr_token') {
+    throw new AppError('Could not generate a unique QR token; please retry', 409);
+  }
   if (error.code === '23505') throw new AppError('trayCode already exists', 409);
   if (error.code === '23503' && operation === 'delete') {
     throw new AppError('Tray cannot be deleted while it is used by a cultivation session', 409);
@@ -89,10 +100,39 @@ async function createCultivationTray(payload = {}) {
   await ensureFloorBelongsToRoom(floorId, roomId);
 
   try {
-    return await cultivationTrayModel.create({ roomId, floorId, trayCode, trayName, status });
+    return await cultivationTrayModel.create({
+      roomId, floorId, trayCode, trayName, status, qrToken: createQrToken(),
+    });
   } catch (error) {
     handleDatabaseError(error, 'create');
   }
+}
+
+async function getCultivationTrayQrImage(trayId) {
+  const id = parseId(trayId, 'trayId');
+  const result = await cultivationTrayModel.findQrTokenById(id);
+  if (!result) throw new AppError('Cultivation tray not found', 404);
+  if (!result.qr_token) throw new AppError('Cultivation tray does not have a QR token', 409);
+  return QRCode.toBuffer(result.qr_token, {
+    type: 'png',
+    errorCorrectionLevel: 'M',
+    margin: 2,
+    width: 320,
+  });
+}
+
+async function generateMissingQrTokens(actor) {
+  requireStaff(actor);
+  const trayIds = await cultivationTrayModel.generateMissingQrTokens();
+  return { updated_count: trayIds.length, tray_ids: trayIds };
+}
+
+async function getCultivationTrayByQrToken(value) {
+  const qrToken = typeof value === 'string' ? value.trim() : '';
+  if (!qrToken || qrToken.length > 256) throw new AppError('qrToken is required and must be valid', 400);
+  const result = await cultivationTrayModel.findByQrToken(qrToken);
+  if (!result) throw new AppError('Cultivation tray not found for this QR token', 404);
+  return result;
 }
 
 async function updateCultivationTray(trayId, payload = {}) {
@@ -157,6 +197,9 @@ module.exports = {
   getCultivationTraysByRoomId,
   getCultivationTrayById,
   createCultivationTray,
+  getCultivationTrayQrImage,
+  generateMissingQrTokens,
+  getCultivationTrayByQrToken,
   updateCultivationTray,
   deleteCultivationTray,
 };

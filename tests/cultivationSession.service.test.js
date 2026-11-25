@@ -12,6 +12,10 @@ function loadService() {
       calls.push(args);
       return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
     },
+    createInspectionFromQrForAdmin: async (...args) => {
+      calls.push(args);
+      return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
+    },
     updateInspectionForAdmin: async (...args) => {
       calls.push(args);
       return { inspection: { inspection_id: args[1] } };
@@ -171,6 +175,48 @@ test('records a daily inspection and uploads each attached image', async () => {
   assert.equal(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg').length, 2);
   assert.ok(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg')
     .every(call => call[2] === 'Daily check'));
+});
+
+test('accepts either a QR token or a manual session_tray_id and rejects conflicting input', async () => {
+  const { service, calls } = loadService();
+  const manual = await service.createInspectionWithImagesForAdmin(undefined, {
+    session_tray_id: '14',
+    qr_token: '',
+    tray_condition: 'Clean',
+  }, '3');
+  assert.equal(manual.inspection.inspection_id, 1);
+  assert.deepEqual(calls[0], [14, {
+    trayCondition: 'Clean',
+    mushroomCondition: undefined,
+    notes: undefined,
+  }, 3]);
+
+  const qr = await service.createInspectionWithImagesForAdmin(undefined, {
+    qr_token: 'opaque-qr-token',
+    session_tray_id: '',
+    mushroomCondition: 'Healthy',
+  }, '3');
+  assert.equal(qr.inspection.inspection_id, 1);
+  assert.deepEqual(calls[1], ['opaque-qr-token', {
+    trayCondition: undefined,
+    mushroomCondition: 'Healthy',
+    notes: undefined,
+  }, 3]);
+
+  await assert.rejects(
+    () => service.createInspectionWithImagesForAdmin(undefined, {
+      qr_token: 'opaque-qr-token',
+      session_tray_id: '14',
+    }, '3'),
+    { statusCode: 400 },
+  );
+  await assert.rejects(
+    () => service.createInspectionWithImagesForAdmin(undefined, {
+      qr_token: '',
+      session_tray_id: '',
+    }, '3'),
+    { statusCode: 400, message: 'qr_token or session_tray_id is required' },
+  );
 });
 
 test('validates and delegates explicitly selected floor and trays', async () => {

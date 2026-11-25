@@ -1,5 +1,6 @@
 const pool = require('../config/db');
 const AppError = require('../utils/app-error');
+const createQrToken = require('../utils/qr-token');
 
 async function completeSanitation(trayId, userId, db = pool) {
   const client = db.connect ? await db.connect() : db;
@@ -65,8 +66,8 @@ async function findAll({ roomId, floorId, status } = {}) {
   return result.rows;
 }
 
-async function findById(trayId) {
-  const result = await pool.query(
+async function findById(trayId, db = pool) {
+  const result = await db.query(
     `SELECT ${trayColumns}
      FROM cultivation_trays t
      INNER JOIN cultivation_rooms r ON r.room_id = t.room_id
@@ -90,14 +91,77 @@ async function findFloorById(floorId) {
   return result.rows[0] || null;
 }
 
-async function create({ roomId, floorId, trayCode, trayName, status }) {
-  const result = await pool.query(
-    `INSERT INTO cultivation_trays (room_id, floor_id, tray_code, tray_name, status)
-     VALUES ($1, $2, $3, $4, $5)
+async function create({ roomId, floorId, trayCode, trayName, status, qrToken = createQrToken() }, db = pool) {
+  const result = await db.query(
+    `INSERT INTO cultivation_trays (room_id, floor_id, tray_code, tray_name, status, qr_token)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING tray_id`,
-    [roomId, floorId, trayCode, trayName, status],
+    [roomId, floorId, trayCode, trayName, status, qrToken],
   );
-  return findById(result.rows[0].tray_id);
+  return findById(result.rows[0].tray_id, db);
+}
+
+async function findQrTokenById(trayId, db = pool) {
+  const result = await db.query(
+    'SELECT qr_token FROM cultivation_trays WHERE tray_id = $1 LIMIT 1',
+    [trayId],
+  );
+  return result.rows[0] || null;
+}
+
+async function generateMissingQrTokens(db = pool) {
+  const client = db.connect ? await db.connect() : db;
+  try {
+    await client.query('BEGIN');
+    const missing = await client.query(
+      'SELECT tray_id FROM cultivation_trays WHERE qr_token IS NULL ORDER BY tray_id FOR UPDATE',
+    );
+    const trayIds = [];
+    for (const { tray_id: trayId } of missing.rows) {
+      const updated = await client.query(
+        `UPDATE cultivation_trays
+         SET qr_token = $2, updated_at = CURRENT_TIMESTAMP
+         WHERE tray_id = $1 AND qr_token IS NULL
+         RETURNING tray_id`,
+        [trayId, createQrToken()],
+      );
+      if (updated.rows[0]) trayIds.push(updated.rows[0].tray_id);
+    }
+    await client.query('COMMIT');
+    return trayIds;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    if (db.connect) client.release();
+  }
+}
+
+async function findByQrToken(qrToken, db = pool) {
+  const result = await db.query(
+    'SELECT tray_id FROM cultivation_trays WHERE qr_token = $1 LIMIT 1',
+    [qrToken],
+  );
+  if (!result.rows[0]) return null;
+
+  const trayId = result.rows[0].tray_id;
+  const [tray, sessions] = await Promise.all([
+    findById(trayId, db),
+    db.query(
+      `SELECT s.session_id, st.session_tray_id, s.status, s.harvest_status,
+              s.start_at, s.end_at, s.harvest_date, s.duration_days,
+              s.mushroom_type_id, mt.name AS mushroom_name, st.assigned_at
+       FROM cultivation_session_trays st
+       INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
+       LEFT JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
+       WHERE st.tray_id = $1
+         AND st.status = 'ACTIVE'
+         AND s.status IN ('CULTIVATING', 'HARVEST_READY', 'HARVESTING')
+       ORDER BY s.session_id`,
+      [trayId],
+    ),
+  ]);
+  return { tray, sessions: sessions.rows };
 }
 
 async function updateById(trayId, data = {}) {
@@ -129,4 +193,15 @@ async function removeById(trayId) {
   return result.rows[0] || null;
 }
 
-module.exports = { findAll, findById, findFloorById, create, updateById, removeById, completeSanitation };
+module.exports = {
+  findAll,
+  findById,
+  findFloorById,
+  create,
+  findQrTokenById,
+  generateMissingQrTokens,
+  findByQrToken,
+  updateById,
+  removeById,
+  completeSanitation,
+};
