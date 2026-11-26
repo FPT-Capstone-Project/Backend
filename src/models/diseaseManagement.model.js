@@ -18,6 +18,9 @@ function isExpertRole(roleName) {
 }
 
 async function createIssue(data, reportedBy) {
+  if (data.spawnInspectionId === undefined && data.inspectionId === undefined) {
+    throw new AppError('An inspection is required for a tray issue', 400);
+  }
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -47,6 +50,7 @@ async function createIssue(data, reportedBy) {
       if (!['SPAWN_RESTING', 'MYCELIAL_DEVELOPMENT'].includes(context.status)) {
         throw new AppError('Spawn issues can only be reported during spawn stages', 409);
       }
+
     } else {
       const result = await client.query(
         `SELECT s.session_id, s.status, mt.name AS mushroom_name,
@@ -135,6 +139,106 @@ async function createIssue(data, reportedBy) {
       mushroom_name: context.mushroom_name,
       reported_stage: context.reported_stage,
       environment_snapshot: context.environment_snapshot ?? null,
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function createIssueFromQr(data, reportedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const trayResult = await client.query(
+      `SELECT tray_id, tray_code
+       FROM cultivation_trays
+       WHERE qr_token = $1
+       FOR UPDATE`,
+      [data.qrToken],
+    );
+    const tray = trayResult.rows[0];
+    if (!tray) throw new AppError('QR không hợp lệ.', 404, 'INVALID_QR_TOKEN');
+
+    const assignmentResult = await client.query(
+      `SELECT st.session_tray_id, s.session_id, s.status,
+              mt.name AS mushroom_name,
+              COALESCE(progress.current_stage, s.status) AS reported_stage,
+              o.payment_status
+       FROM cultivation_session_trays st
+       INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
+       INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+       INNER JOIN orders o ON o.order_id = oi.order_id
+       INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
+       LEFT JOIN LATERAL (
+         SELECT current_stage
+         FROM cultivation_progress cp
+         WHERE cp.session_id = s.session_id
+         ORDER BY cp.progress_id DESC
+         LIMIT 1
+       ) progress ON TRUE
+       WHERE st.tray_id = $1 AND st.status = 'ACTIVE'
+       FOR UPDATE OF st, s`,
+      [tray.tray_id],
+    );
+    const context = assignmentResult.rows[0];
+    if (!context) {
+      throw new AppError('Tray does not have an active cultivation session assignment', 409, 'SESSION_TRAY_NOT_ACTIVE');
+    }
+    if (context.payment_status !== 'PAID') {
+      throw new AppError('Issues can only be reported for paid sessions', 409);
+    }
+    if (!['CULTIVATING', 'HARVEST_READY', 'HARVESTING'].includes(context.status)) {
+      throw new AppError('Tray issues can only be reported during cultivation', 409);
+    }
+    const inspectionResult = await client.query(
+      `INSERT INTO cultivation_inspections (
+         session_tray_id, inspected_by
+       )
+       VALUES ($1, $2)
+       RETURNING *`,
+      [context.session_tray_id, reportedBy],
+    );
+    const inspection = inspectionResult.rows[0];
+    const imageResults = [];
+    for (const imageUrl of data.imageUrls || []) {
+      const image = await client.query(
+        `INSERT INTO cultivation_inspection_images (inspection_id, image_url)
+         VALUES ($1, $2)
+         RETURNING *`,
+        [inspection.inspection_id, imageUrl],
+      );
+      imageResults.push(image.rows[0]);
+    }
+    const result = await client.query(
+      `INSERT INTO cultivation_issues (
+         session_tray_id, inspection_id, spawn_inspection_id, reported_by,
+         issue_type, title, description, severity
+       )
+       VALUES ($1, $2, NULL, $3, $4, $5, $6, $7)
+       RETURNING *`,
+      [
+        context.session_tray_id,
+        inspection.inspection_id,
+        reportedBy,
+        data.issueType,
+        data.title,
+        data.description,
+        data.severity ?? null,
+      ],
+    );
+    await client.query('COMMIT');
+    return {
+      ...result.rows[0],
+      session_id: context.session_id,
+      tray_id: tray.tray_id,
+      tray_code: tray.tray_code,
+      mushroom_name: context.mushroom_name,
+      reported_stage: context.reported_stage,
+      inspection,
+      images: imageResults,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -854,6 +958,94 @@ async function reviewTreatment(treatmentLogId, review, reviewerId) {
   }
 }
 
+async function closeConsultation(consultationId, expertId, data) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `SELECT ec.consultation_id, ec.issue_id, ec.expert_id, ec.status AS consultation_status,
+              ci.status AS issue_status, ci.reported_by
+       FROM expert_consultations ec
+       INNER JOIN cultivation_issues ci ON ci.issue_id = ec.issue_id
+       WHERE ec.consultation_id = $1
+       FOR UPDATE OF ec, ci`,
+      [consultationId],
+    );
+    const consultation = result.rows[0];
+    if (!consultation) throw new AppError('Consultation not found', 404);
+    if (consultation.issue_status === 'RESOLVED'
+      || consultation.consultation_status === 'CLOSED') {
+      throw new AppError('Consultation is already closed', 409);
+    }
+    if (consultation.expert_id !== null
+      && Number(consultation.expert_id) !== Number(expertId)) {
+      throw new AppError('Only the assigned expert can close this consultation', 403);
+    }
+    if (['WAITING_REVIEW', 'MONITORING'].includes(consultation.issue_status)) {
+      throw new AppError('Use the issue resolution flow after treatment monitoring', 409);
+    }
+    if (consultation.consultation_status === 'ANSWERED') {
+      throw new AppError('A treatment plan already exists; use the treatment monitoring flow', 409);
+    }
+    await appendConversationMessage(
+      client,
+      consultation,
+      data.diagnosis,
+      expertId,
+    );
+    const updatedConsultation = await client.query(
+      `UPDATE expert_consultations
+       SET diagnosis = $2, solution = NULL, expert_id = $3,
+           status = 'CLOSED', responded_at = COALESCE(responded_at, now()), closed_at = now()
+       WHERE consultation_id = $1
+       RETURNING *`,
+      [consultationId, data.diagnosis, expertId],
+    );
+    const updatedIssue = await client.query(
+      `UPDATE cultivation_issues
+       SET status = 'RESOLVED', resolved_at = now(), resolved_by = $2
+       WHERE issue_id = $1 AND status NOT IN ('RESOLVED', 'WAITING_REVIEW')
+       RETURNING *`,
+      [consultation.issue_id, expertId],
+    );
+    if (!updatedIssue.rows[0]) {
+      throw new AppError('Issue status changed; reload before closing the consultation', 409);
+    }
+    const completionReview = await client.query(
+      `INSERT INTO expert_treatment_reviews (
+         issue_id, treatment_log_id, reviewed_by, review_result, review_comment
+       )
+       VALUES ($1, NULL, $2, 'RESOLVED', $3)
+       RETURNING *`,
+      [consultation.issue_id, expertId, data.comment ?? null],
+    );
+    await client.query(
+      `INSERT INTO notifications (
+         user_id, notification_type, title, message, created_by, reference_type, reference_id
+       )
+       VALUES ($1, 'MUSHROOM_DISEASE', 'Issue resolved', $2, $3, 'CULTIVATION_ISSUE', $4)`,
+      [
+        consultation.reported_by,
+        `Expert closed consultation ${consultationId} and resolved issue ${consultation.issue_id}.`,
+        expertId,
+        consultation.issue_id,
+      ],
+    );
+    await client.query('COMMIT');
+    return {
+      ...publicConsultation(updatedConsultation.rows[0]),
+      issue_status: updatedIssue.rows[0].status,
+      issue_resolved_at: updatedIssue.rows[0].resolved_at,
+      completion_review: completionReview.rows[0],
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function resolveIssue(issueId, reviewerId, comment) {
   const client = await pool.connect();
   try {
@@ -1107,6 +1299,7 @@ module.exports = {
   getRole,
   isExpertRole,
   createIssue,
+  createIssueFromQr,
   findIssues,
   findIssue,
   findIssueReviews,
@@ -1119,6 +1312,7 @@ module.exports = {
   findConsultation,
   assignConsultation,
   respondToConsultation,
+  closeConsultation,
   createTreatment,
   reviewTreatment,
   resolveIssue,

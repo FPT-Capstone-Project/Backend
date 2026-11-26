@@ -20,8 +20,8 @@ const router = express.Router();
  *             type: object
  *             required: [issueType, title, description]
  *             properties:
- *               sessionTrayId: { type: integer, description: Required for tray issues }
- *               inspectionId: { type: integer, description: Optional tray inspection }
+ *               sessionTrayId: { type: integer, description: Required for tray issues; provide inspectionId too }
+ *               inspectionId: { type: integer, description: Required for tray issues and must belong to the selected tray }
  *               spawnInspectionId: { type: integer, description: Required for spawn issues }
  *               issueType: { type: string }
  *               title: { type: string }
@@ -46,6 +46,35 @@ const router = express.Router();
  *     responses:
  *       200: { description: Paginated issue list }
  *       403: { description: Staff role required }
+ * /api/issues/qr:
+ *   post:
+ *     tags: [Disease Management]
+ *     summary: Create an issue report and inspection for a scanned tray
+ *     description: Resolves qr_token to an active paid cultivation assignment, creates a cultivation inspection for the issue report, attaches uploaded images, and creates the issue in one database transaction. Scan details can be previewed with POST /api/cultivation-trays/qr/scan.
+ *     security: [{ bearerAuth: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required: [qr_token, issue_type, title, description]
+ *             properties:
+ *               qr_token: { type: string, maxLength: 256 }
+ *               issue_type: { type: string, maxLength: 100 }
+ *               title: { type: string, maxLength: 255 }
+ *               description: { type: string }
+ *               severity: { type: string, enum: [LOW, MEDIUM, HIGH] }
+ *               images:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items: { type: string, format: binary }
+ *     responses:
+ *       201: { description: Issue and linked cultivation inspection created with uploaded images }
+ *       400: { description: Invalid payload, unsupported image, or more than 10 images }
+ *       403: { description: Farm Operator or Admin role required }
+ *       404: { description: QR token is invalid }
+ *       409: { description: Tray is not active or session is outside a reportable stage }
  * /api/issues/{issueId}:
  *   get:
  *     tags: [Disease Management]
@@ -166,6 +195,27 @@ const router = express.Router();
  *     responses:
  *       200: { description: Treatment plan marks the consultation ANSWERED and issue IN_PROGRESS; needsMoreInfo keeps both open for operator follow-up }
  *       403: { description: Expert or Admin role required }
+ * /api/consultations/{consultationId}/close:
+ *   patch:
+ *     tags: [Disease Management]
+ *     summary: Directly close a consultation and resolve the issue without treatment
+ *     description: For a case that needs no operator treatment or further monitoring. Requires an expert diagnosis and closes the consultation immediately.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - { in: path, name: consultationId, required: true, schema: { type: integer } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [diagnosis]
+ *             properties:
+ *               diagnosis: { type: string }
+ *               reviewComment: { type: string }
+ *     responses:
+ *       200: { description: Consultation closed and issue resolved }
+ *       409: { description: Consultation or issue is already closed }
  * /api/consultations/{consultationId}/messages:
  *   post:
  *     tags: [Disease Management]
@@ -305,6 +355,7 @@ const router = express.Router();
  *       404: { description: Issue not found or not owned by customer }
  */
 router.post('/issues', authenticate, controller.createIssue);
+router.post('/issues/qr', authenticate, mediaUpload.array('images', 10), controller.createIssueFromQr);
 router.get('/issues', authenticate, controller.listIssues);
 router.get('/issues/:issueId', authenticate, controller.getIssue);
 router.patch('/issues/:issueId/resolve', authenticate, controller.resolveIssue);
@@ -315,6 +366,7 @@ router.get('/consultations', authenticate, controller.listConsultations);
 router.get('/consultations/:consultationId', authenticate, controller.getConsultation);
 router.patch('/consultations/:consultationId/assign', authenticate, controller.assignConsultation);
 router.patch('/consultations/:consultationId/respond', authenticate, controller.respondToConsultation);
+router.patch('/consultations/:consultationId/close', authenticate, controller.closeConsultation);
 router.post('/consultations/:consultationId/messages', authenticate, mediaUpload.single('file'), controller.addConsultationMessage);
 router.post('/consultations/:consultationId/treatments', authenticate, controller.createTreatment);
 router.get('/consultations/:consultationId/treatments', authenticate, controller.getTreatments);

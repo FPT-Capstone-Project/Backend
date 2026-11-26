@@ -39,7 +39,7 @@ async function setupDatabase() {
       master_id INTEGER NOT NULL,
       node_address INTEGER NOT NULL
     );
-    CREATE TABLE cultivation_trays (tray_id INTEGER PRIMARY KEY, floor_id INTEGER);
+    CREATE TABLE cultivation_trays (tray_id INTEGER PRIMARY KEY, floor_id INTEGER, qr_token TEXT);
     CREATE TABLE cultivation_session_trays (
       session_tray_id INTEGER PRIMARY KEY,
       session_id INTEGER NOT NULL,
@@ -47,7 +47,7 @@ async function setupDatabase() {
       status TEXT NOT NULL
     );
     CREATE TABLE cultivation_inspections (
-      inspection_id INTEGER PRIMARY KEY,
+      inspection_id SERIAL PRIMARY KEY,
       session_tray_id INTEGER NOT NULL,
       inspected_by INTEGER NOT NULL
     );
@@ -174,9 +174,11 @@ async function setupDatabase() {
       VALUES (1, 1, 1, 'CULTIVATING'), (2, 2, 1, 'CULTIVATING'),
              (3, 1, 1, 'SPAWN_RESTING');
     INSERT INTO cultivation_floors VALUES (1, 10, 4);
-    INSERT INTO cultivation_trays VALUES (1, 1);
+    INSERT INTO cultivation_trays (tray_id, floor_id, qr_token) VALUES (1, 1, 'TRAY-QR-1');
     INSERT INTO cultivation_session_trays VALUES (1, 1, 1, 'ACTIVE');
-    INSERT INTO cultivation_inspections VALUES (1, 1, 2);
+    INSERT INTO cultivation_inspections (inspection_id, session_tray_id, inspected_by)
+      VALUES (1, 1, 2);
+    SELECT setval('cultivation_inspections_inspection_id_seq', 1);
     INSERT INTO cultivation_inspection_images VALUES (1, 1, 'https://media.example/tray.jpg', 'Tray photo', now());
     INSERT INTO spawn_inspections VALUES (1, 3, 2, 'RESTING');
     INSERT INTO spawn_inspection_images VALUES (1, 1, 'https://media.example/spawn.jpg', 'Spawn photo', now());
@@ -226,6 +228,53 @@ function loadService(db) {
 
 const user = (userId, roleId) => ({ user_id: userId, role_id: roleId });
 
+test('WF-06 reports an issue from a tray QR token', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadService(db);
+    await assert.rejects(
+      service.createIssueFromQr(user(2, 2), {
+        qrToken: 'INVALID-QR',
+        issueType: 'CONTAMINATION',
+        title: 'Unexpected growth',
+        description: 'The tray has a visible contamination area.',
+      }),
+      { statusCode: 404 },
+    );
+    const issue = await service.createIssueFromQr(user(2, 2), {
+      qr_token: 'TRAY-QR-1',
+      issueType: 'CONTAMINATION',
+      title: 'Unexpected growth',
+      description: 'The tray has a visible contamination area.',
+      severity: 'HIGH',
+    }, [{
+      originalname: 'issue-photo.jpg',
+      mimetype: 'image/jpeg',
+    }]);
+    assert.equal(issue.session_tray_id, 1);
+    assert.ok(issue.inspection_id);
+    assert.equal(issue.session_id, 1);
+    assert.equal(issue.status, 'OPEN');
+    assert.equal(issue.issue_type, 'CONTAMINATION');
+    assert.equal(issue.tray_code, null);
+    const inspection = await db.query(
+      'SELECT session_tray_id, inspected_by FROM cultivation_inspections WHERE inspection_id = $1',
+      [issue.inspection_id],
+    );
+    assert.equal(inspection.rows[0].session_tray_id, issue.session_tray_id);
+    assert.equal(inspection.rows[0].inspected_by, 2);
+    const images = await db.query(
+      'SELECT image_url FROM cultivation_inspection_images WHERE inspection_id = $1',
+      [issue.inspection_id],
+    );
+    assert.deepEqual(images.rows.map(({ image_url }) => image_url), [
+      'https://media.example/issue-photo.jpg',
+    ]);
+  } finally {
+    await db.close();
+  }
+});
+
 test('WF-06 validates issue sources and enforces customer ownership through treatment timeline', async () => {
   const db = await setupDatabase();
   try {
@@ -237,6 +286,15 @@ test('WF-06 validates issue sources and enforces customer ownership through trea
         issueType: 'CONTAMINATION',
         title: 'Unusual growth',
         description: 'Discoloration observed',
+      }),
+      { statusCode: 400 },
+    );
+    await assert.rejects(
+      service.createIssue(user(2, 2), {
+        sessionTrayId: 1,
+        issueType: 'CONTAMINATION',
+        title: 'Missing inspection',
+        description: 'A tray issue must reference its inspection.',
       }),
       { statusCode: 400 },
     );
@@ -420,6 +478,7 @@ test('WF-06 allows an operator to add information while an expert is diagnosing'
     const service = loadService(db);
     const issue = await service.createIssue(user(2, 2), {
       sessionTrayId: 1,
+      inspectionId: 1,
       issueType: 'SLOW_GROWTH',
       title: 'Growth stalled',
       description: 'No visible growth during the last inspection.',
@@ -429,7 +488,7 @@ test('WF-06 allows an operator to add information while an expert is diagnosing'
         originalname: 'unsupported-video.mp4',
         mimetype: 'video/mp4',
       }),
-      { statusCode: 409 },
+      { statusCode: 400 },
     );
     const consultation = await service.createConsultation(user(2, 2), issue.issue_id, {
       question: 'Please review this growth issue.',
@@ -512,6 +571,43 @@ test('WF-06 preserves two-way chat and photos until explicit resolution', async 
     assert.equal(closed.status, 'CLOSED');
     assert.equal(closed.messages.length, 8);
   } finally { await db.close(); }
+});
+
+test('WF-06 allows an expert to close a case directly when no treatment is needed', async () => {
+  const db = await setupDatabase();
+  try {
+    const service = loadService(db);
+    const issue = await service.createIssue(user(2, 2), {
+      sessionTrayId: 1,
+      inspectionId: 1,
+      issueType: 'FALSE_ALARM',
+      title: 'No visible problem',
+      description: 'Operator suspects a false alarm after inspection.',
+    });
+    const consultation = await service.createConsultation(user(2, 2), issue.issue_id, {
+      question: 'Please confirm whether this case needs treatment.',
+    });
+    await service.assignConsultation(user(4, 4), consultation.consultation_id);
+    const closed = await service.closeConsultation(user(4, 4), consultation.consultation_id, {
+      diagnosis: 'No disease or treatment is required.',
+      reviewComment: 'Close immediately after visual review.',
+    });
+    assert.equal(closed.status, 'CLOSED');
+    assert.equal(closed.issue_status, 'RESOLVED');
+    assert.equal(closed.completion_review.review_result, 'RESOLVED');
+    assert.ok(closed.issue_resolved_at);
+    const resolvedIssue = await service.getIssue(user(2, 2), issue.issue_id);
+    assert.equal(resolvedIssue.status, 'RESOLVED');
+    assert.equal(resolvedIssue.resolved_by, 4);
+    await assert.rejects(
+      service.closeConsultation(user(6, 4), consultation.consultation_id, {
+        diagnosis: 'Should be blocked.',
+      }),
+      { statusCode: 409 },
+    );
+  } finally {
+    await db.close();
+  }
 });
 
 test('WF-06 reads legacy follow-ups and preserves existing diagnosis without schema changes', async () => {
