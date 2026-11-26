@@ -107,6 +107,9 @@ async function createIssue(user, payload = {}) {
   if ((sessionTrayId === undefined) === (spawnInspectionId === undefined)) {
     throw new AppError('Provide exactly one of sessionTrayId or spawnInspectionId', 400);
   }
+  if (sessionTrayId !== undefined && inspectionId === undefined) {
+    throw new AppError('inspectionId is required for a tray issue', 400);
+  }
   if (inspectionId !== undefined && sessionTrayId === undefined) {
     throw new AppError('inspectionId can only be used with a tray issue', 400);
   }
@@ -129,6 +132,54 @@ async function createIssue(user, payload = {}) {
     description,
     severity,
   }, actorInfo.userId);
+}
+
+async function createIssueFromQr(user, payload = {}, files = []) {
+  const actorInfo = await getActor(user);
+  requireFarmOperator(actorInfo);
+  const qrToken = parseText(
+    payload.qrToken ?? payload.qr_token,
+    'qrToken',
+    { required: true, maxLength: 256 },
+  );
+  const issueType = parseText(payload.issueType ?? payload.issue_type, 'issueType', {
+    required: true,
+    maxLength: 100,
+  }).toUpperCase();
+  const title = parseText(payload.title, 'title', { required: true, maxLength: 255 });
+  const description = parseText(payload.description, 'description', { required: true });
+  const severity = parseOptionalEnum(payload.severity, 'severity', SEVERITIES);
+  if (!Array.isArray(files) || files.length > 10) {
+    throw new AppError('A maximum of 10 issue images may be uploaded', 400);
+  }
+  if (files.some((file) => !file.mimetype?.startsWith('image/'))) {
+    throw new AppError('Only images may be attached to a QR issue report', 400);
+  }
+
+  const uploaded = [];
+  try {
+    for (const file of files) {
+      uploaded.push(await cloudinaryService.uploadMedia(file, 'cultivation-inspections'));
+    }
+    return await diseaseModel.createIssueFromQr({
+      qrToken,
+      issueType,
+      title,
+      description,
+      severity,
+      imageUrls: uploaded.map((image) => image.mediaUrl),
+    }, actorInfo.userId);
+  } catch (error) {
+    const cleanup = await Promise.allSettled(
+      uploaded.map((image) => cloudinaryService.deleteMedia(image.publicId, image.resourceType)),
+    );
+    cleanup.forEach((result) => {
+      if (result.status === 'rejected') {
+        console.error('QR issue image cleanup failed:', result.reason.message);
+      }
+    });
+    throw error;
+  }
 }
 
 async function listIssues(user, query = {}) {
@@ -291,6 +342,19 @@ async function respondToConsultation(user, consultationId, payload = {}) {
   }, actorInfo.userId);
 }
 
+async function closeConsultation(user, consultationId, payload = {}) {
+  const actorInfo = await getActor(user);
+  requireExpert(actorInfo);
+  return diseaseModel.closeConsultation(
+    parseId(consultationId, 'consultationId'),
+    actorInfo.userId,
+    {
+      diagnosis: parseText(payload.diagnosis, 'diagnosis', { required: true }),
+      comment: parseText(payload.reviewComment ?? payload.review_comment, 'reviewComment'),
+    },
+  );
+}
+
 async function createTreatment(user, consultationId, payload = {}) {
   const actorInfo = await getActor(user);
   requireFarmOperator(actorInfo);
@@ -442,6 +506,7 @@ async function customerIssue(user, issueId, includeTimeline = false) {
 
 module.exports = {
   createIssue,
+  createIssueFromQr,
   listIssues,
   getIssue,
   addIssueMedia,
@@ -451,6 +516,7 @@ module.exports = {
   getConsultation,
   assignConsultation,
   respondToConsultation,
+  closeConsultation,
   createTreatment,
   reviewTreatment,
   resolveIssue,

@@ -5,6 +5,15 @@ async function createIssue(req, res) {
   res.status(201).json({ message: 'Issue created successfully', data: issue });
 }
 
+async function createIssueFromQr(req, res) {
+  const issue = await diseaseService.createIssueFromQr(req.user, req.body || {}, req.files || []);
+  res.status(201).json({
+    success: true,
+    message: 'Issue reported successfully via tray QR code',
+    data: issue,
+  });
+}
+
 async function listIssues(req, res) {
   const result = await diseaseService.listIssues(req.user, req.query || {});
   res.json({ data: result.issues, pagination: result.pagination });
@@ -80,6 +89,15 @@ async function respondToConsultation(req, res) {
   res.json({ message: 'Consultation response submitted successfully', data: consultation });
 }
 
+async function closeConsultation(req, res) {
+  const consultation = await diseaseService.closeConsultation(
+    req.user,
+    req.params.consultationId,
+    req.body || {},
+  );
+  res.json({ message: 'Consultation closed and issue resolved successfully', data: consultation });
+}
+
 async function createTreatment(req, res) {
   const treatment = await diseaseService.createTreatment(
     req.user,
@@ -139,6 +157,7 @@ async function customerIssueTimeline(req, res) {
 
 module.exports = {
   createIssue,
+  createIssueFromQr,
   listIssues,
   getIssue,
   resolveIssue,
@@ -149,6 +168,7 @@ module.exports = {
   getConsultation,
   assignConsultation,
   respondToConsultation,
+  closeConsultation,
   createTreatment,
   reviewTreatment,
   getTreatments,

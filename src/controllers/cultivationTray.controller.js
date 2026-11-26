@@ -48,6 +48,11 @@ async function completeSanitation(req, res) {
   res.json({ message: 'Đã xác nhận vệ sinh xong. Khay đã sẵn sàng sử dụng.', data: tray });
 }
 
+async function completeSanitationByQrPath(req, res) {
+  const tray = await cultivationTrayService.completeSanitationByQr(req.params.qrToken, req.user);
+  res.json({ message: 'Đã xác nhận vệ sinh xong. Khay đã sẵn sàng sử dụng.', data: tray });
+}
+
 module.exports = {
   list,
   listByRoom,
@@ -56,6 +61,7 @@ module.exports = {
   getQrImage,
   generateMissingQrTokens,
   scanQr,
+  completeSanitationByQrPath,
   update,
   remove,
   completeSanitation,

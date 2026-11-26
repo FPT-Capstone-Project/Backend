@@ -6,6 +6,30 @@ const router = express.Router();
 
 /**
  * @openapi
+ * /api/cultivation-trays/qr/{qrToken}/complete-sanitation:
+ *   post:
+ *     tags: [Cultivation Trays]
+ *     summary: Confirm sanitation using a tray QR token
+ *     description: Enter the scanned QR token in the qrToken path field. Requires MAINTENANCE status and no ACTIVE session assignment; updates the tray to AVAILABLE and records sanitation confirmation.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: qrToken
+ *         required: true
+ *         description: Token encoded in the tray QR code
+ *         schema: { type: string, maxLength: 256 }
+ *     responses:
+ *       200: { description: Tray sanitation confirmed and tray is AVAILABLE }
+ *       400: { description: Missing or invalid QR token }
+ *       401: { description: Authentication required }
+ *       403: { description: Staff role required }
+ *       404: { description: Tray not found for QR token }
+ *       409: { description: Tray is not in MAINTENANCE or has an ACTIVE session assignment }
+ */
+router.post('/qr/:qrToken/complete-sanitation', authenticate, authorizeRoles(1, 2), cultivationTrayController.completeSanitationByQrPath);
+
+/**
+ * @openapi
  * /api/cultivation-trays/{id}/complete-sanitation:
  *   post:
  *     tags: [Cultivation Trays]

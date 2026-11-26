@@ -34,6 +34,11 @@ test('cultivation tray growth APIs work against the repository schema', async (t
     await db.exec(fs.readFileSync(`migrations/${file}`, 'utf8'));
   }
   await db.exec(`
+    ALTER TABLE cultivation_sessions
+      ADD COLUMN harvest_ready_at TIMESTAMPTZ,
+      ADD COLUMN harvest_ready_by INTEGER;
+  `);
+  await db.exec(`
     INSERT INTO roles (role_id, role_name) VALUES (1, 'Admin'), (2, 'Farm Operator'), (3, 'Customer');
     INSERT INTO users (user_id, role_id, email, password_hash, full_name)
       VALUES (1, 1, 'admin@example.test', 'hash', 'Admin'),
@@ -137,6 +142,9 @@ test('cultivation tray growth APIs work against the repository schema', async (t
       tray_id: 1,
       tray_code: 'TRAY-001',
       growth_status: 'PINNING',
+      harvest_status: 'NOT_READY',
+      harvest_ready: false,
+      harvest_ready_changed: false,
       synchronization: {
         is_synchronized: false,
         session_stage: 'FRUITING_INITIATION',
@@ -268,5 +276,48 @@ test('cultivation tray growth APIs work against the repository schema', async (t
     assert.deepEqual(await readReadiness(), {
       status: 'CULTIVATING', harvest_status: 'NOT_READY', harvest_ready_at: null, harvest_ready_by: null,
     });
+  await t.test('sets harvest readiness automatically after all mature trays pass the existing safety checks', async () => {
+    await db.query('UPDATE order_items SET quantity = 2 WHERE order_item_id = 1');
+    const firstTrayMature = await update('first', 'MATURATION');
+    assert.equal(firstTrayMature.status, 200);
+    assert.equal(firstTrayMature.body.data.synchronization.is_synchronized, false);
+    assert.equal(firstTrayMature.body.data.harvest_status, 'NOT_READY');
+
+    const issue = await db.query(
+      `INSERT INTO cultivation_issues (
+         session_tray_id, reported_by, issue_type, title, severity, status
+       )
+       VALUES (1, 2, 'DISEASE', 'Mold observed', 'LOW', 'OPEN')
+       RETURNING issue_id`,
+    );
+    const blocked = await update('second', 'MATURATION');
+    assert.equal(blocked.status, 200, JSON.stringify(blocked.body));
+    assert.equal(blocked.body.data.synchronization.is_synchronized, true);
+    assert.equal(blocked.body.data.harvest_status, 'NOT_READY');
+    assert.equal(blocked.body.data.harvest_ready, false);
+
+    await db.query(
+      "UPDATE cultivation_issues SET status = 'RESOLVED' WHERE issue_id = $1",
+      [issue.rows[0].issue_id],
+    );
+    const ready = await update('second', 'MATURATION');
+    assert.equal(ready.status, 200, JSON.stringify(ready.body));
+    assert.equal(ready.body.data.harvest_status, 'HARVEST_READY');
+    assert.equal(ready.body.data.harvest_ready, true);
+    assert.equal(ready.body.data.harvest_ready_changed, true);
+    const session = await db.query(
+      `SELECT harvest_status, harvest_ready_by, harvest_ready_at
+       FROM cultivation_sessions WHERE session_id = 1`,
+    );
+    assert.equal(session.rows[0].harvest_status, 'HARVEST_READY');
+    assert.equal(session.rows[0].harvest_ready_by, 2);
+    assert.ok(session.rows[0].harvest_ready_at);
+    const notification = await db.query(
+      `SELECT created_by FROM notifications
+       WHERE reference_type = 'CULTIVATION_SESSION' AND reference_id = 1
+         AND title = 'Mushrooms ready for harvest'
+       ORDER BY notification_id DESC LIMIT 1`,
+    );
+    assert.equal(notification.rows[0].created_by, 2);
   });
 });
