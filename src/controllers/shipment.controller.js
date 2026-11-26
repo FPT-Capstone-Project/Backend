@@ -33,4 +33,9 @@ async function updateDetails(req, res) {
   res.json({ message: 'Shipment details updated successfully', data: shipment });
 }
 
-module.exports = { create, adminList, orderList, updateStatus, updateDetails };
+async function confirmReceived(req, res) {
+  const { shipping_fee, carrier, tracking_code, ...shipment } = await shipmentService.confirmReceived(req.params.id, req.user);
+  res.json({ message: 'Shipment receipt confirmed successfully', data: shipment });
+}
+
+module.exports = { create, adminList, orderList, updateStatus, updateDetails, confirmReceived };

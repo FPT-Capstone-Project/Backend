@@ -310,20 +310,18 @@ async function markPayosPaymentFailed(orderCode) {
 
 async function getFulfillmentPlan(client, orderId) {
   const items = await findCultivationItemsForUpdate(client, orderId);
-  if (items.length === 0) return { canFulfill: false, plans: [] };
+  if (items.length !== 1) return { canFulfill: false, plans: [] };
+  const existingSession = await client.query(
+    `SELECT s.order_item_id FROM cultivation_sessions s
+     JOIN order_items oi USING (order_item_id) WHERE oi.order_id = $1 LIMIT 1`,
+    [orderId],
+  );
+  if (existingSession.rows.length) {
+    return { canFulfill: existingSession.rows[0].order_item_id === items[0].order_item_id, plans: [] };
+  }
 
   const plans = [];
   for (const item of items) {
-    const existingSessionResult = await client.query(
-      `SELECT session_id
-       FROM cultivation_sessions
-       WHERE order_item_id = $1
-       LIMIT 1
-       FOR UPDATE`,
-      [item.order_item_id],
-    );
-    if (existingSessionResult.rows.length > 0) continue;
-
     let reservation = await findLatestReservationForUpdate(client, item.order_item_id);
     const spawnQuantity = requiredSpawnForTrays(item.quantity);
     if (!reservation

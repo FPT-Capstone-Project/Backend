@@ -25,7 +25,7 @@ router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestControlle
  *   post:
  *     tags: [Harvest Requests]
  *     summary: Choose a receiving method for a harvest-ready cultivation session
- *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. Customer PICKUP requires scheduledAt from the harvest-ready date through three calendar days later, between 07:00 and 17:00 Vietnam time. DELIVERY does not require a schedule. For DELIVERY, blank or omitted deliveryAddress uses the customer profile address. If the profile has no address, enter deliveryAddress. A shipment is created or reused at the order level and requires a phone number on the customer profile. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
+ *     description: Select PICKUP or DELIVERY from Examples. Replace sessionId with your own harvest-ready session ID. Customer PICKUP requires scheduledAt from the harvest-ready date through three calendar days later, between 07:00 and 17:00 Vietnam time. DELIVERY does not require a schedule. DELIVERY requires deliveryAddress. A shipment is created after the DELIVERY harvest is completed. Delivery requires a customer profile phone. Schedule examples use Vietnam time (UTC+07:00); adjust the date and time before testing.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -38,7 +38,7 @@ router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestControlle
  *               sessionId: { type: integer, minimum: 1, description: Your harvest-ready cultivation session ID }
  *               harvestMethod: { type: string, enum: [PICKUP, DELIVERY], description: PICKUP for customer self-harvest at the farm; DELIVERY for external delivery arranged by staff }
  *               scheduledAt: { type: string, format: date-time, description: Required for PICKUP; optional for DELIVERY }
- *               deliveryAddress: { type: string, description: Optional for DELIVERY; blank or omitted uses the customer profile address. Saved on this request only. }
+ *               deliveryAddress: { type: string, description: Required for DELIVERY. }
  *               customerNote: { type: string, maxLength: 2000, description: Optional receiving instructions }
  *           examples:
  *             PICKUP:
@@ -53,7 +53,7 @@ router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestControlle
  *               value:
  *                 sessionId: 15
  *                 harvestMethod: DELIVERY
- *                 deliveryAddress: ''
+ *                 deliveryAddress: '123 Nguyen Van A, Ho Chi Minh City'
  *                 customerNote: Please contact me before delivery.
  *     responses:
  *       201: { description: Receiving request created }
@@ -63,7 +63,25 @@ router.get('/admin', authenticate, authorizeRoles(1, 2), harvestRequestControlle
  *       404: { description: Cultivation session not found }
  *       409: { description: Session is not ready or already has a receiving request }
  */
-router.post('/', authenticate, harvestRequestController.create);
+router.post('/', authenticate, authorizeRoles(3), harvestRequestController.create);
+/**
+ * @openapi
+ * /api/harvest-requests/{id}/cancel:
+ *   patch:
+ *     tags: [Harvest Requests]
+ *     summary: Cancel an owned request before a harvest exists
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Request cancelled }
+ *       403: { description: Customer role and ownership required }
+ *       409: { description: Request is closed or a harvest exists }
+ */
+router.patch('/:id/cancel', authenticate, authorizeRoles(3), harvestRequestController.cancel);
 
 /**
  * @openapi
@@ -71,7 +89,7 @@ router.post('/', authenticate, harvestRequestController.create);
  *   patch:
  *     tags: [Harvest Requests]
  *     summary: Update receiving method or pickup schedule
- *     description: Customers may update the receiving method only on the harvest-ready date and the following calendar day. Customer PICKUP schedules must be from the current Vietnam date through three calendar days after readiness, between 07:00 and 17:00 Vietnam time. Farm staff may adjust the schedule while the session remains eligible; staff pickup must be in the future, from today through three calendar days later, between 07:00 and 17:00 Vietnam time.
+ *     description: Customers may update the receiving method only on the harvest-ready date and the following calendar day. Farm staff may adjust the schedule while the session remains eligible. PICKUP schedules must be from the current time through three calendar days after readiness, between 07:00 and 17:00 Vietnam time.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -105,8 +123,9 @@ router.patch('/:id', authenticate, harvestRequestController.update);
  * /api/harvest-requests/{id}/complete:
  *   post:
  *     tags: [Harvest Requests]
- *     summary: Complete receiving or handover after harvest completion
- *     description: Requires a completed harvest. PICKUP may be confirmed by the owning customer or farm staff; DELIVERY must be confirmed by farm staff after the external delivery is completed. No shipment record is required. Records confirmed_by and confirmation time, completes the session, and places its trays in MAINTENANCE awaiting WF-05 sanitation.
+ *     deprecated: true
+ *     summary: Complete a legacy pickup handover
+ *     description: Completes a legacy pickup. Delivery requires customer shipment confirmation.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path

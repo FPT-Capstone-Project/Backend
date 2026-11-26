@@ -200,8 +200,11 @@ function parseGrowthStage(value, fieldName) {
   return stage;
 }
 
-function parseDailyInspectionPayload(payload = {}) {
+function parseDailyInspectionPayload(payload = {}, includeGrowthStatus = false) {
+  const growthStatus = includeGrowthStatus ? payload.growth_status ?? payload.growthStatus : undefined;
   return {
+    ...(growthStatus != null && String(growthStatus).trim() !== ''
+      ? { growthStatus: parseGrowthStage(growthStatus, 'growth_status') } : {}),
     trayCondition: parseText(payload.trayCondition ?? payload.tray_condition, 'trayCondition', { maxLength: 500 }),
     mushroomCondition: parseText(
       payload.mushroomCondition ?? payload.mushroom_condition,
@@ -335,7 +338,7 @@ async function getTrayGrowthStatusForAdmin(sessionId) {
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
   return cultivationSessionModel.createInspectionForAdmin(
     parseId(sessionTrayId, 'sessionTrayId'),
-    parseDailyInspectionPayload(payload),
+    parseDailyInspectionPayload(payload, true),
     parseId(inspectedBy, 'inspectedBy'),
   );
 }
@@ -369,7 +372,7 @@ async function createInspectionWithImagesForAdmin(sessionTrayId, payload = {}, i
     throw new AppError('Send either qr_token or session_tray_id, not both', 400);
   }
 
-  const inspectionData = parseDailyInspectionPayload(payload);
+  const inspectionData = parseDailyInspectionPayload(payload, true);
   const inspectedById = parseId(inspectedBy, 'inspectedBy');
   let inspectionResult;
   if (qrTokenSupplied) {

@@ -15,6 +15,8 @@ async function setupDatabase() {
       order_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(user_id)
     );
+    CREATE TABLE order_items (order_item_id INTEGER PRIMARY KEY, order_id INTEGER);
+    CREATE TABLE cultivation_sessions (session_id INTEGER PRIMARY KEY, order_item_id INTEGER);
     CREATE TABLE notifications (
       notification_id SERIAL PRIMARY KEY,
       user_id INTEGER NOT NULL REFERENCES users(user_id),
@@ -35,6 +37,7 @@ async function setupDatabase() {
       carrier VARCHAR(100),
       tracking_code VARCHAR(150),
       status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
+      harvest_request_id INTEGER,
       shipped_at TIMESTAMPTZ,
       delivered_at TIMESTAMPTZ,
       CONSTRAINT chk_shipment_dates CHECK (
@@ -139,7 +142,8 @@ test('shipment listing returns order details and status updates record timestamp
       notifications.rows[0].message,
       /Đã bàn giao cho đơn vị vận chuyển/,
     );
-    const delivered = await service.updateShipmentStatus(5, 'DELIVERED');
+    await assert.rejects(service.updateShipmentStatus(5, 'DELIVERED'), { statusCode: 403 });
+    const delivered = (await db.query("UPDATE shipments SET status = 'DELIVERED', delivered_at = NOW() WHERE shipment_id = 5 RETURNING *")).rows[0];
     assert.ok(delivered.delivered_at);
     const returned = await service.updateShipmentStatus(5, 'RETURNED');
     assert.equal(returned.status, 'RETURNED');
@@ -176,12 +180,7 @@ test('operators update shipment details without changing status and can correct 
     assert.equal(details.tracking_code, 'TRACK-23');
     assert.equal(Number(details.shipping_fee), 18000);
 
-    const delivered = await service.updateShipmentStatus(
-      5,
-      'DELIVERED',
-      '2026-11-21T09:15:00+07:00',
-      { user_id: 2, role_id: 2 },
-    );
+    const delivered = (await db.query("UPDATE shipments SET status = 'DELIVERED', delivered_at = '2026-11-21T09:15:00+07:00' WHERE shipment_id = 5 RETURNING *")).rows[0];
     assert.equal(delivered.status, 'DELIVERED');
     assert.equal(new Date(delivered.delivered_at).toISOString(), '2026-11-21T02:15:00.000Z');
 
@@ -280,6 +279,7 @@ test('shipment routes restrict listing and status changes to staff roles', async
   require.cache[authServicePath] = { exports: { sanitizeUser: (user) => user } };
   require.cache[controllerPath] = {
     exports: {
+      confirmReceived: (_req, res) => res.sendStatus(200),
       create: handler('create'),
       adminList: handler('list'),
       orderList: handler('orderList'),
@@ -334,6 +334,13 @@ test('shipment routes restrict listing and status changes to staff roles', async
       headers: { ...staffHeaders, 'content-type': 'application/json' },
       body: JSON.stringify({ orderId: 23, address: 'Street', recipientName: 'User', recipientPhone: '0900000000' }),
     })).status, 204);
+    for (const [headers, expected] of [[customerHeaders, 200], [staffHeaders, 403], [{}, 401]]) {
+      assert.equal((await fetch(`${baseUrl}/9/confirm-received`, { method: 'PATCH', headers })).status, expected);
+    }
+    assert.equal((await fetch(`${baseUrl}/9/status`, {
+      method: 'PATCH', headers: { ...customerHeaders, 'content-type': 'application/json' },
+      body: JSON.stringify({ status: 'DELIVERED' }),
+    })).status, 403);
     assert.deepEqual(calls.map((call) => call.name), ['list', 'orderList', 'orderList', 'update', 'updateDetails', 'create']);
     assert.equal(calls[1].params.orderId, '23');
     assert.equal(calls[3].body.status, 'IN_TRANSIT');

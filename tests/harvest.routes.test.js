@@ -37,6 +37,7 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
   };
   require.cache[harvestRequestControllerPath] = {
     exports: {
+      cancel: (_req, res) => res.sendStatus(200),
       adminList: handler('listRequests'),
       create: handler('createRequest'),
       update: handler('updateRequest'),
@@ -100,6 +101,12 @@ test('WF-04 routes enforce staff harvest access and authenticated receiving owne
       method: 'POST', headers: headers(customerToken), body: JSON.stringify({ sessionId: 15, harvestMethod: 'PICKUP' }),
     });
     assert.equal(requestCreated.status, 204);
+    for (const [token, expected] of [[customerToken, 200], [operatorToken, 403], [null, 401]]) {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/api/harvest-requests/4/cancel`, {
+        method: 'PATCH', headers: token ? headers(token) : {},
+      });
+      assert.equal(response.status, expected);
+    }
 
     const requestUnauthenticated = await fetch(
       `http://127.0.0.1:${server.address().port}/api/harvest-requests/4`,

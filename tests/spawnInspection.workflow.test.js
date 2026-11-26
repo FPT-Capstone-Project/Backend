@@ -55,12 +55,15 @@ async function setupWorkflowDatabase() {
       reference_type TEXT,
       reference_id INTEGER
     );
+    CREATE TABLE harvests (session_id INTEGER);
     CREATE TABLE harvest_requests (
       harvest_request_id SERIAL PRIMARY KEY,
       session_id INTEGER NOT NULL UNIQUE,
       harvest_method TEXT NOT NULL,
       status TEXT NOT NULL,
-      scheduled_at TIMESTAMPTZ
+      scheduled_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      delivery_address TEXT
     );
     CREATE TABLE mushroom_types (
       mushroom_type_id SERIAL PRIMARY KEY,
@@ -82,7 +85,9 @@ async function setupWorkflowDatabase() {
         'COMPLETED', 'CANCELLED'
       )),
       harvest_status VARCHAR NOT NULL DEFAULT 'NOT_READY',
+      harvest_ready_at TIMESTAMPTZ,
       start_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      end_at TIMESTAMPTZ,
       harvest_date DATE,
       duration_days INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -145,6 +150,7 @@ async function setupWorkflowDatabase() {
     );
     CREATE TABLE cultivation_trays (
       tray_id SERIAL PRIMARY KEY,
+      tray_code TEXT,
       floor_id INTEGER NOT NULL,
       status TEXT NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()

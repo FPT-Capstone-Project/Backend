@@ -1,4 +1,6 @@
 const pool = require('../config/db');
+const { lockRequest, completeHandover } = require('./harvestRequest.model');
+const { createForHarvest } = require('./shipment.model');
 const AppError = require('../utils/app-error');
 
 const harvestFields = `
@@ -21,29 +23,35 @@ const harvestFrom = `
   INNER JOIN orders o ON o.order_id = oi.order_id
   INNER JOIN users u ON u.user_id = o.user_id
   INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
-  LEFT JOIN harvest_requests hr ON hr.session_id = s.session_id
+  LEFT JOIN harvest_requests hr ON hr.harvest_request_id = h.harvest_request_id
 `;
 
 function isHarvestReady(session) {
-  return session.status === 'HARVEST_READY'
-    || (session.status === 'CULTIVATING' && session.harvest_status === 'HARVEST_READY');
+  return session.harvest_status === 'HARVEST_READY'
+    && ['CULTIVATING', 'HARVEST_READY'].includes(session.status);
 }
 
 async function lockHarvest(client, harvestId) {
+  await client.query(
+    `SELECT session_id FROM cultivation_sessions WHERE session_id = (
+       SELECT session_id FROM harvests WHERE harvest_id = $1
+     ) FOR UPDATE`,
+    [harvestId],
+  );
   const result = await client.query(
-    `SELECT h.harvest_id, h.session_id, h.status, h.harvested_by,
+    `SELECT h.harvest_id, h.session_id, h.harvest_request_id, h.status, h.harvested_by,
             h.harvest_date, h.total_weight_kg, h.usable_weight_kg,
             h.rejected_weight_kg, s.status AS session_status, s.harvest_status
      FROM harvests h
      INNER JOIN cultivation_sessions s ON s.session_id = h.session_id
      WHERE h.harvest_id = $1
-     FOR UPDATE OF h, s`,
+     FOR UPDATE OF h`,
     [harvestId],
   );
   return result.rows[0] || null;
 }
 
-async function create(sessionId) {
+async function create(sessionId, data, harvestedBy) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -53,7 +61,7 @@ async function create(sessionId) {
        INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
        INNER JOIN orders o ON o.order_id = oi.order_id
        WHERE s.session_id = $1
-       FOR UPDATE OF s, o`,
+       FOR UPDATE OF s`,
       [sessionId],
     );
     const session = sessionResult.rows[0];
@@ -65,21 +73,20 @@ async function create(sessionId) {
       throw new AppError('Cultivation session must be harvest ready before creating a harvest', 409);
     }
 
-    const requestResult = await client.query(
-      `SELECT harvest_request_id
-       FROM harvest_requests
-       WHERE session_id = $1
-       LIMIT 1`,
-      [sessionId],
-    );
+    const request = await getActiveRequest(client, sessionId);
+    assertRequestCanHarvest(request);
     const result = await client.query(
       `INSERT INTO harvests (session_id, harvest_request_id, status)
-       VALUES ($1, $2, 'PLANNED')
-       RETURNING *`,
-      [sessionId, requestResult.rows[0]?.harvest_request_id ?? null],
+       VALUES ($1, $2, 'PLANNED') RETURNING *`,
+      [sessionId, request.harvest_request_id],
     );
+    let harvest = result.rows[0];
+    if (data) {
+      await startInTransaction(client, harvest, harvestedBy);
+      harvest = await saveYield(client, harvest.harvest_id, data, harvestedBy);
+    }
     await client.query('COMMIT');
-    return result.rows[0];
+    return harvest;
   } catch (error) {
     await client.query('ROLLBACK');
     if (error.code === '23505') {
@@ -89,6 +96,62 @@ async function create(sessionId) {
   } finally {
     client.release();
   }
+}
+
+async function getActiveRequest(client, sessionId) {
+  const result = await client.query(
+    `SELECT harvest_request_id, harvest_method, scheduled_at FROM harvest_requests
+     WHERE session_id = $1 AND status NOT IN ('COMPLETED', 'CANCELLED')`,
+    [sessionId],
+  );
+  return result.rows[0];
+}
+
+function assertRequestCanHarvest(request) {
+  if (!request || (request.harvest_method === 'PICKUP' && !request.scheduled_at)) {
+    throw new AppError('Choose a receiving method and schedule pickup before starting harvest', 409);
+  }
+}
+
+async function startInTransaction(client, harvest, harvestedBy) {
+  const issues = await client.query(
+    `SELECT ci.issue_id FROM cultivation_issues ci
+     INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+     WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
+       AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
+     FOR UPDATE OF ci`, [harvest.session_id],
+  );
+  if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvesting', 409);
+  const result = await client.query(
+    `UPDATE harvests
+     SET status = 'IN_PROGRESS',
+         harvest_request_id = $3,
+         harvested_by = COALESCE(harvested_by, $2),
+         updated_at = CURRENT_TIMESTAMP
+     WHERE harvest_id = $1
+     RETURNING *`,
+    [harvest.harvest_id, harvestedBy, harvest.harvest_request_id],
+  );
+  await client.query(
+    `UPDATE cultivation_sessions
+     SET status = 'HARVESTING'
+     WHERE session_id = $1`,
+    [harvest.session_id],
+  );
+  await client.query(
+    `INSERT INTO notifications (
+       user_id, notification_type, title, message, reference_type, reference_id
+     )
+     SELECT o.user_id, 'CULTIVATION_STATUS', 'Đang thu hoạch nấm',
+            'Trang trại đang tiến hành thu hoạch nấm trong phiên của bạn.',
+            'CULTIVATION_SESSION', $1
+     FROM cultivation_sessions s
+     INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     INNER JOIN orders o ON o.order_id = oi.order_id
+     WHERE s.session_id = $1`,
+    [harvest.session_id],
+  );
+  return result.rows[0];
 }
 
 async function start(harvestId, harvestedBy) {
@@ -104,53 +167,15 @@ async function start(harvestId, harvestedBy) {
       throw new AppError('Cultivation session must be harvest ready before starting a harvest', 409);
     }
 
-    const receiving = await client.query(
-      `SELECT harvest_request_id, harvest_method, scheduled_at, status FROM harvest_requests
-       WHERE session_id = $1 FOR UPDATE`, [harvest.session_id],
-    );
-    const request = receiving.rows[0];
-    if (!request || !['PICKUP', 'DELIVERY'].includes(request.harvest_method)
-      || request.status === 'COMPLETED' || (request.harvest_method === 'PICKUP' && !request.scheduled_at)) {
-      throw new AppError('Choose a receiving method and schedule pickup before starting harvest', 409);
+    const request = await getActiveRequest(client, harvest.session_id);
+    assertRequestCanHarvest(request);
+    if (harvest.harvest_request_id && harvest.harvest_request_id !== request.harvest_request_id) {
+      throw new AppError('Harvest request does not match the harvest', 409);
     }
-    const issues = await client.query(
-      `SELECT ci.issue_id FROM cultivation_issues ci
-       INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
-       WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
-         AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
-       FOR UPDATE OF ci`, [harvest.session_id],
-    );
-    if (issues.rows.length) throw new AppError('Resolve quality and severe incidents before harvesting', 409);
-    const result = await client.query(
-      `UPDATE harvests
-       SET status = 'IN_PROGRESS',
-           harvested_by = COALESCE(harvested_by, $2),
-           updated_at = CURRENT_TIMESTAMP
-       WHERE harvest_id = $1
-       RETURNING *`,
-      [harvestId, harvestedBy],
-    );
-    await client.query(
-      `UPDATE cultivation_sessions
-       SET status = 'HARVESTING', harvest_status = 'HARVEST_READY'
-       WHERE session_id = $1`,
-      [harvest.session_id],
-    );
-    await client.query(
-      `INSERT INTO notifications (
-         user_id, notification_type, title, message, reference_type, reference_id
-       )
-       SELECT o.user_id, 'CULTIVATION_STATUS', 'Đang thu hoạch nấm',
-              'Trang trại đang tiến hành thu hoạch nấm trong phiên của bạn.',
-              'CULTIVATION_SESSION', $1
-       FROM cultivation_sessions s
-       INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
-       INNER JOIN orders o ON o.order_id = oi.order_id
-       WHERE s.session_id = $1`,
-      [harvest.session_id],
-    );
+    harvest.harvest_request_id = request.harvest_request_id;
+    const result = await startInTransaction(client, harvest, harvestedBy);
     await client.query('COMMIT');
-    return result.rows[0];
+    return result;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -159,19 +184,8 @@ async function start(harvestId, harvestedBy) {
   }
 }
 
-async function recordYield(harvestId, data, harvestedBy) {
-  const client = await pool.connect();
+async function saveYield(client, harvestId, data, harvestedBy) {
   try {
-    await client.query('BEGIN');
-    const harvest = await lockHarvest(client, harvestId);
-    if (!harvest) throw new AppError('Harvest not found', 404);
-    if (harvest.status !== 'IN_PROGRESS') {
-      throw new AppError('Yield can only be recorded for an in-progress harvest', 409);
-    }
-    if (harvest.session_status !== 'HARVESTING') {
-      throw new AppError('Cultivation session is not harvesting', 409);
-    }
-
     const result = await client.query(
       `UPDATE harvests
        SET total_weight_kg = $2,
@@ -194,8 +208,31 @@ async function recordYield(harvestId, data, harvestedBy) {
         harvestedBy,
       ],
     );
-    await client.query('COMMIT');
     return result.rows[0];
+  } catch (error) {
+    if (error.constraint === 'chk_harvests_weight_classification') {
+      throw new AppError('usableWeightKg and rejectedWeightKg must equal totalWeightKg', 400);
+    }
+    throw error;
+  }
+}
+
+async function recordYield(harvestId, data, harvestedBy) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const harvest = await lockHarvest(client, harvestId);
+    if (!harvest) throw new AppError('Harvest not found', 404);
+    if (harvest.status !== 'IN_PROGRESS') {
+      throw new AppError('Yield can only be recorded for an in-progress harvest', 409);
+    }
+    if (harvest.session_status !== 'HARVESTING') {
+      throw new AppError('Cultivation session is not harvesting', 409);
+    }
+
+    const result = await saveYield(client, harvestId, data, harvestedBy);
+    await client.query('COMMIT');
+    return result;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -210,6 +247,11 @@ async function complete(harvestId, harvestedBy) {
     await client.query('BEGIN');
     const harvest = await lockHarvest(client, harvestId);
     if (!harvest) throw new AppError('Harvest not found', 404);
+    if (harvest.status === 'COMPLETED') {
+      const existing = await client.query('SELECT * FROM harvests WHERE harvest_id = $1', [harvestId]);
+      await client.query('COMMIT');
+      return existing.rows[0];
+    }
     if (harvest.status !== 'IN_PROGRESS') {
       throw new AppError('Only an in-progress harvest can be completed', 409);
     }
@@ -221,6 +263,11 @@ async function complete(harvestId, harvestedBy) {
       throw new AppError('Actual yield must be recorded before completing a harvest', 409);
     }
 
+    const request = await lockRequest(client, harvest.harvest_request_id);
+    if (!request || request.session_id !== harvest.session_id
+      || ['COMPLETED', 'CANCELLED'].includes(request.status)) {
+      throw new AppError('An active harvest request is required', 409);
+    }
     const result = await client.query(
       `UPDATE harvests
        SET status = 'COMPLETED',
@@ -230,19 +277,24 @@ async function complete(harvestId, harvestedBy) {
        RETURNING *`,
       [harvestId, harvestedBy],
     );
-    await client.query(
-      `INSERT INTO notifications (
-         user_id, notification_type, title, message, reference_type, reference_id
-       )
-       SELECT o.user_id, 'CULTIVATION_STATUS', 'Đã thu hoạch xong, chờ bàn giao',
-              'Nấm đã được thu hoạch. Đơn hàng sẽ hoàn tất sau khi giao hàng hoặc khách đến nhận.',
-              'CULTIVATION_SESSION', $1
-       FROM cultivation_sessions s
-       INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
-       INNER JOIN orders o ON o.order_id = oi.order_id
-       WHERE s.session_id = $1`,
-      [harvest.session_id],
-    );
+    if (request.harvest_method === 'PICKUP') {
+      await completeHandover(client, request, harvestedBy);
+    } else {
+      await createForHarvest(client, request);
+      await client.query(
+        `INSERT INTO notifications (
+           user_id, notification_type, title, message, reference_type, reference_id
+         )
+         SELECT o.user_id, 'CULTIVATION_STATUS', 'Đã thu hoạch xong, chờ bàn giao',
+                'Nấm đã được thu hoạch. Đơn hàng sẽ hoàn tất khi bạn xác nhận đã nhận nấm.',
+                'CULTIVATION_SESSION', $1
+         FROM cultivation_sessions s
+         INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
+         INNER JOIN orders o ON o.order_id = oi.order_id
+         WHERE s.session_id = $1`,
+        [harvest.session_id],
+      );
+    }
     await client.query('COMMIT');
     return result.rows[0];
   } catch (error) {
@@ -304,7 +356,7 @@ async function findOrderHistory(orderId) {
      INNER JOIN order_items oi ON oi.order_item_id = s.order_item_id
      INNER JOIN mushroom_types mt ON mt.mushroom_type_id = s.mushroom_type_id
      LEFT JOIN harvests h ON h.session_id = s.session_id
-     LEFT JOIN harvest_requests hr ON hr.session_id = s.session_id
+     LEFT JOIN harvest_requests hr ON hr.harvest_request_id = h.harvest_request_id
      WHERE oi.order_id = $1
      ORDER BY s.session_id, h.harvest_id`,
     [orderId],

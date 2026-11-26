@@ -1,7 +1,7 @@
 const harvestService = require('../services/harvest.service');
 
 async function create(req, res) {
-  const harvest = await harvestService.createHarvest(req.body || {});
+  const harvest = await harvestService.createHarvest(req.body || {}, req.user.user_id);
   res.status(201).json({ message: 'Harvest created successfully', data: harvest });
 }
 
