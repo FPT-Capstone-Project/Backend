@@ -62,9 +62,11 @@ async function adminUpdateTrayGrowthFromQr(req, res) {
   );
   res.json({
     success: true,
-    message: stageChanged
-      ? 'All trays synchronized. Session growth stage updated successfully'
-      : 'Tray growth status updated successfully',
+    message: data.harvest_ready_changed
+      ? 'All trays reached maturity. Session is ready for harvest'
+      : stageChanged
+        ? 'All trays synchronized. Session growth stage updated successfully'
+        : 'Tray growth status updated successfully',
     data,
   });
 }

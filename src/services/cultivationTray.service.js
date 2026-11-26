@@ -11,6 +11,17 @@ async function completeSanitation(trayId, actor) {
   return cultivationTrayModel.completeSanitation(parseId(trayId, 'trayId'), actor.user_id);
 }
 
+async function completeSanitationByQr(value, actor) {
+  if (!actor || ![1, 2].includes(Number(actor.role_id))) {
+    throw new AppError('Chỉ Admin hoặc Farm Operator được xác nhận vệ sinh khay', 403);
+  }
+  const qrToken = typeof value === 'string' ? value.trim() : '';
+  if (!qrToken || qrToken.length > 256) {
+    throw new AppError('qrToken is required and must be valid', 400);
+  }
+  return cultivationTrayModel.completeSanitationByQr(qrToken, actor.user_id);
+}
+
 function requireStaff(actor) {
   if (!actor || ![1, 2].includes(Number(actor.role_id))) {
     throw new AppError('Chỉ Admin hoặc Farm Operator được thao tác QR khay', 403);
@@ -193,6 +204,7 @@ async function deleteCultivationTray(trayId) {
 
 module.exports = {
   completeSanitation,
+  completeSanitationByQr,
   getAllCultivationTrays,
   getCultivationTraysByRoomId,
   getCultivationTrayById,

@@ -2,20 +2,53 @@ const pool = require('../config/db');
 const AppError = require('../utils/app-error');
 const createQrToken = require('../utils/qr-token');
 
+async function completeSanitationInTransaction(client, trayId, userId) {
+  const tray = (await client.query(
+    'SELECT * FROM cultivation_trays WHERE tray_id=$1 FOR UPDATE',
+    [trayId],
+  )).rows[0];
+  if (!tray) throw new AppError('Không tìm thấy khay', 404);
+  if (tray.status !== 'MAINTENANCE') {
+    throw new AppError('Khay không còn ở trạng thái bảo trì / vệ sinh. Hãy tải lại danh sách.', 409);
+  }
+  const active = await client.query(
+    "SELECT 1 FROM cultivation_session_trays WHERE tray_id=$1 AND status='ACTIVE' LIMIT 1",
+    [trayId],
+  );
+  if (active.rows.length) {
+    throw new AppError('Không thể hoàn tất vệ sinh khi khay còn phiên trồng hoạt động', 409);
+  }
+  const result = await client.query(`UPDATE cultivation_trays SET status='AVAILABLE',
+    last_cleaned_at=CURRENT_TIMESTAMP,last_cleaned_by=$2,updated_at=CURRENT_TIMESTAMP
+    WHERE tray_id=$1 RETURNING *`, [trayId, userId]);
+  return result.rows[0];
+}
+
 async function completeSanitation(trayId, userId, db = pool) {
   const client = db.connect ? await db.connect() : db;
   try {
     await client.query('BEGIN');
-    const tray = (await client.query('SELECT * FROM cultivation_trays WHERE tray_id=$1 FOR UPDATE', [trayId])).rows[0];
-    if (!tray) throw new AppError('Không tìm thấy khay', 404);
-    if (tray.status !== 'MAINTENANCE') throw new AppError('Khay không còn ở trạng thái bảo trì / vệ sinh. Hãy tải lại danh sách.', 409);
-    const active = await client.query("SELECT 1 FROM cultivation_session_trays WHERE tray_id=$1 AND status='ACTIVE' LIMIT 1", [trayId]);
-    if (active.rows.length) throw new AppError('Không thể hoàn tất vệ sinh khi khay còn phiên trồng hoạt động', 409);
-    const result = await client.query(`UPDATE cultivation_trays SET status='AVAILABLE',
-      last_cleaned_at=CURRENT_TIMESTAMP,last_cleaned_by=$2,updated_at=CURRENT_TIMESTAMP
-      WHERE tray_id=$1 RETURNING *`, [trayId, userId]);
+    const tray = await completeSanitationInTransaction(client, trayId, userId);
     await client.query('COMMIT');
-    return result.rows[0];
+    return tray;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally { if (db.connect) client.release(); }
+}
+
+async function completeSanitationByQr(qrToken, userId, db = pool) {
+  const client = db.connect ? await db.connect() : db;
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      'SELECT tray_id FROM cultivation_trays WHERE qr_token=$1 FOR UPDATE',
+      [qrToken],
+    );
+    if (!result.rows[0]) throw new AppError('Không tìm thấy khay theo QR code', 404);
+    const tray = await completeSanitationInTransaction(client, result.rows[0].tray_id, userId);
+    await client.query('COMMIT');
+    return tray;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -204,4 +237,5 @@ module.exports = {
   updateById,
   removeById,
   completeSanitation,
+  completeSanitationByQr,
 };
