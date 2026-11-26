@@ -24,10 +24,16 @@ function parseScheduledAt(value, method) {
     if (method === 'PICKUP') throw new AppError('scheduledAt is required for PICKUP', 400);
     return undefined;
   }
-  if (typeof value !== 'string' || Number.isNaN(Date.parse(value))) {
+  if (typeof value !== 'string') {
     throw new AppError('scheduledAt must be a valid date-time', 400);
   }
-  return value;
+  // Interpret an offset-free pickup time in Vietnam local time.
+  const localPickup = method === 'PICKUP' && /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?$/.test(value);
+  const scheduledAt = localPickup ? value.replace(' ', 'T') + '+07:00' : value;
+  if (Number.isNaN(Date.parse(scheduledAt))) {
+    throw new AppError('scheduledAt must be a valid date-time', 400);
+  }
+  return scheduledAt;
 }
 
 function parseNote(value) {
@@ -80,4 +86,5 @@ module.exports = {
   createHarvestRequest,
   updateHarvestRequest,
   completeHarvestRequest,
+  cancelHarvestRequest: (id, actor) => harvestRequestModel.cancel(parseId(id, 'harvestRequestId'), actor),
 };

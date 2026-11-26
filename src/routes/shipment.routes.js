@@ -11,7 +11,7 @@ const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
  *   post:
  *     tags: [Shipments]
  *     summary: Manually create a shipment for Admin and Farm Operators
- *     description: A shipment is created or reused by order when a DELIVERY harvest request is created. Use this endpoint only to create a shipment manually when the order has no active shipment. The new shipment starts in PENDING and is linked to the order by orderId.
+ *     description: Cultivation shipments are created automatically when a DELIVERY harvest is completed. Manual creation is available for orders without a cultivation session.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -121,6 +121,7 @@ router.patch('/:id/details', adminOrFarmOperator, shipmentController.updateDetai
  *   patch:
  *     tags: [Shipments]
  *     summary: Update a shipment status for Admin and Farm Operators
+ *     description: Harvest shipments wait in PENDING for customer confirmation. SHIPPED and IN_TRANSIT are available for non-harvest shipments.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -135,8 +136,7 @@ router.patch('/:id/details', adminOrFarmOperator, shipmentController.updateDetai
  *             type: object
  *             required: [status]
  *             properties:
- *               status: { type: string, enum: [PENDING, SHIPPED, IN_TRANSIT, DELIVERED, CANCELLED, RETURNED] }
- *               deliveredAt: { type: string, format: date-time, description: Optional delivery confirmation time. }
+ *               status: { type: string, enum: [PENDING, SHIPPED, IN_TRANSIT, CANCELLED, RETURNED] }
  *     responses:
  *       200: { description: Shipment status updated }
  *       400: { description: Invalid shipment ID or status }
@@ -145,5 +145,26 @@ router.patch('/:id/details', adminOrFarmOperator, shipmentController.updateDetai
  *       404: { description: Shipment not found }
  */
 router.patch('/:id/status', adminOrFarmOperator, shipmentController.updateStatus);
+
+/**
+ * @openapi
+ * /api/shipments/{id}/confirm-received:
+ *   patch:
+ *     tags: [Shipments]
+ *     summary: Confirm receipt of an owned shipment and complete harvest handover
+ *     description: Confirms a PENDING harvest shipment. Repeating an already completed confirmation returns the existing receipt.
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: integer, minimum: 1 }
+ *     responses:
+ *       200: { description: Receipt confirmed }
+ *       403: { description: Customer role required }
+ *       404: { description: Shipment not found for this customer }
+ *       409: { description: Shipment is not eligible for receipt confirmation }
+ */
+router.patch('/:id/confirm-received', authenticate, authorizeRoles(3), shipmentController.confirmReceived);
 
 module.exports = router;

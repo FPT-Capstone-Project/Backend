@@ -142,16 +142,13 @@ async function createShipment(payload = {}) {
 
 async function updateShipmentStatus(shipmentId, status, deliveredAt, actor) {
   const parsedStatus = parseStatus(status);
-  const parsedDeliveredAt = parseOptionalTimestamp(deliveredAt, 'deliveredAt');
-  if (parsedDeliveredAt !== undefined && parsedStatus !== 'DELIVERED') {
-    throw new AppError('deliveredAt may only be provided when status is DELIVERED', 400);
-  }
-  return shipmentModel.updateStatus(
-    parseId(shipmentId, 'shipmentId'),
-    parsedStatus,
-    actor,
-    parsedDeliveredAt,
-  );
+  if (parsedStatus === 'DELIVERED') throw new AppError('Customer confirmation is required', 403);
+  if (deliveredAt !== undefined) throw new AppError('Delivery time is set by customer confirmation', 400);
+  return shipmentModel.updateStatus(parseId(shipmentId, 'shipmentId'), parsedStatus, actor);
+}
+
+async function confirmReceived(shipmentId, actor) {
+  return shipmentModel.confirmReceived(parseId(shipmentId, 'shipmentId'), actor);
 }
 
 async function updateShipmentDetails(shipmentId, payload = {}) {
@@ -167,4 +164,5 @@ module.exports = {
   listShipmentsForOrder,
   updateShipmentStatus,
   updateShipmentDetails,
+  confirmReceived,
 };

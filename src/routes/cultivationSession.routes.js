@@ -192,6 +192,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *             properties:
  *               qr_token: { type: string, description: QR mode; backend finds the tray and its active session-tray assignment }
  *               session_tray_id: { type: integer, description: Manual mode; must identify an ACTIVE session-tray assignment }
+ *               growth_status: { $ref: '#/components/schemas/CultivationTrayGrowthStage' }
  *               trayCondition: { type: string }
  *               mushroomCondition: { type: string }
  *               notes: { type: string }
@@ -241,6 +242,7 @@ router.post(
  *           schema:
  *             type: object
  *             properties:
+ *               growth_status: { $ref: '#/components/schemas/CultivationTrayGrowthStage' }
  *               trayCondition:
  *                 type: string
  *               mushroomCondition:
@@ -411,7 +413,7 @@ router.get('/admin/:sessionId/incidents', adminOrFarmOperator, cultivationSessio
  *       progressPercent must be between 0 and 100 and cannot decrease from the previous update.
  *       growthStatus corresponds to the four WF-03 stages in order: FRUITING_INITIATION, PINNING, YOUNG_FRUITING, and MATURATION.
  *       condition describes the observed condition, for example NORMAL. notes is optional. expectedHarvestDate optionally updates the forecast (YYYY-MM-DD), records it in history, and notifies the customer. New growth observations reset readiness and require a fresh assessment.
- *       MATURATION or 100% does not automatically set HARVEST_READY. Call PATCH /api/cultivation-sessions/admin/{sessionId}/harvest-readiness with harvestReady=true to confirm readiness separately.
+ *       A session-level growth update requires reassessment. Tray growth recorded via QR or daily inspection can set HARVEST_READY when all required trays reach MATURATION and there are no blocking issues.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -474,7 +476,7 @@ router.patch('/admin/:sessionId/growth', adminOrFarmOperator, cultivationSession
  *   post:
  *     tags: [Cultivation Sessions]
  *     summary: Record a tray's growth stage by QR code
- *     description: Admin and Farm Operator only. Updates the tray's inspection for the current Vietnam calendar day or creates one. A shared stage across all active trays is appended to session progress when it differs from the latest session stage.
+ *     description: Admin and Farm Operator only. Updates or creates today's tray inspection in Vietnam time. A shared stage across all active trays is appended to session progress when it changes. When all required occupied trays reach MATURATION and there are no blocking issues, the same transaction records harvest readiness.
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true

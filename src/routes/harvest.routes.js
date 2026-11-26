@@ -10,7 +10,7 @@ const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
  * /api/harvests:
  *   post:
  *     tags: [Harvests]
- *     summary: Create the one planned harvest for a harvest-ready cultivation session
+ *     summary: Create an in-progress harvest and record session yield
  *     security: [{ bearerAuth: [] }]
  *     requestBody:
  *       required: true
@@ -18,11 +18,16 @@ const adminOrFarmOperator = [authenticate, authorizeRoles(1, 2)];
  *         application/json:
  *           schema:
  *             type: object
- *             required: [sessionId]
+ *             required: [sessionId, totalWeightKg, usableWeightKg, rejectedWeightKg]
  *             properties:
  *               sessionId: { type: integer, minimum: 1, example: 15 }
+ *               totalWeightKg: { type: number, minimum: 0 }
+ *               usableWeightKg: { type: number, minimum: 0 }
+ *               rejectedWeightKg: { type: number, minimum: 0 }
+ *               qualityGrade: { type: string, maxLength: 20 }
+ *               notes: { type: string, maxLength: 2000 }
  *     responses:
- *       201: { description: Planned harvest created }
+ *       201: { description: Harvest created and yield recorded }
  *       400: { description: Invalid session ID }
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
@@ -67,8 +72,9 @@ router.get('/admin', adminOrFarmOperator, harvestController.adminList);
  * /api/harvests/{id}/start:
  *   post:
  *     tags: [Harvests]
+ *     deprecated: true
  *     summary: Start a planned harvest and move its session into HARVESTING
- *     description: Requires a customer receiving method, a schedule for PICKUP, and no unresolved quality or HIGH-severity incidents. PICKUP means customer self-harvest at the farm; DELIVERY means staff harvest followed by delivery arranged outside this system.
+ *     description: Requires a customer receiving method, a schedule for PICKUP, and no unresolved quality or HIGH-severity incidents. PICKUP means customer self-harvest at the farm; For DELIVERY, staff harvest and the system creates a shipment on harvest completion.
  *     security: [{ bearerAuth: [] }]
  *     parameters:
  *       - in: path
@@ -90,6 +96,7 @@ router.post('/:id/start', adminOrFarmOperator, harvestController.start);
  * /api/harvests/{id}/yield:
  *   post:
  *     tags: [Harvests]
+ *     deprecated: true
  *     summary: Record the actual yield of an in-progress harvest
  *     security: [{ bearerAuth: [] }]
  *     parameters:

@@ -43,6 +43,7 @@ test('customer sessions include owned tray history without exposing reused tray 
     ALTER TABLE cultivation_sessions ADD COLUMN duration_days INT;
     CREATE TABLE inventory_transactions (transaction_id INT, session_id INT, transaction_type TEXT, quantity INT);
     CREATE TABLE cultivation_progress (progress_id INT, session_id INT, current_stage TEXT, progress_percent NUMERIC, updated_at TIMESTAMPTZ);
+    CREATE TABLE harvests (session_id INTEGER);
     CREATE TABLE harvest_requests (
       harvest_request_id INT, session_id INT, harvest_method TEXT, status TEXT,
       scheduled_at TIMESTAMPTZ, delivery_address TEXT, completed_at TIMESTAMPTZ

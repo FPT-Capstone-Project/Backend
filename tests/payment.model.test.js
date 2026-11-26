@@ -171,7 +171,7 @@ function loadPaymentModel({
         ));
         return { rows: payment ? [payment] : [] };
       }
-      if (statement.startsWith('SELECT session_id FROM cultivation_sessions')) return { rows: [] };
+      if (statement.startsWith('SELECT s.order_item_id FROM cultivation_sessions')) return { rows: [] };
       if (statement.startsWith('SELECT reservation_id, order_item_id, quantity, spawn_quantity')) {
         return { rows: [state.reservation] };
       }

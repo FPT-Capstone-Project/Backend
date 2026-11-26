@@ -55,8 +55,9 @@ function parseOptionalStatus(value) {
   return status;
 }
 
-async function createHarvest(payload = {}) {
-  return harvestModel.create(parseId(payload.sessionId ?? payload.session_id, 'sessionId'));
+async function createHarvest(payload = {}, harvestedBy) {
+  const sessionId = parseId(payload.sessionId ?? payload.session_id, 'sessionId');
+  return harvestModel.create(sessionId, normalizeYield(payload), parseId(harvestedBy, 'harvestedBy'));
 }
 
 async function startHarvest(harvestId, harvestedBy) {
@@ -66,7 +67,7 @@ async function startHarvest(harvestId, harvestedBy) {
   );
 }
 
-async function recordYield(harvestId, payload = {}, harvestedBy) {
+function normalizeYield(payload) {
   const totalWeightKg = parseDecimal(
     payload.totalWeightKg ?? payload.total_weight_kg,
     'totalWeightKg',
@@ -87,15 +88,19 @@ async function recordYield(harvestId, payload = {}, harvestedBy) {
     'qualityGrade',
     20,
   );
+  return {
+    totalWeightKg,
+    usableWeightKg,
+    rejectedWeightKg,
+    qualityGrade: qualityGrade?.toUpperCase(),
+    notes: parseText(payload.notes, 'notes', 2000),
+  };
+}
+
+async function recordYield(harvestId, payload = {}, harvestedBy) {
   return harvestModel.recordYield(
     parseId(harvestId, 'harvestId'),
-    {
-      totalWeightKg,
-      usableWeightKg,
-      rejectedWeightKg,
-      qualityGrade: qualityGrade?.toUpperCase(),
-      notes: parseText(payload.notes, 'notes', 2000),
-    },
+    normalizeYield(payload),
     parseId(harvestedBy, 'harvestedBy'),
   );
 }

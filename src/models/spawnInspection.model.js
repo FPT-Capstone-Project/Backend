@@ -547,6 +547,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
             latest_progress.updated_at AS progress_updated_at,
             hr.harvest_request_id, hr.harvest_method, hr.status AS harvest_request_status, hr.scheduled_at, hr.delivery_address,
             hr.completed_at AS handover_completed_at,
+            EXISTS (SELECT 1 FROM harvests h WHERE h.session_id = s.session_id) AS has_harvest,
             COALESCE((
               SELECT json_agg(json_build_object(
                 'session_tray_id', st.session_tray_id,
@@ -569,7 +570,7 @@ async function findCustomerSessions(orderId, userId, isAdmin = false) {
        ORDER BY cp.progress_id DESC
        LIMIT 1
      )
-     LEFT JOIN harvest_requests hr ON hr.session_id = s.session_id
+     LEFT JOIN harvest_requests hr ON hr.session_id = s.session_id AND hr.status <> 'CANCELLED'
      WHERE o.order_id = $1 ${ownerFilter}
      ORDER BY s.session_id`,
     values,
