@@ -988,7 +988,7 @@ async function updateTrayGrowthFromQrForAdmin(qrToken, data, inspectedBy) {
     // The session row serializes scans across different trays. Read growth in a
     // separate statement after locking so it sees the preceding scan's commit.
     const assignmentResult = await client.query(
-      `SELECT st.session_tray_id, st.session_id, s.status
+      `SELECT st.session_tray_id, st.session_id, s.status, s.harvest_status
        FROM cultivation_session_trays st
        JOIN cultivation_sessions s ON s.session_id = st.session_id
        WHERE st.tray_id = $1 AND st.status = 'ACTIVE'
@@ -1031,13 +1031,78 @@ async function updateTrayGrowthFromQrForAdmin(qrToken, data, inspectedBy) {
       );
     }
 
+    let harvestReady = assignment.harvest_status === 'HARVEST_READY';
+    let harvestReadyChanged = false;
+    if (synchronization.is_synchronized && growthStatus === 'MATURATION') {
+      const session = await lockSession(client, sessionId);
+      const assignments = await client.query(
+        `SELECT st.session_tray_id, t.status AS tray_status
+         FROM cultivation_session_trays st
+         INNER JOIN cultivation_trays t ON t.tray_id = st.tray_id
+         WHERE st.session_id = $1 AND st.status = 'ACTIVE'
+         FOR UPDATE OF st, t`,
+        [sessionId],
+      );
+      const latest = await lockLatestProgress(client, sessionId);
+      const allRequiredTraysReady = session
+        && Number(session.tray_quantity) >= 1
+        && assignments.rows.length === Number(session.tray_quantity)
+        && assignments.rows.every((item) => item.tray_status === 'OCCUPIED');
+      const validGrowthCondition = latest
+        && latest.current_stage === 'MATURATION'
+        && typeof latest.condition === 'string'
+        && latest.condition.trim().length > 0;
+      const issues = allRequiredTraysReady && validGrowthCondition
+        ? await client.query(
+          `SELECT ci.issue_id
+           FROM cultivation_issues ci
+           INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+           WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
+             AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE')
+               OR ci.severity = 'HIGH')
+           FOR UPDATE OF ci`,
+          [sessionId],
+        )
+        : { rows: [] };
+      if (allRequiredTraysReady && validGrowthCondition && issues.rows.length === 0) {
+        const updatedSession = await client.query(
+          `UPDATE cultivation_sessions
+           SET harvest_status = 'HARVEST_READY',
+               harvest_ready_at = COALESCE(harvest_ready_at, CURRENT_TIMESTAMP),
+               harvest_ready_by = COALESCE(harvest_ready_by, $2)
+           WHERE session_id = $1 AND status = 'CULTIVATING'
+           RETURNING harvest_status`,
+          [sessionId, inspectedBy],
+        );
+        if (updatedSession.rows[0]) {
+          harvestReady = true;
+          if (assignment.harvest_status !== 'HARVEST_READY') {
+            harvestReadyChanged = true;
+            await client.query(
+              `INSERT INTO notifications (
+                 user_id, notification_type, title, message, created_by, reference_type, reference_id
+               )
+               VALUES ($1, 'OPERATOR_MESSAGE', 'Mushrooms ready for harvest',
+                 'Please choose pickup at the farm or external delivery.', $2,
+                 'CULTIVATION_SESSION', $3)`,
+              [session.user_id, inspectedBy, sessionId],
+            );
+          }
+        }
+      }
+    }
+
     await client.query('COMMIT');
     return {
       stageChanged,
+      harvestReadyChanged,
       data: {
         session_id: sessionId,
         ...tray,
         growth_status: growthStatus,
+        harvest_status: harvestReady ? 'HARVEST_READY' : assignment.harvest_status,
+        harvest_ready: harvestReady,
+        harvest_ready_changed: harvestReadyChanged,
         synchronization: {
           ...synchronization,
           session_stage: stageChanged ? growthStatus : previousStage,

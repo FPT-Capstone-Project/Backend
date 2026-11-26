@@ -5,6 +5,8 @@ const service=require('../src/services/cultivationTray.service');
 test('sanitation checks staff role and valid ID before accessing database',async()=>{
  for(const actor of [null,{role_id:3,user_id:1}])await assert.rejects(service.completeSanitation(1,actor),{statusCode:403});
  await assert.rejects(service.completeSanitation(0,{role_id:2,user_id:1}),{statusCode:400});
+ for(const actor of [null,{role_id:3,user_id:1}])await assert.rejects(service.completeSanitationByQr('clean-qr-1',actor),{statusCode:403});
+ await assert.rejects(service.completeSanitationByQr(' ',{role_id:2,user_id:1}),{statusCode:400});
 });
 test('sanitation atomically records operator/time, rejects active assignments and repeated confirmation',async()=>{
  const db=new PGlite();try{
@@ -12,7 +14,10 @@ test('sanitation atomically records operator/time, rejects active assignments an
  await db.exec(`INSERT INTO roles(role_name) VALUES('Farm Operator');
  INSERT INTO users(role_id,email,password_hash,full_name) VALUES(1,'clean@example.test','test','Operator');
  INSERT INTO cultivation_rooms(room_code,room_name) VALUES('CLEAN','Room');
- INSERT INTO cultivation_trays(room_id,tray_code,status) VALUES(1,'CLEAN-1','MAINTENANCE'),(1,'CLEAN-2','OCCUPIED');`);
+ INSERT INTO cultivation_trays(room_id,tray_code,status,qr_token) VALUES
+ (1,'CLEAN-1','MAINTENANCE','clean-qr-1'),
+ (1,'CLEAN-2','OCCUPIED','clean-qr-2'),
+ (1,'CLEAN-3','MAINTENANCE','clean-qr-3');`);
  await assert.rejects(model.completeSanitation(999,1,db),{statusCode:404});
  await assert.rejects(model.completeSanitation(2,1,db),{statusCode:409});
  const blocked={query:(sql,args)=>sql.includes('FROM cultivation_session_trays')?Promise.resolve({rows:[{active:1}]}):db.query(sql,args)};
@@ -22,5 +27,13 @@ test('sanitation atomically records operator/time, rejects active assignments an
  const tray=await model.completeSanitation(1,1,db);assert.equal(tray.status,'AVAILABLE');assert.equal(tray.last_cleaned_by,1);assert.ok(tray.last_cleaned_at);
  await assert.rejects(model.completeSanitation(1,1,db),{statusCode:409});
  const after=(await db.query('SELECT * FROM cultivation_trays WHERE tray_id=1')).rows[0];assert.deepEqual(after.last_cleaned_at,tray.last_cleaned_at);
+ await assert.rejects(model.completeSanitationByQr('unknown-qr',1,db),{statusCode:404});
+ await assert.rejects(model.completeSanitationByQr('clean-qr-2',1,db),{statusCode:409});
+ const scannedTray=await model.completeSanitationByQr('clean-qr-3',1,db);
+ assert.equal(scannedTray.tray_id,3);
+ assert.equal(scannedTray.status,'AVAILABLE');
+ assert.equal(scannedTray.last_cleaned_by,1);
+ assert.ok(scannedTray.last_cleaned_at);
+ await assert.rejects(model.completeSanitationByQr('clean-qr-3',1,db),{statusCode:409});
  }finally{await db.close();}
 });
