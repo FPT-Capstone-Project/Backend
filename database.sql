@@ -536,13 +536,75 @@ CREATE TABLE public.harvests (
 CREATE TABLE public.cameras (
   camera_id   SERIAL PRIMARY KEY,
   room_id     INTEGER NOT NULL,
+  floor_id    INTEGER,
   camera_code VARCHAR NOT NULL UNIQUE,
   camera_name VARCHAR NOT NULL,
   stream_url  TEXT,
   status      VARCHAR NOT NULL DEFAULT 'ACTIVE'
     CHECK (status IN ('ACTIVE', 'INACTIVE', 'OFFLINE')),
-  CONSTRAINT fk_cameras_room FOREIGN KEY (room_id) REFERENCES public.cultivation_rooms(room_id)
+  CONSTRAINT fk_cameras_room FOREIGN KEY (room_id) REFERENCES public.cultivation_rooms(room_id),
+  CONSTRAINT fk_cameras_floor_room
+    FOREIGN KEY (floor_id, room_id)
+    REFERENCES public.cultivation_floors(floor_id, room_id)
+    ON DELETE RESTRICT,
+  CONSTRAINT uq_cameras_floor UNIQUE (floor_id)
 );
+
+CREATE TABLE public.automatic_capture_configs (
+  config_id       SERIAL PRIMARY KEY,
+  camera_id       INTEGER NOT NULL UNIQUE,
+  capture_times   TIME[] NOT NULL DEFAULT ARRAY['08:00:00'::TIME],
+  timezone        VARCHAR(50) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+  is_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+  last_capture_at TIMESTAMPTZ,
+  next_capture_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_capture_config_camera
+    FOREIGN KEY (camera_id)
+    REFERENCES public.cameras(camera_id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE public.automatic_capture_logs (
+  log_id        SERIAL PRIMARY KEY,
+  camera_id     INTEGER NOT NULL,
+  image_url     TEXT,
+  public_id     TEXT,
+  scheduled_at  TIMESTAMPTZ NOT NULL,
+  captured_at   TIMESTAMPTZ,
+  status        VARCHAR(30) NOT NULL DEFAULT 'PROCESSING',
+  total_trays   INTEGER NOT NULL DEFAULT 0,
+  success_trays INTEGER NOT NULL DEFAULT 0,
+  failed_trays  INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_capture_log_camera
+    FOREIGN KEY (camera_id)
+    REFERENCES public.cameras(camera_id)
+    ON DELETE RESTRICT,
+  CONSTRAINT chk_capture_log_status
+    CHECK (status IN ('PROCESSING', 'SUCCESS', 'PARTIAL_SUCCESS', 'FAILED'))
+);
+
+ALTER TABLE public.cultivation_inspections
+  ADD COLUMN source VARCHAR(30) NOT NULL DEFAULT 'MANUAL',
+  ADD COLUMN capture_log_id INTEGER,
+  ADD COLUMN captured_at TIMESTAMPTZ,
+  ADD CONSTRAINT fk_inspection_capture_log
+    FOREIGN KEY (capture_log_id)
+    REFERENCES public.automatic_capture_logs(log_id),
+  ADD CONSTRAINT chk_inspection_source
+    CHECK (source IN ('MANUAL', 'AUTO'));
+
+CREATE INDEX idx_capture_logs_camera_date
+  ON public.automatic_capture_logs(camera_id, captured_at DESC);
+CREATE UNIQUE INDEX uq_camera_scheduled_capture
+  ON public.automatic_capture_logs(camera_id, scheduled_at);
+CREATE INDEX idx_inspections_capture_log
+  ON public.cultivation_inspections(capture_log_id);
 
 CREATE TABLE public.notifications (
   notification_id   SERIAL PRIMARY KEY,
@@ -892,6 +954,12 @@ CREATE INDEX idx_payments_payos_pending_expiry
   WHERE payment_method = 'PAYOS';
 CREATE INDEX idx_inspections_session_tray_date
   ON public.cultivation_inspections(session_tray_id, inspection_date DESC);
+CREATE UNIQUE INDEX uq_manual_inspection_per_tray_day
+  ON public.cultivation_inspections (
+    session_tray_id,
+    ((inspection_date AT TIME ZONE 'Asia/Ho_Chi_Minh')::date)
+  )
+  WHERE source IS DISTINCT FROM 'AUTO';
 CREATE INDEX idx_cultivation_issues_session_tray_id
   ON public.cultivation_issues(session_tray_id);
 CREATE INDEX idx_cultivation_issues_spawn_inspection_id
@@ -1303,4 +1371,110 @@ BEGIN;
 ALTER TABLE cultivation_trays
  ADD COLUMN IF NOT EXISTS last_cleaned_at TIMESTAMPTZ,
  ADD COLUMN IF NOT EXISTS last_cleaned_by INTEGER REFERENCES users(user_id);
+COMMIT;
+
+BEGIN;
+
+ALTER TABLE public.cameras
+  ADD COLUMN IF NOT EXISTS floor_id INTEGER;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cameras'::regclass
+      AND conname = 'fk_cameras_floor_room'
+  ) THEN
+    ALTER TABLE public.cameras
+      ADD CONSTRAINT fk_cameras_floor_room
+      FOREIGN KEY (floor_id, room_id)
+      REFERENCES public.cultivation_floors(floor_id, room_id)
+      ON DELETE RESTRICT;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cameras'::regclass
+      AND conname = 'uq_cameras_floor'
+  ) THEN
+    ALTER TABLE public.cameras
+      ADD CONSTRAINT uq_cameras_floor UNIQUE (floor_id);
+  END IF;
+END $$;
+
+CREATE TABLE IF NOT EXISTS public.automatic_capture_configs (
+  config_id       SERIAL PRIMARY KEY,
+  camera_id       INTEGER NOT NULL UNIQUE,
+  capture_times   TIME[] NOT NULL DEFAULT ARRAY['08:00:00'::TIME],
+  timezone        VARCHAR(50) NOT NULL DEFAULT 'Asia/Ho_Chi_Minh',
+  is_enabled      BOOLEAN NOT NULL DEFAULT TRUE,
+  last_capture_at TIMESTAMPTZ,
+  next_capture_at TIMESTAMPTZ,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_capture_config_camera
+    FOREIGN KEY (camera_id)
+    REFERENCES public.cameras(camera_id)
+    ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS public.automatic_capture_logs (
+  log_id        SERIAL PRIMARY KEY,
+  camera_id     INTEGER NOT NULL,
+  image_url     TEXT,
+  public_id     TEXT,
+  scheduled_at  TIMESTAMPTZ NOT NULL,
+  captured_at   TIMESTAMPTZ,
+  status        VARCHAR(30) NOT NULL DEFAULT 'PROCESSING',
+  total_trays   INTEGER NOT NULL DEFAULT 0,
+  success_trays INTEGER NOT NULL DEFAULT 0,
+  failed_trays  INTEGER NOT NULL DEFAULT 0,
+  error_message TEXT,
+  started_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  completed_at  TIMESTAMPTZ,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT fk_capture_log_camera
+    FOREIGN KEY (camera_id)
+    REFERENCES public.cameras(camera_id)
+    ON DELETE RESTRICT,
+  CONSTRAINT chk_capture_log_status
+    CHECK (status IN ('PROCESSING', 'SUCCESS', 'PARTIAL_SUCCESS', 'FAILED'))
+);
+
+ALTER TABLE public.cultivation_inspections
+  ADD COLUMN IF NOT EXISTS source VARCHAR(30) NOT NULL DEFAULT 'MANUAL',
+  ADD COLUMN IF NOT EXISTS capture_log_id INTEGER,
+  ADD COLUMN IF NOT EXISTS captured_at TIMESTAMPTZ;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cultivation_inspections'::regclass
+      AND conname = 'fk_inspection_capture_log'
+  ) THEN
+    ALTER TABLE public.cultivation_inspections
+      ADD CONSTRAINT fk_inspection_capture_log
+      FOREIGN KEY (capture_log_id)
+      REFERENCES public.automatic_capture_logs(log_id);
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conrelid = 'public.cultivation_inspections'::regclass
+      AND conname = 'chk_inspection_source'
+  ) THEN
+    ALTER TABLE public.cultivation_inspections
+      ADD CONSTRAINT chk_inspection_source
+      CHECK (source IN ('MANUAL', 'AUTO'));
+  END IF;
+END $$;
+
+CREATE INDEX IF NOT EXISTS idx_capture_logs_camera_date
+  ON public.automatic_capture_logs(camera_id, captured_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_camera_scheduled_capture
+  ON public.automatic_capture_logs(camera_id, scheduled_at);
+CREATE INDEX IF NOT EXISTS idx_inspections_capture_log
+  ON public.cultivation_inspections(capture_log_id);
+
 COMMIT;

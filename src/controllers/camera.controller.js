@@ -68,6 +68,21 @@ async function getImouPlayerToken(req, res) {
   return res.json({ data });
 }
 
+async function captureSnapshot(req, res) {
+  const cameraId = Number(req.params.cameraId);
+  if (!Number.isSafeInteger(cameraId) || cameraId < 1) {
+    return res.status(400).json({ message: 'Invalid camera ID' });
+  }
+
+  const channelId = req.query.channelId === undefined ? '0' : String(req.query.channelId);
+  if (!/^\d{1,3}$/.test(channelId)) {
+    return res.status(400).json({ message: 'channelId must be a number from 0 to 999' });
+  }
+
+  const data = await cameraService.captureSnapshot(cameraId, channelId);
+  return res.status(201).json({ data });
+}
+
 async function listLiveStreams(req, res) {
   const start = req.query.start === undefined ? 1 : Number(req.query.start);
   const limit = req.query.limit === undefined ? 20 : Number(req.query.limit);
@@ -113,6 +128,7 @@ module.exports = {
   remove,
   getLiveStream,
   getImouPlayerToken,
+  captureSnapshot,
   listLiveStreams,
   stopLiveStream,
   stopLiveSession,

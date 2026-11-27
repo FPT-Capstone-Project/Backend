@@ -36,5 +36,6 @@ rootRouter.use('/payments', paymentRoutes);
 rootRouter.use('/notifications', notificationRoutes);
 rootRouter.use('/iot', require('./iot.routes'));
 rootRouter.use('/cameras', require('./camera.routes'));
+rootRouter.use('/automatic-captures', require('./automaticCapture.routes'));
 
 module.exports = rootRouter;

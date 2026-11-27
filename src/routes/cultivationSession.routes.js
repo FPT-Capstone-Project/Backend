@@ -180,7 +180,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *   post:
  *     tags: [Cultivation Audit]
  *     summary: Record a daily tray inspection using a QR token or session tray ID
- *     description: Send exactly one of qr_token or session_tray_id. Blank optional fields, including values sent by Swagger UI's Send empty value option, are treated as omitted. QR mode resolves the tray and its ACTIVE session-tray assignment; manual mode looks up the supplied session_tray_id directly and requires it to be ACTIVE. The session must be CULTIVATING and may have at most one inspection per Vietnam calendar day. The inspector is taken from the authenticated user; tray_id, session_id, and inspected_by are not required. Each uploaded image is stored as a separate record linked to the new inspection_id.
+ *     description: Send exactly one of qr_token or session_tray_id. Blank optional fields, including values sent by Swagger UI's Send empty value option, are treated as omitted. QR mode resolves the tray and its ACTIVE session-tray assignment; manual mode looks up the supplied session_tray_id directly and requires it to be ACTIVE. The session must be CULTIVATING and may have at most one MANUAL (or legacy NULL-source) inspection per Vietnam calendar day; AUTO inspections do not count toward this limit. The inspector is taken from the authenticated user; tray_id, session_id, and inspected_by are not required. Each uploaded image is stored as a separate record linked to the new inspection_id.
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -209,7 +209,7 @@ router.post('/admin/:sessionId/trays', adminOrFarmOperator, cultivationSessionCo
  *       401: { description: Missing or invalid JWT token }
  *       403: { description: Admin or Farm Operator role required }
  *       404: { description: QR không hợp lệ, Khay chưa được gắn vào phiên trồng, or session_tray_id does not exist }
- *       409: { description: Khay đã được RELEASED, session is not CULTIVATING, or an inspection already exists today }
+ *       409: { description: Khay đã được RELEASED, session is not CULTIVATING, or a MANUAL/NULL-source inspection already exists today }
  */
 router.post(
   '/admin/inspections',
@@ -224,7 +224,7 @@ router.post(
  *   post:
  *     tags: [Cultivation Audit]
  *     summary: Record a daily tray inspection for a session tray (legacy route)
- *     description: Legacy route; new clients should POST to /api/cultivation-sessions/admin/inspections with session_tray_id or qr_token. Records at most one inspection per assigned tray per Vietnam calendar day.
+ *     description: Legacy route; new clients should POST to /api/cultivation-sessions/admin/inspections with session_tray_id or qr_token. Records at most one MANUAL (or legacy NULL-source) inspection per assigned tray per Vietnam calendar day; AUTO inspections do not count toward this limit.
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -264,7 +264,7 @@ router.post(
  *       404:
  *         description: Session tray not found
  *       409:
- *         description: Session tray is not active or already has an inspection today
+ *         description: Session tray is not active or already has a MANUAL/NULL-source inspection today
  */
 router.post(
   '/admin/session-trays/:sessionTrayId/inspections',

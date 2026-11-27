@@ -179,6 +179,48 @@ router.get(
 
 /**
  * @openapi
+ * /api/cameras/{cameraId}/snapshot:
+ *   post:
+ *     tags: [Cameras]
+ *     summary: Capture a camera snapshot and store it on Cloudinary
+ *     description: Requests a still image from the registered Imou camera, uploads it to Cloudinary, and returns a Cloudinary URL. Requires an active camera and a valid JWT.
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: cameraId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: channelId
+ *         schema:
+ *           type: string
+ *           default: "0"
+ *     responses:
+ *       201:
+ *         description: Snapshot captured and uploaded
+ *       400:
+ *         description: Invalid camera ID or channel ID
+ *       401:
+ *         description: Missing or invalid JWT token
+ *       404:
+ *         description: Camera not found
+ *       409:
+ *         description: Camera is not active or has no Imou device ID
+ *       502:
+ *         description: Imou or Cloudinary upload failed
+ *       503:
+ *         description: Imou cloud credentials are not configured
+ */
+router.post(
+  '/:cameraId/snapshot',
+  ...authenticated,
+  cameraController.captureSnapshot,
+);
+
+/**
+ * @openapi
  * /api/cameras/{cameraId}:
  *   get:
  *     tags: [Cameras]

@@ -788,6 +788,7 @@ async function insertInspectionForActiveSessionTray(client, sessionTrayId, data,
     `SELECT inspection_id
      FROM cultivation_inspections
      WHERE session_tray_id = $1
+      AND source IS DISTINCT FROM 'AUTO'
        AND inspection_date >= (
          date_trunc('day', CURRENT_TIMESTAMP AT TIME ZONE 'Asia/Ho_Chi_Minh')
          AT TIME ZONE 'Asia/Ho_Chi_Minh'
@@ -952,6 +953,7 @@ async function saveDailyTrayGrowth(client, sessionTrayId, data, inspectedBy) {
        SELECT inspection_id
        FROM cultivation_inspections, local_day
        WHERE session_tray_id = $1
+         AND source IS DISTINCT FROM 'AUTO'
          AND inspection_date >= (start_at AT TIME ZONE 'Asia/Ho_Chi_Minh')
          AND inspection_date < ((start_at + INTERVAL '1 day') AT TIME ZONE 'Asia/Ho_Chi_Minh')
        ORDER BY inspection_date DESC, inspection_id DESC

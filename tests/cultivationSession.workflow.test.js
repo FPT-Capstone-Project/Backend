@@ -80,6 +80,7 @@ async function setupDatabase() {
       session_tray_id INTEGER NOT NULL,
       inspected_by INTEGER NOT NULL,
       inspection_date TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      source TEXT DEFAULT 'MANUAL',
       tray_condition TEXT,
       mushroom_condition TEXT,
       notes TEXT
@@ -382,6 +383,11 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
     await model.updateGrowthForAdmin(1, { ...growing, currentStage: 'MATURATION', notes: 'Mature' });
     const beforeInspection = (await model.findProgressForAdmin(1)).length;
     const sessionTrayId = assignment.assigned_trays[0].session_tray_id;
+    await db.query(
+      `INSERT INTO cultivation_inspections (session_tray_id, inspected_by, source)
+       VALUES ($1, 1, 'AUTO'), ($1, 1, 'AUTO')`,
+      [sessionTrayId],
+    );
     const dailyInspection = await model.createInspectionForAdmin(sessionTrayId,
       { trayCondition: 'Clean', mushroomCondition: 'Healthy' }, 1);
     const originalInspectionDate = dailyInspection.inspection.inspection_date;
@@ -406,8 +412,17 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
       { statusCode: 404 },
     );
     const otherTraySessionId = assignment.assigned_trays[1].session_tray_id;
+    await db.query(
+      `INSERT INTO cultivation_inspections (session_tray_id, inspected_by, source)
+       VALUES ($1, 1, 'AUTO')`,
+      [otherTraySessionId],
+    );
     await model.createInspectionForAdmin(otherTraySessionId,
       { mushroomCondition: 'Healthy' }, 1);
+    await assert.rejects(
+      () => model.createInspectionForAdmin(otherTraySessionId, { mushroomCondition: 'Healthy' }, 1),
+      { code: 'DUPLICATE_DAILY_INSPECTION' },
+    );
     assert.equal((await model.findProgressForAdmin(1)).length, beforeInspection);
     for (const mutation of [
       "UPDATE cultivation_session_trays SET status='RELEASED' WHERE tray_id=1",
