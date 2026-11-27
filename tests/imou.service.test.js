@@ -154,6 +154,42 @@ test('gets a live-preview KitToken for ImouPlayer without exposing app credentia
   }
 });
 
+test('captures an Imou camera snapshot and returns its HTTPS URL', async () => {
+  const requests = [];
+  const responses = [
+    { accessToken: 'temporary-token', expireTime: 3600 },
+    { url: 'https://snapshot.example/image.jpg' },
+  ];
+  const restore = configureImou(async (url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push({ url, request });
+    return {
+      ok: true,
+      json: async () => ({ result: { code: '0', data: responses.shift() } }),
+    };
+  });
+
+  try {
+    delete require.cache[require.resolve('../src/services/imou.service')];
+    const service = require('../src/services/imou.service');
+    assert.deepEqual(
+      await service.captureSnapshot('device-123', '2'),
+      { url: 'https://snapshot.example/image.jpg' },
+    );
+    assert.deepEqual(requests.map(({ url }) => url.split('/').pop()), [
+      'accessToken',
+      'setDeviceSnapEnhanced',
+    ]);
+    assert.deepEqual(requests[1].request.params, {
+      token: 'temporary-token',
+      deviceId: 'device-123',
+      channelId: '2',
+    });
+  } finally {
+    restore();
+  }
+});
+
 test('refreshes the access token once when Imou returns TK1002', async () => {
   const requests = [];
   let bindAttempts = 0;

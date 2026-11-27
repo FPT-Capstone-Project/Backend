@@ -232,6 +232,17 @@ Content-Type: application/json
 
 Để bắt đầu/lấy luồng từ camera đã đăng ký, dùng `POST /api/cameras/{cameraId}/live-stream?channelId=0`. `GET` cũ vẫn được giữ tương thích. Có thể dừng phiên của camera đã đăng ký bằng `POST /api/cameras/{cameraId}/live-stream/stop?channelId=0`.
 
+### Chụp ảnh camera và lưu lên Cloudinary
+
+`POST /api/cameras/{cameraId}/snapshot?channelId=0` yêu cầu JWT hợp lệ. Backend yêu cầu Imou chụp ảnh từ camera đang ACTIVE, tải ảnh (tối đa 10 MB) về backend rồi upload lên Cloudinary và trả `snapshotUrl`. Cần cấu hình `IMOU_APP_ID`, `IMOU_APP_SECRET` và `CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET`. Ảnh nằm trong Cloudinary Media Library, thư mục `camera-snapshots`; endpoint hiện không lưu bản ghi lịch sử vào database.
+
+```powershell
+curl.exe -X POST "http://localhost:3000/api/cameras/1/snapshot?channelId=0" `
+  -H "Authorization: Bearer <JWT>"
+```
+
+Mở `snapshotUrl` trong response bằng trình duyệt để xem ảnh hoặc tải ảnh về máy. Nếu Cloudinary upload thất bại, response trả lỗi `502`; chi tiết lỗi an toàn cũng xuất hiện trong log backend.
+
 ### Quản lý camera
 
 Các API CRUD camera yêu cầu JWT của admin (role 1):

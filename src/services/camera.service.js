@@ -1,5 +1,6 @@
 const cameraModel = require('../models/camera.model');
 const imouService = require('./imou.service');
+const cloudinaryService = require('./cloudinary.service');
 const AppError = require('../utils/app-error');
 
 const VALID_STATUSES = ['ACTIVE', 'INACTIVE', 'OFFLINE'];
@@ -185,6 +186,26 @@ async function getImouPlayerToken(cameraId, channelId = '0', streamId = 0) {
   };
 }
 
+async function captureSnapshot(cameraId, channelId = '0') {
+  const camera = await cameraModel.findById(parseId(cameraId, 'cameraId'));
+  if (!camera) throw new AppError('Camera not found', 404);
+  if (camera.status !== 'ACTIVE') throw new AppError('Camera is not active', 409);
+  if (!camera.camera_code) throw new AppError('Camera has no Imou device ID configured', 409);
+
+  const snapshot = await imouService.captureSnapshot(camera.camera_code, channelId);
+  const snapshotUrl = await cloudinaryService.uploadRemoteImage(
+    snapshot.url,
+    'camera-snapshots',
+  );
+  return {
+    cameraId: camera.camera_id,
+    cameraName: camera.camera_name,
+    channelId,
+    snapshotUrl,
+    capturedAt: new Date().toISOString(),
+  };
+}
+
 async function getLiveStreams({ start = 1, limit = 20 } = {}) {
   const [result, cameras] = await Promise.all([
     imouService.listLiveStreams(start, limit),
@@ -238,6 +259,7 @@ module.exports = {
   deleteCamera,
   getLiveStream,
   getImouPlayerToken,
+  captureSnapshot,
   getLiveStreams,
   stopLiveStream,
   stopLiveSession,

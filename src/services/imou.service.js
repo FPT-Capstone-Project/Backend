@@ -189,6 +189,43 @@ async function getKitToken(deviceId, channelId = '0') {
   return { kitToken: data.kitToken };
 }
 
+async function captureSnapshot(deviceId, channelId = '0') {
+  async function requestSnapshot(token) {
+    return callApi(
+      'setDeviceSnapEnhanced',
+      { token, deviceId, channelId },
+      token,
+    );
+  }
+
+  let token = await getAccessToken();
+  let data;
+  try {
+    data = await requestSnapshot(token);
+  } catch (error) {
+    if (error.imouCode !== 'TK1002') throw error;
+    cachedToken = null;
+    token = await getAccessToken();
+    data = await requestSnapshot(token);
+  }
+
+  if (typeof data.url !== 'string' || !data.url) {
+    throw new AppError('Imou cloud did not return a snapshot URL', 502);
+  }
+
+  let snapshotUrl;
+  try {
+    snapshotUrl = new URL(data.url);
+  } catch {
+    throw new AppError('Imou cloud returned an invalid snapshot URL', 502);
+  }
+  if (snapshotUrl.protocol !== 'https:') {
+    throw new AppError('Imou cloud returned an insecure snapshot URL', 502);
+  }
+
+  return { url: snapshotUrl.toString() };
+}
+
 async function getLiveStreamInfoWithToken(deviceId, channelId, token) {
   return callApi('getLiveStreamInfo', { token, deviceId, channelId }, token);
 }
@@ -269,6 +306,7 @@ async function stopLiveSession(liveToken) {
 module.exports = {
   getLiveStream,
   getKitToken,
+  captureSnapshot,
   getLiveStreamInfo,
   listLiveStreams,
   stopLiveStream,

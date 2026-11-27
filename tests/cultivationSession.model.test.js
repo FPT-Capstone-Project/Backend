@@ -189,6 +189,8 @@ test('daily tray inspection records observations without updating session progre
   assert.equal(result.progress, undefined);
   const insert = statements.find(({ statement }) => statement.startsWith('INSERT INTO cultivation_inspections'));
   assert.ok(insert);
+  const dailyCheck = statements.find(({ statement }) => statement.startsWith('SELECT inspection_id FROM cultivation_inspections'));
+  assert.match(dailyCheck.statement, /source IS DISTINCT FROM 'AUTO'/);
   assert.ok(!insert.statement.includes('growth_stage'));
   assert.ok(!insert.statement.includes('growth_progress'));
   assert.ok(!statements.some(({ statement }) => statement.startsWith('INSERT INTO cultivation_progress')));
