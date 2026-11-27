@@ -1,6 +1,6 @@
 # API thay đổi từ commit `96d7f2b` đến hiện tại
 
-Tài liệu tổng hợp các API được thêm hoặc mở rộng trong phạm vi commit `96d7f2b` đến `HEAD` (`7e998ec`). Nội dung tập trung vào QR khay, inspection/tăng trưởng, báo cáo sự cố, tư vấn chuyên gia và vệ sinh khay; không liệt kê các API khác đã có từ trước.
+Tài liệu tổng hợp các API được thêm hoặc mở rộng trong phạm vi commit `96d7f2b` đến `HEAD` (`d14dc5b`). Nội dung tập trung vào QR khay, inspection/tăng trưởng, báo cáo sự cố, tư vấn chuyên gia, vệ sinh khay và quy trình giao nhận thu hoạch; không liệt kê các API khác đã có từ trước.
 
 ## Quy ước gọi API
 
@@ -22,13 +22,30 @@ $QR_TOKEN = "<token đọc từ QR>"
 | `POST` | `/api/cultivation-trays/qr/backfill` | Tạo QR token cho các khay chưa có token |
 | `GET` | `/api/cultivation-trays/{id}/qr` | Tải ảnh QR PNG của một khay |
 | `POST` | `/api/cultivation-trays/qr/scan` | Tra cứu khay và các phiên trồng đang hoạt động từ QR token |
-| `POST` | `/api/cultivation-sessions/admin/inspections` | Ghi inspection hằng ngày bằng QR hoặc ID assignment; có thể đính kèm ảnh |
+| `POST` | `/api/cultivation-sessions/admin/inspections` | Ghi inspection; tùy chọn ghi giai đoạn tăng trưởng có thể cập nhật sẵn sàng thu hoạch |
 | `POST` | `/api/cultivation-sessions/admin/qr-growth-update` | Cập nhật giai đoạn phát triển cho khay được quét |
 | `GET` | `/api/cultivation-sessions/admin/{sessionId}/growth-status` | Xem tình trạng tăng trưởng của các khay trong phiên |
+| `PATCH` | `/api/cultivation-sessions/admin/{sessionId}/growth` | Cập nhật tăng trưởng cấp phiên; cập nhật mới cần đánh giá lại sẵn sàng thu hoạch |
 | `PATCH` | `/api/cultivation-sessions/admin/{sessionId}/harvest-readiness` | Ghi nhận đánh giá sẵn sàng thu hoạch |
+| `POST` | `/api/harvests` | Đã điều chỉnh: tạo harvest và ghi yield trong cùng request |
+| `POST` | `/api/harvests/{id}/start` | API cũ, đã deprecated |
+| `POST` | `/api/harvests/{id}/yield` | API cũ, đã deprecated |
+| `POST` | `/api/harvests/{id}/complete` | Đã điều chỉnh: hoàn tất theo luồng PICKUP hoặc DELIVERY |
+| `GET` | `/api/harvests/admin` | Đã điều chỉnh liên kết thông tin harvest với yêu cầu nhận tương ứng |
+| `GET` | `/api/harvests/{id}` | Đã điều chỉnh liên kết thông tin harvest với yêu cầu nhận tương ứng |
+| `GET` | `/api/orders/{orderId}/harvest-history` | Đã điều chỉnh liên kết phương thức nhận với harvest tương ứng |
+| `POST` | `/api/harvest-requests` | Đã điều chỉnh quyền tạo và điều kiện chọn phương thức nhận |
+| `PATCH` | `/api/harvest-requests/{id}` | Đã điều chỉnh điều kiện cập nhật phương thức nhận/lịch PICKUP |
+| `POST` | `/api/harvest-requests/{id}/complete` | API bàn giao cũ, đã deprecated; chỉ còn luồng PICKUP legacy |
 | `POST` | `/api/issues/qr` | Tạo báo cáo sự cố cho khay bằng QR, kèm ảnh tùy chọn |
 | `PATCH` | `/api/consultations/{consultationId}/close` | Chuyên gia đóng tư vấn và giải quyết sự cố không cần treatment |
 | `POST` | `/api/cultivation-trays/qr/{qrToken}/complete-sanitation` | Xác nhận vệ sinh khay bằng QR |
+| `POST` | `/api/shipments` | Đã điều chỉnh: không tạo thủ công shipment cho đơn có phiên trồng |
+| `GET` | `/api/shipments/admin` | Đã điều chỉnh response có `harvest_request_id` |
+| `GET` | `/api/shipments/orders/{orderId}` | Đã điều chỉnh response có `harvest_request_id` |
+| `PATCH` | `/api/shipments/{id}/status` | Đã điều chỉnh: không dùng endpoint này để đánh dấu đã giao |
+| `PATCH` | `/api/harvest-requests/{id}/cancel` | Khách hàng hủy yêu cầu nhận thu hoạch trước khi có bản ghi thu hoạch |
+| `PATCH` | `/api/shipments/{id}/confirm-received` | Khách hàng xác nhận đã nhận shipment thu hoạch |
 
 ## QR khay
 
@@ -87,9 +104,11 @@ Ghi nhận quan sát cho assignment khay đang hoạt động. Chọn **đúng m
 - Quyền: Admin hoặc Farm Operator.
 - Content-Type: `multipart/form-data`.
 - Trường tùy chọn: `trayCondition`, `mushroomCondition`, `notes`, `caption`.
+- Có thể gửi thêm `growth_status` (`FRUITING_INITIATION`, `PINNING`, `YOUNG_FRUITING`, `MATURATION`) để ghi giai đoạn tăng trưởng cùng inspection.
 - Có thể gửi tối đa 10 ảnh bằng cách lặp lại trường `images`.
-- Phiên phải ở trạng thái `CULTIVATING`; mỗi assignment chỉ có tối đa một inspection mỗi ngày theo giờ Việt Nam.
-- Thành công: `201 Created`. `400` nếu thiếu hoặc gửi đồng thời cả hai trường định danh; `404` nếu QR/assignment không tồn tại; `409` nếu phiên không ở giai đoạn phù hợp hoặc đã có inspection trong ngày.
+- Phiên phải ở trạng thái `CULTIVATING`; mỗi assignment chỉ có tối đa một inspection nguồn `MANUAL` hoặc nguồn cũ `NULL` mỗi ngày theo giờ Việt Nam.
+- Khi có `growth_status`, hệ thống đồng bộ giai đoạn của các khay; nếu mọi khay yêu cầu đều `OCCUPIED`, cùng đạt `MATURATION` và không có sự cố chặn, phiên có thể được chuyển sang `HARVEST_READY`.
+- Thành công: `201 Created`. `400` nếu thiếu hoặc gửi đồng thời cả hai trường định danh; `404` nếu QR/assignment không tồn tại; `409` nếu phiên không ở giai đoạn phù hợp hoặc đã có inspection `MANUAL`/`NULL` trong ngày.
 
 ```powershell
 curl.exe -X POST "$BASE_URL/api/cultivation-sessions/admin/inspections" `
@@ -127,6 +146,15 @@ curl.exe -X POST "$BASE_URL/api/cultivation-sessions/admin/qr-growth-update" `
 Khi tất cả khay đạt `MATURATION` và đồng bộ, API trên tự chuyển `harvest_status` sang `HARVEST_READY` nếu đồng thời thỏa các điều kiện: số assignment đang hoạt động bằng số khay yêu cầu của phiên, mọi khay ở trạng thái `OCCUPIED`, tiến độ phiên có condition hợp lệ, và không còn sự cố chất lượng/nghiêm trọng chưa giải quyết. Khi trạng thái được chuyển lần đầu, khách hàng được gửi thông báo. Đây là hành vi của API cập nhật tăng trưởng, không phải endpoint riêng.
 
 Response trả về thông tin khay/phiên, `growth_status`, `harvest_status`, `harvest_ready`, `harvest_ready_changed` và `synchronization` (bao gồm số khay, mức đồng bộ và `session_stage`).
+
+### Cập nhật tăng trưởng cấp phiên
+
+**`PATCH /api/cultivation-sessions/admin/{sessionId}/growth`**
+
+- Quyền: Admin hoặc Farm Operator.
+- Body gồm `growthStatus`, `progressPercent`, `condition`; `notes` và `expectedHarvestDate` tùy chọn.
+- Mỗi cập nhật tăng trưởng cấp phiên đặt lại đánh giá sẵn sàng thu hoạch; cần đánh giá lại bằng API `harvest-readiness`.
+- Khác với cập nhật cấp khay bằng QR/inspection, endpoint này không tự chuyển phiên sang `HARVEST_READY`.
 
 ### Xem tình trạng tăng trưởng các khay
 
@@ -221,9 +249,118 @@ curl.exe -X POST "$BASE_URL/api/cultivation-trays/qr/$QR_TOKEN/complete-sanitati
   -H "Authorization: Bearer $TOKEN"
 ```
 
+## Nhận và giao thu hoạch
+
+### Hủy yêu cầu nhận thu hoạch
+
+**`PATCH /api/harvest-requests/{id}/cancel`**
+
+- Quyền: Customer; chỉ hủy được yêu cầu do chính khách hàng tạo.
+- Chỉ hủy trước khi bản ghi thu hoạch được tạo.
+- `409` nếu yêu cầu đã đóng hoặc đã có harvest.
+
+```powershell
+curl.exe -X PATCH "$BASE_URL/api/harvest-requests/31/cancel" `
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Quy trình tạo thu hoạch đã rút gọn
+
+**`POST /api/harvests`**
+
+Tạo harvest ở trạng thái `IN_PROGRESS`, chuyển phiên sang `HARVESTING` và ghi yield trong cùng request/giao dịch.
+
+- Quyền: Admin hoặc Farm Operator.
+- Body bắt buộc `sessionId`, `totalWeightKg`, `usableWeightKg`, `rejectedWeightKg`.
+- `qualityGrade` và `notes` là tùy chọn.
+- `usableWeightKg + rejectedWeightKg` phải khớp `totalWeightKg`.
+- Phiên phải `HARVEST_READY`, có yêu cầu nhận còn hiệu lực; PICKUP phải có lịch. Không được còn sự cố chất lượng/nghiêm trọng chưa xử lý.
+- `POST /api/harvests/{id}/start` và `POST /api/harvests/{id}/yield` được đánh dấu deprecated.
+
+```powershell
+curl.exe -X POST "$BASE_URL/api/harvests" `
+  -H "Authorization: Bearer $TOKEN" `
+  -H "Content-Type: application/json" `
+  -d '{"sessionId":21,"totalWeightKg":5.2,"usableWeightKg":4.8,"rejectedWeightKg":0.4,"qualityGrade":"A","notes":"Thu hoạch đợt đầu"}'
+```
+
+Sau khi ghi yield, dùng `POST /api/harvests/{id}/complete` để hoàn tất bản ghi thu hoạch. Với hình thức giao hàng, hệ thống tạo shipment ở bước hoàn tất thu hoạch.
+
+### Khách hàng xác nhận đã nhận shipment
+
+**`PATCH /api/shipments/{id}/confirm-received`**
+
+- Quyền: Customer; chỉ xác nhận được shipment thuộc đơn hàng của chính khách hàng.
+- Dùng cho shipment thu hoạch đang ở `PENDING`.
+- Thành công chuyển shipment sang `DELIVERED`, ghi thời điểm nhận và hoàn tất bàn giao thu hoạch.
+- Gọi lại API cho shipment đã xác nhận sẽ trả lại bản ghi hiện có thay vì tạo xác nhận trùng.
+- Staff không thể tự chuyển shipment thu hoạch sang `DELIVERED` qua API cập nhật status.
+
+```powershell
+curl.exe -X PATCH "$BASE_URL/api/shipments/55/confirm-received" `
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Các API hiện có đã điều chỉnh
+
+#### Chọn và cập nhật phương thức nhận
+
+**`POST /api/harvest-requests`**
+
+- Chỉ Customer được tạo yêu cầu; phiên phải sẵn sàng thu hoạch và chưa có harvest.
+- Với `DELIVERY`, bắt buộc có `deliveryAddress` và số điện thoại trong hồ sơ khách hàng. Tạo yêu cầu không còn tạo shipment ngay; shipment được tạo khi harvest DELIVERY hoàn tất.
+- Với `PICKUP`, vẫn cần `scheduledAt` trong khung thời gian cho phép.
+
+**`PATCH /api/harvest-requests/{id}`**
+
+- Chỉ cập nhật khi yêu cầu chưa `COMPLETED`/`CANCELLED`, chưa có harvest và phiên vẫn đủ điều kiện nhận.
+- Customer chỉ được đổi phương thức nhận trong ngày phiên sẵn sàng thu hoạch và ngày kế tiếp; staff có thể điều chỉnh khi phiên còn đủ điều kiện.
+- Lịch PICKUP phải từ thời điểm hiện tại đến tối đa ba ngày sau ngày sẵn sàng thu hoạch, trong khung 07:00–17:00 giờ Việt Nam.
+- Chọn DELIVERY cần hồ sơ khách hàng có số điện thoại; `deliveryAddress` có thể để trống khi cập nhật để dùng địa chỉ hồ sơ.
+
+#### Bắt đầu và hoàn tất harvest
+
+**`POST /api/harvests/{id}/start`** và **`POST /api/harvests/{id}/yield`**
+
+Hai endpoint cũ vẫn tồn tại để tương thích nhưng đã deprecated. Luồng mới dùng `POST /api/harvests` để tạo harvest, bắt đầu thu hoạch và ghi yield cùng lúc.
+
+**`POST /api/harvests/{id}/complete`**
+
+- Chỉ hoàn tất harvest `IN_PROGRESS` thuộc phiên `HARVESTING`, đã có đủ yield và còn yêu cầu nhận hiệu lực.
+- Với `PICKUP`, API hoàn tất bàn giao và phiên; đơn hàng được hoàn tất khi tất cả phiên của đơn đã xong. Khay được chuyển sang `MAINTENANCE`.
+- Với `DELIVERY`, API tạo shipment `PENDING`; phiên chưa hoàn tất cho đến khi khách hàng gọi `PATCH /api/shipments/{id}/confirm-received`.
+- Gọi lại cho harvest đã `COMPLETED` trả bản ghi hiện tại.
+
+**`POST /api/harvest-requests/{id}/complete`**
+
+Endpoint legacy đã deprecated và chỉ còn hoàn tất bàn giao PICKUP cũ sau khi harvest hoàn thành. Không dùng cho DELIVERY; khách hàng xác nhận giao hàng bằng `PATCH /api/shipments/{id}/confirm-received`.
+
+#### Shipment của đơn có phiên trồng
+
+**`POST /api/shipments`**
+
+Chỉ tạo thủ công shipment cho đơn không có cultivation session. Shipment đơn thu hoạch được tạo tự động khi hoàn tất harvest DELIVERY; gọi thủ công cho đơn có phiên trồng sẽ trả `409`.
+
+**`PATCH /api/shipments/{id}/status`**
+
+- Không còn nhận `DELIVERED` hoặc `deliveredAt`; khách hàng phải xác nhận nhận hàng qua endpoint `confirm-received`.
+- Shipment gắn với cultivation session giữ `PENDING` chờ khách xác nhận; không thể chuyển sang `SHIPPED`/`IN_TRANSIT` qua API này.
+- Với đơn không có cultivation session, staff vẫn có thể cập nhật các trạng thái vận chuyển được hỗ trợ.
+
+**`GET /api/shipments/admin`** và **`GET /api/shipments/orders/{orderId}`**
+
+Response có thêm `harvest_request_id` để xác định shipment thuộc yêu cầu nhận thu hoạch nào.
+
+#### Đọc harvest và lịch sử đơn hàng
+
+**`GET /api/harvests/admin`**, **`GET /api/harvests/{id}`** và **`GET /api/orders/{orderId}/harvest-history`**
+
+Thông tin phương thức nhận (`harvest_method`) được liên kết với đúng yêu cầu nhận của từng harvest, thay vì lấy một yêu cầu bất kỳ cùng phiên/đơn.
+
 ## Các mốc thay đổi
 
 - `96d7f2b`: tạo QR cho khay; thêm backfill, lấy ảnh QR, quét QR và ghi inspection hằng ngày bằng QR.
 - `064c7ea`: thêm cập nhật tăng trưởng qua QR và xem trạng thái tăng trưởng các khay.
 - `7501830`: thêm báo cáo sự cố qua QR và đóng tư vấn trực tiếp.
 - `7e998ec`: thêm xác nhận vệ sinh bằng QR, đánh giá sẵn sàng thu hoạch và tự chuyển `HARVEST_READY` khi đủ điều kiện.
+- `115e9dc`: rút gọn quy trình thu hoạch, yêu cầu nhận thu hoạch hỗ trợ hủy, shipment giao hàng chỉ được khách hàng xác nhận đã nhận.
