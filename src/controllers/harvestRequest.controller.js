@@ -24,4 +24,9 @@ async function adminList(req, res) {
   res.json({ data: result.requests, total: result.total });
 }
 
-module.exports = { create, update, complete, adminList };
+async function cancel(req, res) {
+  const request = await harvestRequestService.cancelHarvestRequest(req.params.id, req.user);
+  res.json({ message: 'Harvest request cancelled successfully', data: request });
+}
+
+module.exports = { create, update, cancel, complete, adminList };

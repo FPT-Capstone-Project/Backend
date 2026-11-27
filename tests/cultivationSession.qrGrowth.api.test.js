@@ -28,7 +28,11 @@ function form(fields) {
 test('cultivation tray growth APIs work against the repository schema', async (t) => {
   const db = new PGlite();
   t.after(() => db.close());
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-25T02:00:00Z') });
   await db.exec(fs.readFileSync('database.sql', 'utf8'));
+  for (const file of ['017_wf04_harvest_lifecycle.sql', '019_wf03_wf04_confirmation_audit.sql', '037_harvest_workflow_v2.sql']) {
+    await db.exec(fs.readFileSync(`migrations/${file}`, 'utf8'));
+  }
   await db.exec(`
     ALTER TABLE cultivation_sessions
       ADD COLUMN harvest_ready_at TIMESTAMPTZ,
@@ -41,9 +45,9 @@ test('cultivation tray growth APIs work against the repository schema', async (t
              (2, 2, 'operator@example.test', 'hash', 'Operator'),
              (3, 3, 'customer@example.test', 'hash', 'Customer');
     INSERT INTO mushroom_types (name, growing_days) VALUES ('Test mushroom', 30);
-    INSERT INTO orders (user_id) VALUES (3);
-    INSERT INTO order_items (order_id, mushroom_type_id, unit_price, total_price)
-      VALUES (1, 1, 10, 10), (1, 1, 10, 10), (1, 1, 10, 10);
+    INSERT INTO orders (user_id) VALUES (3), (3), (3);
+    INSERT INTO order_items (order_id, mushroom_type_id, quantity, unit_price, total_price)
+      VALUES (1, 1, 2, 10, 20), (2, 1, 1, 10, 10), (3, 1, 1, 10, 10);
     INSERT INTO cultivation_sessions (mushroom_type_id, start_at, order_item_id, status)
       VALUES (1, '2026-01-01T09:00:00Z', 1, 'CULTIVATING'),
              (1, '2026-01-01T09:00:00Z', 2, 'CULTIVATING'),
@@ -224,6 +228,54 @@ test('cultivation tray growth APIs work against the repository schema', async (t
     assert.deepEqual(rows.map(({ current_stage }) => current_stage), ['FRUITING_INITIATION', 'PINNING', 'YOUNG_FRUITING']);
   });
 
+  await t.test('the final mature tray automatically opens customer PICKUP scheduling', async () => {
+    const readyAt = '2026-11-26T02:00:00.000Z';
+    t.mock.timers.setTime(Date.parse(readyAt));
+
+    const readReadiness = async () => (await db.query(
+      'SELECT status, harvest_status, harvest_ready_at, harvest_ready_by FROM cultivation_sessions WHERE session_id = 1',
+    )).rows[0];
+    const inspected = await request('/inspections', form({ session_tray_id: '1', growth_status: 'MATURATION' }));
+    assert.equal(inspected.status, 201, JSON.stringify(inspected.body));
+    assert.equal(inspected.body.data.inspection.growth_status, 'MATURATION');
+    assert.equal((await readReadiness()).harvest_ready_at, null);
+
+    await db.exec(`
+      INSERT INTO cultivation_issues (session_tray_id, reported_by, issue_type, severity, title)
+      VALUES (1, 2, 'CONTAMINATION', 'HIGH', 'Open quality issue');
+    `);
+    assert.equal((await update('second', 'MATURATION')).status, 200);
+    assert.equal((await readReadiness()).harvest_status, 'NOT_READY');
+    assert.equal((await update('second', 'YOUNG_FRUITING')).status, 200);
+    await db.exec("UPDATE cultivation_issues SET status = 'RESOLVED'");
+
+    const finalScan = await update('second', 'MATURATION');
+    assert.equal(finalScan.status, 200, JSON.stringify(finalScan.body));
+    assert.deepEqual(await readReadiness(), {
+      status: 'CULTIVATING', harvest_status: 'HARVEST_READY', harvest_ready_at: new Date(readyAt), harvest_ready_by: 2,
+    });
+
+    t.mock.timers.setTime(Date.parse('2026-11-26T03:00:00Z'));
+    assert.equal((await update('first', 'MATURATION')).status, 200);
+    assert.equal((await readReadiness()).harvest_ready_at.toISOString(), readyAt);
+    assert.equal((await db.query("SELECT count(*)::int AS total FROM notifications WHERE title = 'Mushrooms ready for harvest'")).rows[0].total, 1);
+
+    const pickup = await fetch(`http://127.0.0.1:${server.address().port}/api/harvest-requests`, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${jwt.sign({ sub: '3' }, jwtSecret)}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({ sessionId: 1, harvestMethod: 'PICKUP', scheduledAt: '2026-11-28T09:00:00+07:00' }),
+    });
+    const result = await pickup.json();
+    assert.equal(pickup.status, 201, JSON.stringify(result));
+    assert.equal(result.data.scheduled_at, '2026-11-28T02:00:00.000Z');
+
+    assert.equal((await update('second', 'YOUNG_FRUITING')).status, 200);
+    assert.deepEqual(await readReadiness(), {
+      status: 'CULTIVATING', harvest_status: 'NOT_READY', harvest_ready_at: null, harvest_ready_by: null,
+    });
   await t.test('sets harvest readiness automatically after all mature trays pass the existing safety checks', async () => {
     await db.query('UPDATE order_items SET quantity = 2 WHERE order_item_id = 1');
     const firstTrayMature = await update('first', 'MATURATION');

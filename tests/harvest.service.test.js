@@ -8,7 +8,7 @@ function loadHarvestService() {
   const model = {
     create: async (...args) => {
       calls.push(['create', args]);
-      return { harvest_id: 8, session_id: args[0], status: 'PLANNED' };
+      return { harvest_id: 8, session_id: args[0], status: 'IN_PROGRESS' };
     },
     start: async (...args) => {
       calls.push(['start', args]);
@@ -66,13 +66,14 @@ function loadHarvestRequestService() {
 test('creates and advances a harvest with normalized identifiers', async () => {
   const { service, calls } = loadHarvestService();
 
-  const created = await service.createHarvest({ sessionId: '15' });
+  const created = await service.createHarvest({ sessionId: '15', totalWeightKg: 1, usableWeightKg: 1, rejectedWeightKg: 0 }, '2');
+  await assert.rejects(service.createHarvest({ sessionId: 15 }, 2), { statusCode: 400 });
   await service.startHarvest('8', '2');
   await service.completeHarvest('8', '2');
 
-  assert.deepEqual(created, { harvest_id: 8, session_id: 15, status: 'PLANNED' });
+  assert.deepEqual(created, { harvest_id: 8, session_id: 15, status: 'IN_PROGRESS' });
   assert.deepEqual(calls, [
-    ['create', [15]],
+    ['create', [15, { totalWeightKg: 1, usableWeightKg: 1, rejectedWeightKg: 0, qualityGrade: undefined, notes: undefined }, 2]],
     ['start', [8, 2]],
     ['complete', [8, 2]],
   ]);

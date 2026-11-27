@@ -677,6 +677,29 @@ async function updateGrowthForAdmin(sessionId, data) {
   }
 }
 
+async function hasBlockingHarvestIssues(client, sessionId) {
+  const issues = await client.query(
+    `SELECT ci.issue_id FROM cultivation_issues ci
+     INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+     WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
+       AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
+     FOR UPDATE OF ci`, [sessionId],
+  );
+  return issues.rows.length > 0;
+}
+
+async function notifyHarvestReady(client, sessionId) {
+  await client.query(
+    `INSERT INTO notifications (user_id, notification_type, title, message, reference_type, reference_id)
+     SELECT o.user_id, 'OPERATOR_MESSAGE', 'Mushrooms ready for harvest',
+            'Please choose pickup at the farm or external delivery.', 'CULTIVATION_SESSION', s.session_id
+     FROM cultivation_sessions s
+     JOIN order_items oi ON oi.order_item_id = s.order_item_id
+     JOIN orders o ON o.order_id = oi.order_id
+     WHERE s.session_id = $1`, [sessionId],
+  );
+}
+
 async function updateHarvestReadinessForAdmin(sessionId, data) {
   const client = await pool.connect();
   try {
@@ -707,20 +730,21 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
     if (data.harvestReady && latest.current_stage !== 'MATURATION') {
       throw new AppError('Cultivation must reach MATURATION before harvest readiness', 409, 'HARVEST_NOT_READY');
     }
-    if (data.harvestReady) {
-      const issues = await client.query(
-        `SELECT ci.issue_id FROM cultivation_issues ci
-         INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
-         WHERE st.session_id = $1 AND ci.status NOT IN ('RESOLVED', 'CANCELLED')
-           AND (ci.issue_type IN ('DISEASE', 'CONTAMINATION', 'QUALITY_FAILURE', 'DAMAGE') OR ci.severity = 'HIGH')
-         FOR UPDATE OF ci`, [sessionId],
-      );
-      if (issues.rows.length) throw new AppError('Vui lòng xử lý hết sự cố chất lượng hoặc sự cố nghiêm trọng trước khi xác nhận phiên sẵn sàng thu hoạch.', 409, 'UNRESOLVED_QUALITY_ISSUES');
+    if (data.harvestReady && await hasBlockingHarvestIssues(client, sessionId)) {
+      throw new AppError('Vui lòng xử lý hết sự cố chất lượng hoặc sự cố nghiêm trọng trước khi xác nhận phiên sẵn sàng thu hoạch.', 409, 'UNRESOLVED_QUALITY_ISSUES');
     }
     const result = await client.query(
       `UPDATE cultivation_sessions SET harvest_status = $2::varchar,
-         harvest_ready_at = CASE WHEN $2 = 'HARVEST_READY' THEN CURRENT_TIMESTAMP ELSE NULL END,
-         harvest_ready_by = CASE WHEN $2 = 'HARVEST_READY' THEN $3::integer ELSE NULL END
+         harvest_ready_at = CASE
+           WHEN $2 <> 'HARVEST_READY' THEN NULL
+           WHEN harvest_status = 'HARVEST_READY' THEN harvest_ready_at
+           ELSE CURRENT_TIMESTAMP
+         END,
+         harvest_ready_by = CASE
+           WHEN $2 <> 'HARVEST_READY' THEN NULL
+           WHEN harvest_status = 'HARVEST_READY' THEN harvest_ready_by
+           ELSE $3::integer
+         END
        WHERE session_id = $1 RETURNING session_id, status, harvest_status, start_at, harvest_date, harvest_ready_at, harvest_ready_by`,
       [sessionId, data.harvestReady ? 'HARVEST_READY' : 'NOT_READY', data.confirmedBy ?? null],
     );
@@ -734,12 +758,7 @@ async function updateHarvestReadinessForAdmin(sessionId, data) {
         data.notes ?? (data.harvestReady ? 'Harvest readiness confirmed' : 'Not ready for harvest')],
     );
     if (data.harvestReady && session.harvest_status !== 'HARVEST_READY') {
-      await client.query(
-        `INSERT INTO notifications (user_id, notification_type, title, message, reference_type, reference_id)
-         VALUES ($1, 'OPERATOR_MESSAGE', 'Mushrooms ready for harvest',
-           'Please choose pickup at the farm or external delivery.', 'CULTIVATION_SESSION', $2)`,
-        [session.user_id, sessionId],
-      );
+      await notifyHarvestReady(client, sessionId);
     } else if (!data.harvestReady && session.harvest_status === 'HARVEST_READY') {
       await client.query(
         `INSERT INTO notifications (
@@ -811,9 +830,9 @@ async function insertInspectionForActiveSessionTray(client, sessionTrayId, data,
   const inspectionResult = await client.query(
     `INSERT INTO cultivation_inspections (
        session_tray_id, inspected_by, tray_condition,
-       mushroom_condition, notes
+       mushroom_condition, notes, growth_status
      )
-     VALUES ($1, $2, $3, $4, $5)
+     VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
     [
       sessionTrayId,
@@ -821,8 +840,12 @@ async function insertInspectionForActiveSessionTray(client, sessionTrayId, data,
       data.trayCondition ?? null,
       data.mushroomCondition ?? null,
       data.notes ?? null,
+      data.growthStatus ?? null,
     ],
   );
+  if (data.growthStatus) {
+    await synchronizeTrayGrowth(client, assignment.session_id, sessionTrayId, inspectedBy);
+  }
   return { inspection: inspectionResult.rows[0] };
 }
 
@@ -976,6 +999,61 @@ async function saveDailyTrayGrowth(client, sessionTrayId, data, inspectedBy) {
   );
 }
 
+async function synchronizeTrayGrowth(client, sessionId, sessionTrayId, inspectedBy) {
+  const { trays, synchronization, session_stage: previousStage } = await findTrayGrowthStatusForAdmin(sessionId, client);
+  const { growth_status: growthStatus } = trays.find((tray) => tray.session_tray_id === sessionTrayId);
+  const stageChanged = synchronization.is_synchronized && growthStatus !== previousStage;
+  if (stageChanged) {
+    await client.query(
+      `INSERT INTO cultivation_progress (
+         session_id, current_stage, progress_percent, start_date, expected_harvest_date,
+         condition, description, updated_at
+       )
+       SELECT s.session_id, $2, COALESCE(p.progress_percent, 0),
+              CASE WHEN p.progress_id IS NULL THEN s.start_at::date ELSE p.start_date END,
+              CASE WHEN p.progress_id IS NULL THEN s.harvest_date ELSE p.expected_harvest_date END,
+              p.condition, p.description, statement_timestamp()
+       FROM cultivation_sessions s
+       LEFT JOIN LATERAL (
+         SELECT progress_id, progress_percent, start_date, expected_harvest_date, condition, description
+         FROM cultivation_progress
+         WHERE session_id = s.session_id
+         ORDER BY progress_id DESC
+         LIMIT 1
+       ) p ON TRUE
+       WHERE s.session_id = $1`,
+      [sessionId, growthStatus],
+    );
+  }
+
+
+  if (synchronization.is_synchronized && growthStatus === 'MATURATION'
+    && trays.every((tray) => tray.tray_status === 'OCCUPIED')) {
+    const eligible = await client.query(
+      `SELECT oi.quantity FROM cultivation_sessions s JOIN order_items oi USING (order_item_id)
+       WHERE s.session_id = $1 AND s.harvest_status <> 'HARVEST_READY'`,
+      [sessionId],
+    );
+    if (eligible.rows[0]?.quantity === trays.length && !await hasBlockingHarvestIssues(client, sessionId)) {
+      const ready = await client.query(
+        `UPDATE cultivation_sessions
+         SET harvest_status = 'HARVEST_READY', harvest_ready_at = statement_timestamp(), harvest_ready_by = $2
+         WHERE session_id = $1 AND harvest_status <> 'HARVEST_READY' RETURNING session_id`,
+        [sessionId, inspectedBy],
+      );
+      if (ready.rows.length) await notifyHarvestReady(client, sessionId);
+    }
+  } else if (growthStatus !== 'MATURATION') {
+    await client.query(
+      `UPDATE cultivation_sessions SET harvest_status = 'NOT_READY', harvest_ready_at = NULL, harvest_ready_by = NULL
+       WHERE session_id = $1 AND harvest_status = 'HARVEST_READY'`,
+      [sessionId],
+    );
+  }
+
+  return { trays, synchronization, previousStage, stageChanged, growthStatus };
+}
+
 async function updateTrayGrowthFromQrForAdmin(qrToken, data, inspectedBy) {
   const client = await pool.connect();
   try {
@@ -1007,31 +1085,8 @@ async function updateTrayGrowthFromQrForAdmin(qrToken, data, inspectedBy) {
 
     const { session_id: sessionId, session_tray_id: sessionTrayId } = assignment;
     await saveDailyTrayGrowth(client, sessionTrayId, data, inspectedBy);
-    const { trays, synchronization, session_stage: previousStage } = await findTrayGrowthStatusForAdmin(sessionId, client);
-    const growthStatus = trays.find((item) => item.session_tray_id === sessionTrayId).growth_status;
-    const stageChanged = synchronization.is_synchronized && growthStatus !== previousStage;
-    if (stageChanged) {
-      await client.query(
-        `INSERT INTO cultivation_progress (
-           session_id, current_stage, progress_percent, start_date, expected_harvest_date,
-           condition, description, updated_at
-         )
-         SELECT s.session_id, $2, COALESCE(p.progress_percent, 0),
-                CASE WHEN p.progress_id IS NULL THEN s.start_at::date ELSE p.start_date END,
-                CASE WHEN p.progress_id IS NULL THEN s.harvest_date ELSE p.expected_harvest_date END,
-                p.condition, p.description, statement_timestamp()
-         FROM cultivation_sessions s
-         LEFT JOIN LATERAL (
-           SELECT progress_id, progress_percent, start_date, expected_harvest_date, condition, description
-           FROM cultivation_progress
-           WHERE session_id = s.session_id
-           ORDER BY progress_id DESC
-           LIMIT 1
-         ) p ON TRUE
-         WHERE s.session_id = $1`,
-        [sessionId, growthStatus],
-      );
-    }
+    const { trays, synchronization, previousStage, stageChanged, growthStatus } =
+      await synchronizeTrayGrowth(client, sessionId, sessionTrayId, inspectedBy);
 
     let harvestReady = assignment.harvest_status === 'HARVEST_READY';
     let harvestReadyChanged = false;

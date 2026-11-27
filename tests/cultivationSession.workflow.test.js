@@ -23,6 +23,7 @@ async function setupDatabase() {
       order_item_id INTEGER NOT NULL,
       mushroom_type_id INTEGER NOT NULL,
       start_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      end_at TIMESTAMPTZ,
       harvest_date DATE,
       duration_days INTEGER NOT NULL,
       status TEXT NOT NULL,
@@ -75,6 +76,9 @@ async function setupDatabase() {
       description TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE TABLE cultivation_inspection_images (
+      image_id SERIAL PRIMARY KEY, inspection_id INTEGER, image_url TEXT, caption TEXT, uploaded_at TIMESTAMPTZ
+    );
     CREATE TABLE cultivation_inspections (
       inspection_id SERIAL PRIMARY KEY,
       session_tray_id INTEGER NOT NULL,
@@ -83,6 +87,7 @@ async function setupDatabase() {
       source TEXT DEFAULT 'MANUAL',
       tray_condition TEXT,
       mushroom_condition TEXT,
+      growth_status TEXT,
       notes TEXT
     );
     CREATE TABLE cultivation_issues (
@@ -169,9 +174,9 @@ test('daily tray histories use session growth progress recorded at each inspecti
   const db = await setupDatabase();
   try {
     const model = loadModel(db);
+    const { rows: [assignment] } = await db.query(`INSERT INTO cultivation_session_trays (session_id, tray_id, status)
+      VALUES (1, 1, 'ACTIVE') RETURNING session_tray_id`);
     await db.exec(`
-      INSERT INTO cultivation_session_trays (session_id, tray_id, status)
-      VALUES (1, 1, 'ACTIVE');
       INSERT INTO cultivation_progress
         (session_id, current_stage, progress_percent, updated_at)
       VALUES
@@ -180,12 +185,12 @@ test('daily tray histories use session growth progress recorded at each inspecti
       INSERT INTO cultivation_inspections
         (session_tray_id, inspected_by, inspection_date, tray_condition)
       VALUES
-        (1, 1, '2026-10-02T08:00:00Z', 'First check'),
-        (1, 1, '2026-10-04T08:00:00Z', 'Second check');
+        (${assignment.session_tray_id}, 1, '2026-10-02T08:00:00Z', 'First check'),
+        (${assignment.session_tray_id}, 1, '2026-10-04T08:00:00Z', 'Second check');
     `);
 
     const sessionHistory = await model.findDailyInspectionHistoryForAdmin(1, { limit: 10, offset: 0 });
-    const trayHistory = await model.findDailyInspectionHistoryForTray(1, 1, { limit: 10, offset: 0 });
+    const trayHistory = await model.findDailyInspectionHistoryForTray(1, assignment.session_tray_id, { limit: 10, offset: 0 });
 
     for (const inspections of [sessionHistory.inspections, trayHistory.inspections]) {
       assert.deepEqual(
@@ -441,6 +446,12 @@ test('growth history and separate readiness preserve lifecycle rules and atomici
     assert.ok((await db.query('SELECT * FROM notifications')).rows.length > 0);
     assert.equal((await db.query('SELECT count(*)::int AS n FROM harvests')).rows[0].n, 0);
     assert.equal((await model.findProgressForAdmin(1)).at(-1).description, 'Quality confirmed');
+    const originalReadyAt = '2026-11-26T02:00:00.000Z';
+    await db.query('UPDATE cultivation_sessions SET harvest_ready_at = $1 WHERE session_id = 1', [originalReadyAt]);
+    await db.exec("UPDATE cultivation_sessions SET harvest_date = '2026-11-29' WHERE session_id = 1");
+    const confirmedAgain = await model.updateHarvestReadinessForAdmin(1, { harvestReady: true, confirmedBy: 1 });
+    assert.equal(confirmedAgain.harvest_ready_at.toISOString(), originalReadyAt);
+    assert.equal(confirmedAgain.harvest_ready_by, 2);
     for (const status of ['READY_FOR_CULTIVATION','HARVEST_READY','HARVESTING','COMPLETED','CANCELLED']) {
       await db.query('UPDATE cultivation_sessions SET status=$1 WHERE session_id=1', [status]);
       await assert.rejects(() => model.updateGrowthForAdmin(1, growing), { code: 'INVALID_SESSION_STATUS' });
