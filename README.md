@@ -12,10 +12,79 @@ Backend API được xây dựng bằng Node.js, Express và PostgreSQL. Project
 
 PayOS gọi `POST /api/payments/payos/webhook` để cập nhật thanh toán. URL webhook phải là HTTPS public và cần được đăng ký bằng script `npm run payos:confirm-webhook`; app mobile không gọi endpoint webhook này trực tiếp.
 
+## Socket.IO
+
+Backend dùng Socket.IO trên cùng HTTP server với REST API. Client gửi access token hiện tại trong handshake; server kiểm tra JWT và trạng thái tài khoản trong database, sau đó tự đưa client vào room riêng `user:{userId}`. Client không được tự chọn room.
+
+```js
+import { io } from 'socket.io-client';
+
+const socket = io(API_URL, {
+  auth: { token: accessToken },
+});
+```
+
+Server có thể phát event riêng cho user bằng `emitToUser(userId, event, payload)` từ `src/socket`. REST vẫn là nguồn tải dữ liệu ban đầu và fallback khi socket mất kết nối.
+
+Client yêu cầu tham gia resource room bằng `socket.emit('room:join', { type, id }, callback)` và rời bằng `room:leave`. Chỉ chấp nhận `room`, `session`, `issue` và `consultation`; backend tự tạo tên room, không nhận room name trực tiếp. Admin và Farm Operator được kiểm tra resource theo role hiện tại. Customer chỉ được vào session/issue/consultation thuộc đơn của mình và room vật lý khi đang có khay active trong đó. Expert chỉ được vào issue có consultation giao cho mình và consultation được giao trực tiếp. `user:{userId}`, `admin` và `expert` được gán tự động theo tài khoản; không thể tự join room role khác. Event gửi vào `consultation:{id}` chỉ dành cho participant được phép, không gửi nội dung tư vấn riêng vào room role `expert`.
+
+Socket.IO tự reconnect ở client; sau mỗi lần `connect`, frontend phải yêu cầu join lại các resource room đang cần và đồng bộ state qua REST. Backend theo dõi số socket đang mở theo user; chỉ Admin nhận `user:presence.snapshot` và `user:presence.updated` (lần kết nối đầu/cuối của user). Presence và room adapter hiện chỉ dùng bộ nhớ của một backend process. Các business event được phát sau khi database write thành công; event là best-effort, không phải hàng đợi bền vững. Checklist event/room/lifecycle xem tại [socket event catalog](./docs/socket-event-catalog.md).
+
+### Notification realtime
+
+Notification được gửi qua API cập nhật phiên trồng sẽ phát `notification:new` vào room riêng `user:{userId}` của người nhận sau khi lưu thành công. Payload chỉ có `notification_id`, không phát tiêu đề hay nội dung. Client có thể nghe event để làm mới danh sách và unread count qua REST:
+
+```js
+socket.on('notification:new', () => {
+  refreshNotifications();
+});
+```
+
+Event là best-effort; REST vẫn là nguồn dữ liệu chính, bao gồm khi client kết nối lại.
+
+### Payment realtime
+
+Khi trạng thái đơn được cập nhật sau luồng PayOS, backend phát `payment:status.updated` vào room riêng của chủ đơn. Payload chỉ gồm `orderId`, `orderStatus` và `paymentStatus`; client nên tải lại trạng thái đơn qua REST thay vì coi socket là nguồn thanh toán chính. Webhook PayOS vẫn là nguồn xác nhận thanh toán.
+
+```js
+socket.on('payment:status.updated', ({ orderId }) => {
+  refreshOrderPaymentStatus(orderId);
+});
+```
+
+### Cultivation realtime
+
+Sau khi thay đổi phiên trồng, thu hoạch hoặc inspection được lưu thành công, backend phát `cultivation:session.updated` vào `session:{sessionId}`. Sự kiện bao gồm daily tray inspection, ảnh inspection, inspection tự động từ camera và spawn inspection; payload chỉ chứa mã inspection, loại thay đổi và một số trường trạng thái được cho phép, không phát ghi chú/nội dung inspection hoặc URL ảnh. Client phải tham gia room qua `room:join` với `{ type: 'session', id: sessionId }`; quyền truy cập được xác thực ở backend như trên.
+
+Payload chỉ chứa thông tin trạng thái để báo UI cần đồng bộ lại, không chứa ghi chú, nội dung kiểm tra hay thông tin khách hàng:
+
+```json
+{
+  "sessionId": 12,
+  "changeType": "GROWTH_UPDATED",
+  "occurredAt": "2026-10-25T10:00:00.000Z",
+  "status": "CULTIVATING",
+  "harvestStatus": "NOT_READY",
+  "growthStage": "PINNING",
+  "progressPercent": 42,
+  "harvestReady": false,
+  "expectedHarvestDate": "2026-11-30"
+}
+```
+
+Với inspection, `changeType` có thể là `TRAY_INSPECTION_RECORDED`, `TRAY_INSPECTION_UPDATED`, `TRAY_INSPECTION_IMAGE_ADDED`, `SPAWN_INSPECTION_RECORDED`, `SPAWN_INSPECTION_UPDATED`, `SPAWN_INSPECTION_IMAGE_ADDED` hoặc `SPAWN_REPLACEMENT_ISSUED`. Payload có thể bao gồm `inspectionId`; tray inspection còn có `inspectionSource: "MANUAL"` hoặc `"AUTO"`.
+
+`status`, `harvestStatus`, `growthStage`, `progressPercent`, `harvestReady`, `growthSynchronized`, `inspectionId`, `inspectionSource`, `assignedTrayCount`, `matchingTrays` và `expectedHarvestDate` là các trường tùy chọn theo loại thay đổi. Hãy dùng REST API hiện có để tải nội dung inspection, ảnh và dữ liệu chi tiết hoặc làm mới giao diện sau khi nhận event; Socket.IO chỉ là thông báo realtime best-effort, không thay thế REST.
+
+### IoT/MQTT realtime
+
+Khi `MQTT_HOST` được cấu hình, bản tin sensor, trạng thái master và trạng thái SSR được lưu Database trước rồi mới phát vào `room:{roomId}` tương ứng với room đã gán cho master. Client phải join room qua `room:join`; backend giữ nguyên kiểm tra quyền hiện tại. Các event là `iot:sensor.updated`, `iot:master.status.updated` và `iot:ssr.state.updated`. Payload có `receivedAt` và `retained`; SSR state là trạng thái thiết bị báo về, không xác nhận thiết bị vật lý đã hoạt động. REST vẫn là nguồn dữ liệu chính. Cấu hình broker xem tại [socket environment guide](./docs/socket-environment.md), event/payload xem tại [event catalog](./docs/socket-event-catalog.md).
+
 ## 1. Công nghệ sử dụng
 
 - Node.js
 - Express 5
+- Socket.IO
 - PostgreSQL
 - `pg` để kết nối PostgreSQL
 - `bcryptjs` để hash và kiểm tra password

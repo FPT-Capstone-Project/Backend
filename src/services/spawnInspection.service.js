@@ -1,5 +1,6 @@
 const spawnInspectionModel = require('../models/spawnInspection.model');
 const cloudinaryService = require('./cloudinary.service');
+const cultivationRealtime = require('./cultivationRealtime.service');
 const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 
@@ -77,11 +78,16 @@ async function getFarmSession(sessionId) {
 
 async function createFarmInspection(sessionId, inspectedBy, payload = {}) {
   const data = parseInspectionPayload(payload, { defaultReplacementQuantity: 0 });
-  return spawnInspectionModel.createInspection(
-    parseId(sessionId, 'sessionId'),
+  const id = parseId(sessionId, 'sessionId');
+  const inspection = await spawnInspectionModel.createInspection(
+    id,
     parseId(inspectedBy, 'inspectedBy'),
     data,
   );
+  cultivationRealtime.publishSessionUpdate(id, 'SPAWN_INSPECTION_RECORDED', {
+    inspectionId: inspection.inspection_id,
+  });
+  return inspection;
 }
 
 function parseInspectionPayload(payload, { defaultReplacementQuantity } = {}) {
@@ -124,11 +130,16 @@ function parseInspectionPayload(payload, { defaultReplacementQuantity } = {}) {
 }
 
 async function updateFarmInspection(sessionId, inspectionId, payload = {}) {
-  return spawnInspectionModel.updateInspection(
-    parseId(sessionId, 'sessionId'),
+  const id = parseId(sessionId, 'sessionId');
+  const inspection = await spawnInspectionModel.updateInspection(
+    id,
     parseId(inspectionId, 'inspectionId'),
     parseInspectionPayload(payload),
   );
+  cultivationRealtime.publishSessionUpdate(id, 'SPAWN_INSPECTION_UPDATED', {
+    inspectionId: inspection.inspection_id,
+  });
+  return inspection;
 }
 
 async function listFarmInspections(sessionId) {
@@ -143,7 +154,11 @@ async function addFarmInspectionImage(inspectionId, file, payload = {}) {
   if (!inspection) throw new AppError('Spawn inspection not found', 404);
   const caption = parseText(payload.caption, 'caption', { maxLength: 500 });
   const imageUrl = await cloudinaryService.uploadImage(file, 'spawn-inspections');
-  return spawnInspectionModel.createImage(id, imageUrl, caption);
+  const image = await spawnInspectionModel.createImage(id, imageUrl, caption);
+  cultivationRealtime.publishSessionUpdate(inspection.session_id, 'SPAWN_INSPECTION_IMAGE_ADDED', {
+    inspectionId: id,
+  });
+  return image;
 }
 
 async function replaceFarmSpawn(inspectionId, payload = {}) {
@@ -152,10 +167,14 @@ async function replaceFarmSpawn(inspectionId, payload = {}) {
     'replacementQuantity',
   );
   if (quantity < 1) throw new AppError('replacementQuantity must be greater than zero', 400);
-  return spawnInspectionModel.replaceAbnormalSpawn(
+  const inspection = await spawnInspectionModel.replaceAbnormalSpawn(
     parseId(inspectionId, 'inspectionId'),
     quantity,
   );
+  cultivationRealtime.publishSessionUpdate(inspection.session_id, 'SPAWN_REPLACEMENT_ISSUED', {
+    inspectionId: inspection.inspection_id,
+  });
+  return inspection;
 }
 
 async function changeFarmStage(sessionId, payload = {}) {
@@ -173,7 +192,13 @@ async function changeFarmStage(sessionId, payload = {}) {
       400,
     );
   }
-  return spawnInspectionModel.changeStage(parseId(sessionId, 'sessionId'), nextStage);
+  const id = parseId(sessionId, 'sessionId');
+  const result = await spawnInspectionModel.changeStage(id, nextStage);
+  cultivationRealtime.publishSessionUpdate(id, 'STAGE_CHANGED', {
+    status: result.status,
+    harvestStatus: result.harvest_status,
+  });
+  return result;
 }
 
 async function listCustomerSessions(userId, query) {

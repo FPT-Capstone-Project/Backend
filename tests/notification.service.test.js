@@ -6,10 +6,13 @@ function loadService({
   notification = { notification_id: 10 },
 } = {}) {
   const modelPath = require.resolve('../src/models/notification.model');
+  const realtimePath = require.resolve('../src/services/notificationRealtime.service');
   const servicePath = require.resolve('../src/services/notification.service');
   const calls = [];
+  const events = [];
 
   delete require.cache[modelPath];
+  delete require.cache[realtimePath];
   delete require.cache[servicePath];
   require.cache[modelPath] = {
     exports: {
@@ -35,12 +38,17 @@ function loadService({
       },
     },
   };
+  require.cache[realtimePath] = {
+    exports: {
+      publishNewNotification: (...args) => events.push(args),
+    },
+  };
 
-  return { service: require('../src/services/notification.service'), calls };
+  return { service: require('../src/services/notification.service'), calls, events };
 }
 
 test('validates and sends a cultivation session notification with the operator ID', async () => {
-  const { service, calls } = loadService();
+  const { service, calls, events } = loadService();
 
   const result = await service.sendCultivationSessionNotification('4', {
     message: ' Cultivation update ',
@@ -49,6 +57,7 @@ test('validates and sends a cultivation session notification with the operator I
   }, '2');
 
   assert.deepEqual(result, { notification_id: 10 });
+  assert.deepEqual(events, [[8, 10]]);
   assert.deepEqual(calls, [
     { method: 'findSessionRecipient', args: [4] },
     {

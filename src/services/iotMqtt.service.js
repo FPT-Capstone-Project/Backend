@@ -3,6 +3,7 @@ const { performance } = require('node:perf_hooks');
 const mqtt = require('mqtt');
 const getConfig = require('../config/iot');
 const model = require('../models/iot.model');
+const iotRealtime = require('./iotRealtime.service');
 const { parseMessage, masterId, integer, action } = require('../utils/iot-protocol');
 const AppError = require('../utils/app-error');
 const trace = require('../utils/iot-trace');
@@ -10,6 +11,7 @@ const trace = require('../utils/iot-trace');
 const TOPICS = ['smartmush/+/node/+/sensor/+', 'smartmush/+/status', 'smartmush/+/ssr/+/state'];
 
 function createMqttService({ connect = mqtt.connect, repository = model, config = getConfig,
+  realtime = iotRealtime,
   logger = console, timeoutMs = 5000, now = () => performance.now() } = {}) {
   let client;
   let stopping = false;
@@ -84,14 +86,30 @@ function createMqttService({ connect = mqtt.connect, repository = model, config 
       lane.queued += 1;
       lane.tail = lane.tail.then(async () => {
         if (isSsr) trace(logger, 'ssr.db.start', { ...context, queueWaitMs: now() - receivedTick });
-        const accepted = await repository.receive(message, receivedAt, Boolean(packet.retain),
-          isSsr ? { logger, context } : undefined);
+        let accepted;
+        try {
+          accepted = await repository.receive(message, receivedAt, Boolean(packet.retain),
+            isSsr ? { logger, context } : undefined);
+        } catch (error) {
+          if (isSsr) trace(logger, 'ssr.db.failed', context);
+          logger.error('Không thể lưu dữ liệu MQTT', { code: error?.code });
+          return;
+        }
         if (isSsr) trace(logger, accepted ? 'ssr.db.committed' : 'ssr.db.ignored',
           { ...context, receiveToCommitMs: now() - receivedTick });
-        if (!accepted) logger.warn('Đã bỏ qua bản tin MQTT: bộ điều khiển trung tâm chưa được đăng ký');
-      }).catch(() => {
-        logger.error('Không thể lưu dữ liệu MQTT');
-        if (isSsr) trace(logger, 'ssr.db.failed', context);
+        if (!accepted) {
+          logger.warn('Đã bỏ qua bản tin MQTT: bộ điều khiển trung tâm chưa được đăng ký');
+          return;
+        }
+        try {
+          const master = await repository.findMaster(message.master);
+          if (!master || master.cultivationRoomId == null) return;
+          realtime.publish(master.cultivationRoomId, message, receivedAt, Boolean(packet.retain));
+        } catch (error) {
+          logger.error('Không thể định tuyến dữ liệu MQTT đã lưu tới Socket.IO:', { code: error?.code });
+        }
+      }).catch((error) => {
+        logger.error('Lỗi không mong đợi khi xử lý dữ liệu MQTT', error);
       }).finally(() => { lane.queued -= 1; });
     });
     maintenance = setInterval(() => repository.expireCommands().catch(() => logger.error('Không thể xử lý lệnh IoT hết hạn')), 5000);

@@ -44,14 +44,21 @@ class MockMqtt extends EventEmitter {
 function harness(overrides = {}) {
   const client = new MockMqtt();
   let connections = 0; let options;
-  const messages = [];
-  const repository = { receive: async (...args) => { messages.push(args); return true; }, expireCommands: async () => {}, ...overrides.repository };
+  const messages = []; const realtimeEvents = [];
+  const repository = {
+    receive: async (...args) => { messages.push(args); return true; },
+    findMaster: async () => ({ cultivationRoomId: 1 }),
+    expireCommands: async () => {},
+    ...overrides.repository,
+  };
   const service = createMqttService({ connect: (opts) => { connections += 1; options = opts; return client; },
     config: () => ({ host: 'example.com', port: 8883, clientId: 'test' }), repository, logger: overrides.logger || silent,
+    realtime: overrides.realtime || { publish: (...args) => realtimeEvents.push(args) },
     timeoutMs: overrides.timeoutMs || 1000, now: overrides.now });
   service.start();
   client.emit('connect');
-  return { client, service, messages, get connections() { return connections; }, get options() { return options; } };
+  return { client, service, messages, realtimeEvents,
+    get connections() { return connections; }, get options() { return options; } };
 }
 
 test('sensor parsing accepts successful/failed polls and multiple node addresses', () => {
@@ -143,6 +150,53 @@ test('SSR reports persist independently and bad persistence does not break later
     await h.service.drain(); assert.equal(calls, 2);
     assert.deepEqual(parseMessage('smartmush/master01/ssr/8/state', Buffer.from('OFF')),
       { type: 'ssr', master: 'master01', channel: 8, state: 'OFF' });
+  } finally { await h.service.stop(); }
+});
+
+test('broadcasts IoT telemetry only after persistence and only for a room-assigned master', async () => {
+  const order = []; const events = []; let persistedAt;
+  const h = harness({
+    repository: {
+      receive: async (message, receivedAt) => {
+        order.push('committed');
+        persistedAt = receivedAt;
+        return true;
+      },
+      findMaster: async () => { order.push('room-lookup'); return { cultivationRoomId: 5 }; },
+    },
+    realtime: {
+      publish: (...args) => { order.push('broadcast'); events.push(args); },
+    },
+  });
+  try {
+    h.client.emit('message', sensorTopic, buffer(reading), { retain: false });
+    await h.service.drain();
+
+    assert.deepEqual(order, ['committed', 'room-lookup', 'broadcast']);
+    assert.deepEqual(events, [[5, { type: 'sensor', master: 'master01', node: 1, sensor: 1,
+      ok: true, temperature: 27.5, humidity: 85.2 }, persistedAt, false]]);
+    assert.ok(persistedAt instanceof Date);
+  } finally { await h.service.stop(); }
+});
+
+test('does not broadcast rejected, unpersisted, or unassigned-master telemetry', async () => {
+  let receives = 0;
+  const h = harness({
+    repository: {
+      receive: async () => {
+        receives += 1;
+        if (receives === 1) throw new Error('database unavailable');
+        return receives === 2;
+      },
+      findMaster: async () => ({ cultivationRoomId: null }),
+    },
+  });
+  try {
+    h.client.emit('message', sensorTopic, buffer(reading), { retain: false });
+    h.client.emit('message', sensorTopic, buffer(reading), { retain: false });
+    h.client.emit('message', sensorTopic, buffer(reading), { retain: false });
+    await h.service.drain();
+    assert.deepEqual(h.realtimeEvents, []);
   } finally { await h.service.stop(); }
 });
 

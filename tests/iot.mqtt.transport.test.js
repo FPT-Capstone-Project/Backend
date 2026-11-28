@@ -12,7 +12,12 @@ test('actual MQTT.js discards QoS 1 packets before reconnect and resubscribes wi
   const service = createMqttService({
     config: () => ({ host: 'mock', port: 8883, clientId: 'test' }),
     logger: { info() {}, warn() {}, error() {} },
-    repository: { expireCommands: async () => {}, receive: async (...args) => { received.push(args); return true; } },
+    repository: {
+      expireCommands: async () => {},
+      receive: async (...args) => { received.push(args); return true; },
+      findMaster: async () => ({ cultivationRoomId: 2 }),
+    },
+    realtime: { publish() {} },
     connect: (options) => {
       client = new mqtt.MqttClient(() => {
         const parser = wire.parser({ protocolVersion: 5 });

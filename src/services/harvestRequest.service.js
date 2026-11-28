@@ -1,4 +1,5 @@
 const harvestRequestModel = require('../models/harvestRequest.model');
+const cultivationRealtime = require('./cultivationRealtime.service');
 const AppError = require('../utils/app-error');
 
 const HARVEST_METHODS = ['PICKUP', 'DELIVERY'];
@@ -75,10 +76,16 @@ async function updateHarvestRequest(harvestRequestId, payload = {}, actor) {
 }
 
 async function completeHarvestRequest(harvestRequestId, actor) {
-  return harvestRequestModel.complete(
+  const result = await harvestRequestModel.complete(
     parseId(harvestRequestId, 'harvestRequestId'),
     actor,
   );
+  if (result.session_id !== undefined) {
+    cultivationRealtime.publishSessionUpdate(result.session_id, 'HARVEST_HANDOVER_COMPLETED', {
+      status: 'COMPLETED',
+    });
+  }
+  return result;
 }
 
 module.exports = {

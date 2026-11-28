@@ -42,7 +42,12 @@ function loadPaymentModel({ staleReservations = [], hasPendingPayment = true } =
 
       if (statement.startsWith("UPDATE orders SET payment_status = 'FAILED'")) {
         state.failedOrderIds.push(values[0]);
-        return { rows: [] };
+        return { rows: [{
+          order_id: values[0],
+          user_id: 3,
+          status: 'PENDING',
+          payment_status: 'FAILED',
+        }] };
       }
 
       if (statement.startsWith("UPDATE tray_reservations SET status = 'EXPIRED'")) {
@@ -67,9 +72,15 @@ test('expires held reservations, cancels their pending payment, and leaves the o
     staleReservations: [{ reservation_id: 31, order_id: 11 }],
   });
 
-  const processed = await model.expireStalePayosPayments();
+  const result = await model.expireStalePayosPayments();
 
-  assert.equal(processed, 1);
+  assert.equal(result.processedCount, 1);
+  assert.deepEqual(result.statusChanges, [{
+    order_id: 11,
+    user_id: 3,
+    status: 'PENDING',
+    payment_status: 'FAILED',
+  }]);
   assert.deepEqual(state.cancelledOrderIds, [11]);
   assert.deepEqual(state.failedOrderIds, [11]);
   assert.deepEqual(state.expiredReservations, [31]);
@@ -85,7 +96,10 @@ test('expires held reservations, cancels their pending payment, and leaves the o
 test('returns zero when no stale pending PayOS payment is found', async () => {
   const { model, state } = loadPaymentModel();
 
-  assert.equal(await model.expireStalePayosPayments(), 0);
+  assert.deepEqual(await model.expireStalePayosPayments(), {
+    processedCount: 0,
+    statusChanges: [],
+  });
   assert.deepEqual(state.cancelledOrderIds, []);
   assert.deepEqual(state.failedOrderIds, []);
 });

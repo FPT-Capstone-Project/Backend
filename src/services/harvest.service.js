@@ -1,4 +1,5 @@
 const harvestModel = require('../models/harvest.model');
+const cultivationRealtime = require('./cultivationRealtime.service');
 const AppError = require('../utils/app-error');
 
 const HARVEST_STATUSES = ['PLANNED', 'IN_PROGRESS', 'COMPLETED', 'CANCELLED'];
@@ -61,10 +62,16 @@ async function createHarvest(payload = {}, harvestedBy) {
 }
 
 async function startHarvest(harvestId, harvestedBy) {
-  return harvestModel.start(
+  const result = await harvestModel.start(
     parseId(harvestId, 'harvestId'),
     parseId(harvestedBy, 'harvestedBy'),
   );
+  if (result.session_id !== undefined) {
+    cultivationRealtime.publishSessionUpdate(result.session_id, 'HARVEST_STARTED', {
+      status: 'HARVESTING',
+    });
+  }
+  return result;
 }
 
 function normalizeYield(payload) {
@@ -98,18 +105,26 @@ function normalizeYield(payload) {
 }
 
 async function recordYield(harvestId, payload = {}, harvestedBy) {
-  return harvestModel.recordYield(
+  const result = await harvestModel.recordYield(
     parseId(harvestId, 'harvestId'),
     normalizeYield(payload),
     parseId(harvestedBy, 'harvestedBy'),
   );
+  if (result.session_id !== undefined) {
+    cultivationRealtime.publishSessionUpdate(result.session_id, 'HARVEST_YIELD_RECORDED');
+  }
+  return result;
 }
 
 async function completeHarvest(harvestId, harvestedBy) {
-  return harvestModel.complete(
+  const result = await harvestModel.complete(
     parseId(harvestId, 'harvestId'),
     parseId(harvestedBy, 'harvestedBy'),
   );
+  if (result.session_id !== undefined) {
+    cultivationRealtime.publishSessionUpdate(result.session_id, 'HARVEST_COMPLETED');
+  }
+  return result;
 }
 
 async function getHarvest(harvestId) {

@@ -1,5 +1,6 @@
 const env = require('../config/env');
 const paymentModel = require('../models/payment.model');
+const paymentRealtime = require('./paymentRealtime.service');
 const AppError = require('../utils/app-error');
 const {
   signPaymentRequest,
@@ -90,10 +91,12 @@ async function createPayosPayment(userId, orderId) {
   );
 
   if (reused) return toPaymentResponse(payment);
+  paymentRealtime.publishOrderPaymentStatus(customerId, id, 'PENDING', 'PENDING');
 
   const expiresAt = getExpiresAt(payment);
   if (expiresAt <= Math.floor(Date.now() / 1000)) {
-    await paymentModel.markPayosPaymentFailed(payment.payment_id);
+    const failed = await paymentModel.markPayosPaymentFailed(payment.payment_id);
+    if (failed) paymentRealtime.publishOrderPaymentStatus(customerId, id, 'PENDING', 'FAILED');
     throw new AppError('Payment reservation has expired', 409);
   }
   const request = {
@@ -119,7 +122,8 @@ async function createPayosPayment(userId, orderId) {
     if (!savedPayment) throw new AppError('Payment is no longer available', 409);
     return toPaymentResponse(savedPayment);
   } catch (error) {
-    await paymentModel.markPayosPaymentFailed(payment.payment_id);
+    const failed = await paymentModel.markPayosPaymentFailed(payment.payment_id);
+    if (failed) paymentRealtime.publishOrderPaymentStatus(customerId, id, 'PENDING', 'FAILED');
     if (error && Number.isInteger(error.statusCode)) throw error;
     throw new AppError('PayOS request failed', 502);
   }
@@ -165,10 +169,32 @@ function paymentReference(payment) {
   return transaction ? transaction.reference : null;
 }
 
+function publishStatusIfChanged(before, after) {
+  if (!before || !after
+    || (before.order_status === after.order_status
+      && before.payment_status === after.payment_status)) return;
+  paymentRealtime.publishOrderPaymentStatus(
+    after.user_id,
+    after.order_id,
+    after.order_status,
+    after.payment_status,
+  );
+}
+
+async function getPaymentRealtimeStatus(paymentId) {
+  try {
+    return await paymentModel.findPayosPaymentRealtimeStatus(paymentId);
+  } catch (error) {
+    console.error('Không thể lấy trạng thái thanh toán để phát realtime:', error);
+    return null;
+  }
+}
+
 async function syncPayosPayment(userId, orderId) {
   ensurePayosConfiguration();
 
-  const local = await getOwnedPayosPayment(userId, orderId);
+  const customerId = parseId(userId, 'userId');
+  const local = await getOwnedPayosPayment(customerId, orderId);
   if (local.payment.status === 'PAID') {
     return {
       synced: false,
@@ -217,6 +243,18 @@ async function syncPayosPayment(userId, orderId) {
   if (!payment) throw new AppError('Payment could not be synchronized', 409);
 
   const synchronized = await getOwnedPayosPayment(userId, orderId);
+  publishStatusIfChanged(
+    {
+      order_status: local.order.status,
+      payment_status: local.order.payment_status,
+    },
+    {
+      user_id: customerId,
+      order_id: synchronized.order.order_id,
+      order_status: synchronized.order.status,
+      payment_status: synchronized.order.payment_status,
+    },
+  );
   return {
     synced: true,
     payosStatus,
@@ -251,12 +289,22 @@ async function handlePayosWebhook(payload) {
     return null;
   }
 
+  const previous = await getPaymentRealtimeStatus(orderCode);
   if (payload.success !== true || payload.code !== '00' || data.code !== '00') {
-    await paymentModel.markPayosPaymentFailed(orderCode);
+    const failed = await paymentModel.markPayosPaymentFailed(orderCode);
+    if (failed) {
+      const current = await getPaymentRealtimeStatus(orderCode);
+      publishStatusIfChanged(previous, current);
+    }
     return null;
   }
 
-  return paymentModel.markPayosPaymentAsPaid(orderCode, Number(data.amount), data.reference);
+  const paid = await paymentModel.markPayosPaymentAsPaid(orderCode, Number(data.amount), data.reference);
+  if (paid) {
+    const current = await getPaymentRealtimeStatus(orderCode);
+    publishStatusIfChanged(previous, current);
+  }
+  return paid;
 }
 
 function payosWebhookHealth() {

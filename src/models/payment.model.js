@@ -656,6 +656,7 @@ async function expireStalePayosPayments() {
     );
 
     let processedCount = 0;
+    const statusChanges = [];
     for (const reservation of staleReservationsResult.rows) {
       await client.query(
         `SELECT order_id
@@ -702,26 +703,40 @@ async function expireStalePayosPayments() {
         [reservation.order_id, PAYOS_PAYMENT_METHOD],
       );
       if (cancelledPaymentsResult.rows.length > 0) {
-        await client.query(
+        const failedOrderResult = await client.query(
           `UPDATE orders
            SET payment_status = 'FAILED'
            WHERE order_id = $1
              AND status = 'PENDING'
-             AND payment_status = 'PENDING'`,
+             AND payment_status = 'PENDING'
+           RETURNING order_id, user_id, status, payment_status`,
           [reservation.order_id],
         );
+        statusChanges.push(...failedOrderResult.rows);
       }
       processedCount += 1;
     }
 
     await client.query('COMMIT');
-    return processedCount;
+    return { processedCount, statusChanges };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
   } finally {
     client.release();
   }
+}
+
+async function findPayosPaymentRealtimeStatus(paymentId) {
+  const result = await pool.query(
+    `SELECT o.user_id, o.order_id, o.status AS order_status, o.payment_status
+     FROM payments p
+     INNER JOIN orders o ON o.order_id = p.order_id
+     WHERE p.payment_id = $1 AND p.payment_method = $2
+     LIMIT 1`,
+    [paymentId, PAYOS_PAYMENT_METHOD],
+  );
+  return result.rows[0] || null;
 }
 
 async function findPayosPaymentStatus(orderId, userId) {
@@ -753,5 +768,6 @@ module.exports = {
   markPayosPaymentAsPaid,
   markPayosPaymentFailed,
   expireStalePayosPayments,
+  findPayosPaymentRealtimeStatus,
   findPayosPaymentStatus,
 };
