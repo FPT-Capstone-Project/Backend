@@ -106,7 +106,7 @@ async function createCaptureInspection({
 }) {
   const result = await pool.query(
     `WITH eligible_assignment AS (
-       SELECT st.session_tray_id
+       SELECT st.session_tray_id, st.session_id
        FROM public.cultivation_session_trays st
        INNER JOIN public.cultivation_sessions s ON s.session_id = st.session_id
        INNER JOIN public.cultivation_trays t ON t.tray_id = st.tray_id
@@ -122,12 +122,18 @@ async function createCaptureInspection({
        )
        SELECT session_tray_id, $3, $6, 'AUTO', $4, $6
        FROM eligible_assignment
+       RETURNING inspection_id, session_tray_id
+     ),
+     new_image AS (
+       INSERT INTO public.cultivation_inspection_images (inspection_id, image_url)
+       SELECT inspection_id, $5
+       FROM new_inspection
        RETURNING inspection_id
      )
-     INSERT INTO public.cultivation_inspection_images (inspection_id, image_url)
-     SELECT inspection_id, $5
-     FROM new_inspection
-     RETURNING inspection_id`,
+     SELECT ni.inspection_id, ea.session_id
+     FROM new_image image
+     INNER JOIN new_inspection ni ON ni.inspection_id = image.inspection_id
+     INNER JOIN eligible_assignment ea ON ea.session_tray_id = ni.session_tray_id`,
     [sessionTrayId, floorId, inspectedBy, logId, imageUrl, capturedAt],
   );
   return result.rows[0] || null;

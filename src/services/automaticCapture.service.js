@@ -1,6 +1,7 @@
 const model = require('../models/automaticCapture.model');
 const cameraService = require('./camera.service');
 const cloudinaryService = require('./cloudinary.service');
+const cultivationRealtime = require('./cultivationRealtime.service');
 const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 
@@ -205,6 +206,14 @@ async function testCapture(rawCameraId, inspectedBy) {
       if (!inspection) {
         throw new AppError('Session tray is no longer active on this camera floor', 409);
       }
+      cultivationRealtime.publishSessionUpdate(
+        inspection.session_id,
+        'TRAY_INSPECTION_RECORDED',
+        {
+          inspectionId: inspection.inspection_id,
+          inspectionSource: 'AUTO',
+        },
+      );
       trayResults.push({
         trayId: tray.tray_id,
         sessionTrayId: tray.session_tray_id,

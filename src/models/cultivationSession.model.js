@@ -565,9 +565,10 @@ async function findIncidentsForAdmin(sessionId) {
 
 async function findInspectionForImage(inspectionId) {
   const result = await pool.query(
-    `SELECT inspection_id
-     FROM cultivation_inspections
-     WHERE inspection_id = $1
+    `SELECT ci.inspection_id, ci.source, st.session_id
+     FROM cultivation_inspections ci
+     INNER JOIN cultivation_session_trays st ON st.session_tray_id = ci.session_tray_id
+     WHERE ci.inspection_id = $1
      LIMIT 1`,
     [inspectionId],
   );
@@ -846,7 +847,7 @@ async function insertInspectionForActiveSessionTray(client, sessionTrayId, data,
   if (data.growthStatus) {
     await synchronizeTrayGrowth(client, assignment.session_id, sessionTrayId, inspectedBy);
   }
-  return { inspection: inspectionResult.rows[0] };
+  return { session_id: assignment.session_id, inspection: inspectionResult.rows[0] };
 }
 
 async function createInspectionForAdmin(sessionTrayId, data, inspectedBy) {
@@ -1180,7 +1181,7 @@ async function updateInspectionForAdmin(sessionTrayId, inspectionId, data) {
   try {
     await client.query('BEGIN');
     const assignmentResult = await client.query(
-      `SELECT st.session_tray_id
+      `SELECT st.session_tray_id, st.session_id
        FROM cultivation_session_trays st
        INNER JOIN cultivation_sessions s ON s.session_id = st.session_id
        WHERE st.session_tray_id = $1
@@ -1216,7 +1217,7 @@ async function updateInspectionForAdmin(sessionTrayId, inspectionId, data) {
       ],
     );
     await client.query('COMMIT');
-    return { inspection: updated.rows[0] };
+    return { session_id: assignmentResult.rows[0].session_id, inspection: updated.rows[0] };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;

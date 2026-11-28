@@ -1,5 +1,6 @@
 const cultivationSessionModel = require('../models/cultivationSession.model');
 const cloudinaryService = require('./cloudinary.service');
+const cultivationRealtime = require('./cultivationRealtime.service');
 const AppError = require('../utils/app-error');
 
 const SESSION_STATUSES = [
@@ -271,13 +272,21 @@ async function getAccessibleSessionId(sessionId, user) {
 }
 
 async function assignTraysForAdmin(sessionId, payload = {}) {
-  return cultivationSessionModel.assignTraysForAdmin(
-    parseId(sessionId, 'sessionId'),
+  const id = parseId(sessionId, 'sessionId');
+  const result = await cultivationSessionModel.assignTraysForAdmin(
+    id,
     {
       floorId: parseId(payload.floorId ?? payload.floor_id, 'floorId'),
       trayIds: parseTrayIds(payload.trayIds ?? payload.tray_ids),
     },
   );
+  cultivationRealtime.publishSessionUpdate(id, 'TRAYS_ASSIGNED', {
+    status: result.status,
+    harvestStatus: result.harvest_status,
+    assignedTrayCount: result.assigned_trays_count,
+    expectedHarvestDate: result.harvest_date,
+  });
+  return result;
 }
 
 async function updateGrowthForAdmin(sessionId, payload = {}) {
@@ -292,23 +301,40 @@ async function updateGrowthForAdmin(sessionId, payload = {}) {
       throw new AppError('expectedHarvestDate must be a valid YYYY-MM-DD date', 400);
     }
   }
-  return cultivationSessionModel.updateGrowthForAdmin(parseId(sessionId, 'sessionId'), {
+  const id = parseId(sessionId, 'sessionId');
+  const result = await cultivationSessionModel.updateGrowthForAdmin(id, {
     currentStage,
     progressPercent,
     expectedHarvestDate,
     condition: parseText(payload.condition, 'condition', { required: true, maxLength: 500 }),
     notes: parseText(payload.notes, 'notes'),
   });
+  cultivationRealtime.publishSessionUpdate(id, 'GROWTH_UPDATED', {
+    status: result.status,
+    harvestStatus: result.harvest_status,
+    growthStage: result.growth_status,
+    progressPercent: Number(result.progress_percent),
+    harvestReady: result.harvest_ready,
+    expectedHarvestDate: result.expected_harvest_date,
+  });
+  return result;
 }
 
 async function updateHarvestReadinessForAdmin(sessionId, payload = {}, confirmedBy) {
   const harvestReady = payload.harvestReady ?? payload.harvest_ready;
   if (typeof harvestReady !== 'boolean') throw new AppError('harvestReady must be a boolean', 400);
-  return cultivationSessionModel.updateHarvestReadinessForAdmin(parseId(sessionId, 'sessionId'), {
+  const id = parseId(sessionId, 'sessionId');
+  const result = await cultivationSessionModel.updateHarvestReadinessForAdmin(id, {
     harvestReady,
     confirmedBy: parseId(confirmedBy, 'confirmedBy'),
     notes: parseText(payload.notes, 'notes'),
   });
+  cultivationRealtime.publishSessionUpdate(id, 'HARVEST_READINESS_CHANGED', {
+    status: result.status,
+    harvestStatus: result.harvest_status,
+    harvestReady: result.harvest_ready,
+  });
+  return result;
 }
 
 async function updateTrayGrowthFromQrForAdmin(payload, inspectedBy) {
@@ -320,11 +346,22 @@ async function updateTrayGrowthFromQrForAdmin(payload, inspectedBy) {
 
   const qrToken = parseText(payload.qr_token, 'qr_token', { required: true, maxLength: 256 });
   const growthStatus = parseGrowthStage(payload.growth_status, 'growth_status');
-  return cultivationSessionModel.updateTrayGrowthFromQrForAdmin(
+  const result = await cultivationSessionModel.updateTrayGrowthFromQrForAdmin(
     qrToken,
     { ...parseDailyInspectionPayload(payload), growthStatus },
     inspectedBy,
   );
+  const data = result.data;
+  cultivationRealtime.publishSessionUpdate(data.session_id, 'TRAY_INSPECTION_RECORDED', {
+    inspectionSource: 'MANUAL',
+    status: data.status,
+    harvestStatus: data.harvest_status,
+    growthStage: data.growth_status,
+    harvestReady: data.harvest_ready,
+    growthSynchronized: data.synchronization?.is_synchronized,
+    matchingTrays: data.synchronization?.matching_trays,
+  });
+  return result;
 }
 
 async function getTrayGrowthStatusForAdmin(sessionId) {
@@ -336,19 +373,33 @@ async function getTrayGrowthStatusForAdmin(sessionId) {
 }
 
 async function createInspectionForAdmin(sessionTrayId, payload = {}, inspectedBy) {
-  return cultivationSessionModel.createInspectionForAdmin(
+  const result = await cultivationSessionModel.createInspectionForAdmin(
     parseId(sessionTrayId, 'sessionTrayId'),
     parseDailyInspectionPayload(payload, true),
     parseId(inspectedBy, 'inspectedBy'),
   );
+  cultivationRealtime.publishSessionUpdate(result.session_id, 'TRAY_INSPECTION_RECORDED', {
+    inspectionId: result.inspection.inspection_id,
+    inspectionSource: 'MANUAL',
+  });
+  const response = { ...result };
+  delete response.session_id;
+  return response;
 }
 
 async function updateInspectionForAdmin(sessionTrayId, inspectionId, payload = {}) {
-  return cultivationSessionModel.updateInspectionForAdmin(
+  const result = await cultivationSessionModel.updateInspectionForAdmin(
     parseId(sessionTrayId, 'sessionTrayId'),
     parseId(inspectionId, 'inspectionId'),
     parseDailyInspectionPayload(payload),
   );
+  cultivationRealtime.publishSessionUpdate(result.session_id, 'TRAY_INSPECTION_UPDATED', {
+    inspectionId: result.inspection.inspection_id,
+    inspectionSource: 'MANUAL',
+  });
+  const response = { ...result };
+  delete response.session_id;
+  return response;
 }
 
 async function createInspectionWithImagesForAdmin(sessionTrayId, payload = {}, inspectedBy, files = []) {
@@ -404,13 +455,19 @@ async function createInspectionWithImagesForAdmin(sessionTrayId, payload = {}, i
     );
   }
 
+  cultivationRealtime.publishSessionUpdate(inspectionResult.session_id, 'TRAY_INSPECTION_RECORDED', {
+    inspectionId: inspectionResult.inspection.inspection_id,
+    inspectionSource: 'MANUAL',
+  });
+  const response = { ...inspectionResult };
+  delete response.session_id;
   const inspectionId = inspectionResult.inspection.inspection_id;
   const images = await Promise.all(files.map(file => addInspectionImageForAdmin(
     inspectionId,
     file,
     { caption: payload.caption },
   )));
-  return { ...inspectionResult, images };
+  return { ...response, images };
 }
 
 async function addInspectionImageForAdmin(inspectionId, file, payload = {}) {
@@ -419,11 +476,16 @@ async function addInspectionImageForAdmin(inspectionId, file, payload = {}) {
   const inspection = await cultivationSessionModel.findInspectionForImage(id);
   if (!inspection) throw new AppError('Cultivation inspection not found', 404);
   const imageUrl = await cloudinaryService.uploadImage(file, 'cultivation-inspections');
-  return cultivationSessionModel.createInspectionImage(
+  const image = await cultivationSessionModel.createInspectionImage(
     id,
     imageUrl,
     parseText(payload.caption, 'caption', { maxLength: 500 }),
   );
+  cultivationRealtime.publishSessionUpdate(inspection.session_id, 'TRAY_INSPECTION_IMAGE_ADDED', {
+    inspectionId: id,
+    inspectionSource: inspection.source,
+  });
+  return image;
 }
 
 async function createIncidentForAdmin(sessionId, payload = {}, reportedBy) {
@@ -470,7 +532,12 @@ async function listIncidentsForAdmin(sessionId) {
 async function cancelForAdmin(sessionId, payload = {}) {
   const reason = parseText(payload.reason, 'reason', { required: true, maxLength: 500 });
   if (reason.length < 3) throw new AppError('reason must be at least 3 characters', 400);
-  return cultivationSessionModel.cancelForAdmin(parseId(sessionId, 'sessionId'), reason);
+  const id = parseId(sessionId, 'sessionId');
+  const result = await cultivationSessionModel.cancelForAdmin(id, reason);
+  cultivationRealtime.publishSessionUpdate(id, 'SESSION_CANCELLED', {
+    status: result.session?.status,
+  });
+  return result;
 }
 
 async function sendSessionNotification(sessionId, payload = {}, createdBy) {

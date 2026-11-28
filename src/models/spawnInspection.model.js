@@ -371,7 +371,7 @@ async function findInspectionHistory(sessionId) {
 
 async function findInspectionForImage(inspectionId) {
   const result = await pool.query(
-    `SELECT inspection_id FROM spawn_inspections WHERE inspection_id = $1`,
+    `SELECT inspection_id, session_id FROM spawn_inspections WHERE inspection_id = $1`,
     [inspectionId],
   );
   return result.rows[0] || null;

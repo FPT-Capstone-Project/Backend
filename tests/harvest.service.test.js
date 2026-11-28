@@ -3,8 +3,10 @@ const assert = require('node:assert/strict');
 
 function loadHarvestService() {
   const modelPath = require.resolve('../src/models/harvest.model');
+  const realtimePath = require.resolve('../src/services/cultivationRealtime.service');
   const servicePath = require.resolve('../src/services/harvest.service');
   const calls = [];
+  const events = [];
   const model = {
     create: async (...args) => {
       calls.push(['create', args]);
@@ -12,15 +14,15 @@ function loadHarvestService() {
     },
     start: async (...args) => {
       calls.push(['start', args]);
-      return { harvest_id: args[0], status: 'IN_PROGRESS' };
+      return { harvest_id: args[0], session_id: 15, status: 'IN_PROGRESS' };
     },
     recordYield: async (...args) => {
       calls.push(['recordYield', args]);
-      return { harvest_id: args[0], status: 'IN_PROGRESS' };
+      return { harvest_id: args[0], session_id: 15, status: 'IN_PROGRESS' };
     },
     complete: async (...args) => {
       calls.push(['complete', args]);
-      return { harvest_id: args[0], status: 'COMPLETED' };
+      return { harvest_id: args[0], session_id: 15, status: 'COMPLETED' };
     },
     findById: async (...args) => {
       calls.push(['findById', args]);
@@ -37,15 +39,21 @@ function loadHarvestService() {
   };
 
   delete require.cache[modelPath];
+  delete require.cache[realtimePath];
   delete require.cache[servicePath];
   require.cache[modelPath] = { exports: model };
-  return { service: require('../src/services/harvest.service'), calls };
+  require.cache[realtimePath] = {
+    exports: { publishSessionUpdate: (...args) => events.push(args) },
+  };
+  return { service: require('../src/services/harvest.service'), calls, events };
 }
 
 function loadHarvestRequestService() {
   const modelPath = require.resolve('../src/models/harvestRequest.model');
+  const realtimePath = require.resolve('../src/services/cultivationRealtime.service');
   const servicePath = require.resolve('../src/services/harvestRequest.service');
   const calls = [];
+  const events = [];
   const model = {
     update: async (...args) => {
       calls.push(['update', args]);
@@ -53,18 +61,22 @@ function loadHarvestRequestService() {
     },
     complete: async (...args) => {
       calls.push(['complete', args]);
-      return { harvest_request_id: args[0], status: 'COMPLETED' };
+      return { harvest_request_id: args[0], session_id: 15, status: 'COMPLETED' };
     },
   };
 
   delete require.cache[modelPath];
+  delete require.cache[realtimePath];
   delete require.cache[servicePath];
   require.cache[modelPath] = { exports: model };
-  return { service: require('../src/services/harvestRequest.service'), calls };
+  require.cache[realtimePath] = {
+    exports: { publishSessionUpdate: (...args) => events.push(args) },
+  };
+  return { service: require('../src/services/harvestRequest.service'), calls, events };
 }
 
 test('creates and advances a harvest with normalized identifiers', async () => {
-  const { service, calls } = loadHarvestService();
+  const { service, calls, events } = loadHarvestService();
 
   const created = await service.createHarvest({ sessionId: '15', totalWeightKg: 1, usableWeightKg: 1, rejectedWeightKg: 0 }, '2');
   await assert.rejects(service.createHarvest({ sessionId: 15 }, 2), { statusCode: 400 });
@@ -77,6 +89,10 @@ test('creates and advances a harvest with normalized identifiers', async () => {
     ['start', [8, 2]],
     ['complete', [8, 2]],
   ]);
+  assert.deepEqual(events, [
+    [15, 'HARVEST_STARTED', { status: 'HARVESTING' }],
+    [15, 'HARVEST_COMPLETED'],
+  ]);
   await assert.rejects(
     () => service.createHarvest({ sessionId: 0 }),
     { statusCode: 400, message: 'sessionId must be a positive integer' },
@@ -84,7 +100,7 @@ test('creates and advances a harvest with normalized identifiers', async () => {
 });
 
 test('validates and normalizes an actual harvest yield before delegating', async () => {
-  const { service, calls } = loadHarvestService();
+  const { service, calls, events } = loadHarvestService();
 
   await service.recordYield('8', {
     totalWeightKg: '5.2',
@@ -104,6 +120,7 @@ test('validates and normalizes an actual harvest yield before delegating', async
       notes: 'Mushrooms developed evenly.',
     }, 2],
   ]]);
+  assert.deepEqual(events, [[15, 'HARVEST_YIELD_RECORDED']]);
   await assert.rejects(
     () => service.recordYield('8', {
       totalWeightKg: -1,
@@ -156,7 +173,7 @@ test('validates harvest list filters and delegates history lookups', async () =>
 });
 
 test('validates and normalizes pickup and delivery receiving requests', async () => {
-  const { service, calls } = loadHarvestRequestService();
+  const { service, calls, events } = loadHarvestRequestService();
   const customer = { user_id: 3, role_id: 3 };
 
   await service.updateHarvestRequest('6', {
@@ -180,6 +197,7 @@ test('validates and normalizes pickup and delivery receiving requests', async ()
     }, customer]],
     ['complete', [6, customer]],
   ]);
+  assert.deepEqual(events, [[15, 'HARVEST_HANDOVER_COMPLETED', { status: 'COMPLETED' }]]);
   await assert.rejects(
     () => service.updateHarvestRequest('6', { harvestMethod: 'PICKUP' }, customer),
     { statusCode: 400, message: 'scheduledAt is required for PICKUP' },

@@ -28,6 +28,7 @@ function loadPaymentService({
   env = {},
   createResult = { payment: payment(), reused: false },
   paymentStatusResult = null,
+  paymentStatusResults = null,
   createLinkResult = {
     paymentLinkId: 'plink-21',
     checkoutUrl: 'https://pay.example.test/checkout/21',
@@ -36,12 +37,15 @@ function loadPaymentService({
   createLinkError = null,
   payosPaymentResult = null,
   signatureValid = true,
+  realtimeStatuses = [],
 } = {}) {
   const envPath = require.resolve('../src/config/env');
   const modelPath = require.resolve('../src/models/payment.model');
   const payosPath = require.resolve('../src/utils/payos');
+  const realtimePath = require.resolve('../src/services/paymentRealtime.service');
   const servicePath = require.resolve('../src/services/payment.service');
   const calls = [];
+  const events = [];
   const paymentModel = {
     createOrGetPayosPayment: async (...args) => {
       calls.push({ type: 'create', args });
@@ -58,7 +62,7 @@ function loadPaymentService({
     },
     markPayosPaymentFailed: async (...args) => {
       calls.push({ type: 'failed', args });
-      return null;
+      return { payment_id: args[0], order_id: 11, status: 'FAILED' };
     },
     markPayosPaymentAsPaid: async (...args) => {
       calls.push({ type: 'paid', args });
@@ -66,7 +70,11 @@ function loadPaymentService({
     },
     findPayosPaymentStatus: async (...args) => {
       calls.push({ type: 'status', args });
-      return paymentStatusResult;
+      return paymentStatusResults ? paymentStatusResults.shift() : paymentStatusResult;
+    },
+    findPayosPaymentRealtimeStatus: async (...args) => {
+      calls.push({ type: 'realtime-status', args });
+      return realtimeStatuses.shift() || null;
     },
   };
   const payos = {
@@ -92,6 +100,7 @@ function loadPaymentService({
   delete require.cache[envPath];
   delete require.cache[modelPath];
   delete require.cache[payosPath];
+  delete require.cache[realtimePath];
   delete require.cache[servicePath];
   require.cache[envPath] = {
     exports: {
@@ -107,8 +116,13 @@ function loadPaymentService({
   };
   require.cache[modelPath] = { exports: paymentModel };
   require.cache[payosPath] = { exports: payos };
+  require.cache[realtimePath] = {
+    exports: {
+      publishOrderPaymentStatus: (...args) => events.push(args),
+    },
+  };
 
-  return { service: require('../src/services/payment.service'), calls };
+  return { service: require('../src/services/payment.service'), calls, events };
 }
 
 test('uses the persisted reservation expiry for the PayOS link and response', async () => {
@@ -117,7 +131,7 @@ test('uses the persisted reservation expiry for the PayOS link and response', as
     expires_at: persistedExpiry,
     expires_at_epoch: Math.floor(persistedExpiry.getTime() / 1000),
   });
-  const { service, calls } = loadPaymentService({
+  const { service, calls, events } = loadPaymentService({
     createResult: { payment: pendingPayment, reused: false },
   });
 
@@ -140,6 +154,7 @@ test('uses the persisted reservation expiry for the PayOS link and response', as
     qrCode: 'qr-21',
     expiresAt: persistedExpiry,
   }]);
+  assert.deepEqual(events, [[3, 11, 'PENDING', 'PENDING']]);
 });
 
 test('returns an unexpired PayOS checkout link without creating another one', async () => {
@@ -198,7 +213,12 @@ test('rejects a PayOS link request with an invalid redirect URL before changing 
 });
 
 test('processes a valid successful PayOS webhook using its order code, amount, and reference', async () => {
-  const { service, calls } = loadPaymentService();
+  const { service, calls, events } = loadPaymentService({
+    realtimeStatuses: [
+      { user_id: 3, order_id: 11, order_status: 'PENDING', payment_status: 'PENDING' },
+      { user_id: 3, order_id: 11, order_status: 'PROCESSING', payment_status: 'PAID' },
+    ],
+  });
   const payload = {
     code: '00',
     success: true,
@@ -211,6 +231,7 @@ test('processes a valid successful PayOS webhook using its order code, amount, a
   assert.deepEqual(calls.find(({ type }) => type === 'verify').args, [payload.data, 'valid-signature']);
   assert.deepEqual(calls.find(({ type }) => type === 'paid').args, [21, 530000, 'PAYOS-REFERENCE-21']);
   assert.equal(calls.some(({ type }) => type === 'failed'), false);
+  assert.deepEqual(events, [[3, 11, 'PROCESSING', 'PAID']]);
 });
 
 test('records a failed PayOS event but acknowledges an invalid signature without database changes', async (t) => {
@@ -239,11 +260,17 @@ test('records a failed PayOS event but acknowledges an invalid signature without
 });
 
 test('syncs a customer payment only after PayOS confirms a sufficient paid amount', async () => {
-  const { service, calls } = loadPaymentService({
-    paymentStatusResult: {
-      order: { order_id: 11, status: 'PENDING', payment_status: 'PENDING' },
-      payment: payment({ payment_id: 21, order_id: 11, amount: '530000' }),
-    },
+  const { service, calls, events } = loadPaymentService({
+    paymentStatusResults: [
+      {
+        order: { order_id: 11, status: 'PENDING', payment_status: 'PENDING' },
+        payment: payment({ payment_id: 21, order_id: 11, amount: '530000' }),
+      },
+      {
+        order: { order_id: 11, status: 'PROCESSING', payment_status: 'PAID' },
+        payment: payment({ payment_id: 21, order_id: 11, amount: '530000', status: 'PAID' }),
+      },
+    ],
     payosPaymentResult: {
       orderCode: 21,
       status: 'PAID',
@@ -262,6 +289,7 @@ test('syncs a customer payment only after PayOS confirms a sufficient paid amoun
     530000,
     'PAYOS-REFERENCE-21',
   ]);
+  assert.deepEqual(events, [[3, 11, 'PROCESSING', 'PAID']]);
 });
 
 test('does not update a local payment when PayOS still reports it as pending', async () => {

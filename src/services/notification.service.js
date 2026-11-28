@@ -1,4 +1,5 @@
 const notificationModel = require('../models/notification.model');
+const notificationRealtime = require('./notificationRealtime.service');
 const AppError = require('../utils/app-error');
 const { parsePagination } = require('../utils/pagination');
 
@@ -79,6 +80,7 @@ async function sendCultivationSessionNotification(sessionId, payload = {}, creat
     type,
     createdBy: operatorId,
   });
+  notificationRealtime.publishNewNotification(recipient.user_id, notification.notification_id);
   return notification;
 }
 

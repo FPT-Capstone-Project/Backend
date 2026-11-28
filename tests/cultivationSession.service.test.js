@@ -4,26 +4,32 @@ const assert = require('node:assert/strict');
 function loadService() {
   const modelPath = require.resolve('../src/models/cultivationSession.model');
   const cloudinaryPath = require.resolve('../src/services/cloudinary.service');
+  const realtimePath = require.resolve('../src/services/cultivationRealtime.service');
   const servicePath = require.resolve('../src/services/cultivationSession.service');
   const calls = [];
   const uploads = [];
+  const events = [];
+  let growthUpdateError;
   const model = {
     createInspectionForAdmin: async (...args) => {
       calls.push(args);
-      return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
+      return { session_id: 7, inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
     },
     createInspectionFromQrForAdmin: async (...args) => {
       calls.push(args);
-      return { inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
+      return { session_id: 7, inspection: { inspection_id: 1 }, progress: { progress_id: 1 } };
     },
     updateInspectionForAdmin: async (...args) => {
       calls.push(args);
-      return { inspection: { inspection_id: args[1] } };
+      return { session_id: 7, inspection: { inspection_id: args[1] } };
     },
     assignTraysForAdmin: async (...args) => {
       calls.push(args);
       return {
         session_id: args[0],
+        status: 'CULTIVATING',
+        harvest_status: 'NOT_READY',
+        harvest_date: '2026-11-30',
         floor: { floor_id: 2, floor_name: 'Floor 2' },
         assigned_trays: [{ session_tray_id: 1, tray_id: args[1].trayIds[0], status: 'ACTIVE' }],
         required_trays: args[1].trayIds.length,
@@ -72,17 +78,37 @@ function loadService() {
     },
     updateGrowthForAdmin: async (...args) => {
       calls.push(args);
-      return { session_id: 1, status: 'CULTIVATING' };
+      if (growthUpdateError) throw growthUpdateError;
+      return {
+        session_id: 1,
+        status: 'CULTIVATING',
+        harvest_status: 'NOT_READY',
+        growth_status: args[1].currentStage,
+        progress_percent: args[1].progressPercent,
+        harvest_ready: false,
+        expected_harvest_date: '2026-11-30',
+      };
     },
     updateHarvestReadinessForAdmin: async (...args) => {
       calls.push(args);
       return { session_id: 1, status: 'HARVEST_READY', harvest_status: 'HARVEST_READY' };
     },
+    updateTrayGrowthFromQrForAdmin: async () => ({
+      stageChanged: true,
+      data: {
+        session_id: 7,
+        harvest_status: 'NOT_READY',
+        growth_status: 'PINNING',
+        harvest_ready: false,
+        synchronization: { is_synchronized: true, matching_trays: 2 },
+      },
+    }),
+    cancelForAdmin: async (sessionId) => ({ session: { session_id: sessionId, status: 'CANCELLED' } }),
     createIncidentForAdmin: async (...args) => {
       calls.push(args);
       return { issue_id: 1, issue_type: args[1].incidentType };
     },
-    findByIdForAdmin: async (sessionId) => ({
+    findByIdForAdmin: async (sessionId) => sessionId === 8 ? null : ({
       session_id: sessionId,
       user_id: 7,
       status: 'CULTIVATING',
@@ -95,7 +121,7 @@ function loadService() {
     },
     findInspectionForImage: async (...args) => {
       calls.push(args);
-      return { inspection_id: args[0] };
+      return { inspection_id: args[0], session_id: 7, source: 'MANUAL' };
     },
     createInspectionImage: async (...args) => {
       calls.push(args);
@@ -104,6 +130,7 @@ function loadService() {
   };
   delete require.cache[modelPath];
   delete require.cache[cloudinaryPath];
+  delete require.cache[realtimePath];
   delete require.cache[servicePath];
   require.cache[modelPath] = { exports: model };
   require.cache[cloudinaryPath] = {
@@ -114,22 +141,36 @@ function loadService() {
       },
     },
   };
-  return { service: require('../src/services/cultivationSession.service'), calls, uploads };
+  require.cache[realtimePath] = {
+    exports: { publishSessionUpdate: (...args) => events.push(args) },
+  };
+  return {
+    service: require('../src/services/cultivationSession.service'),
+    calls,
+    uploads,
+    events,
+    failGrowthUpdate(error) { growthUpdateError = error; },
+  };
 }
 
 test('validates daily inspection input and passes the Farm Operator ID', async () => {
-  const { service, calls } = loadService();
+  const { service, calls, events } = loadService();
   const result = await service.createInspectionForAdmin('14', {
     trayCondition: 'Clean',
     mushroomCondition: 'Healthy',
   }, '3');
 
+  assert.equal(result.session_id, undefined);
   assert.equal(result.inspection.inspection_id, 1);
   assert.deepEqual(calls, [[14, {
     trayCondition: 'Clean',
     mushroomCondition: 'Healthy',
     notes: undefined,
   }, 3]]);
+  assert.deepEqual(events, [[7, 'TRAY_INSPECTION_RECORDED', {
+    inspectionId: 1,
+    inspectionSource: 'MANUAL',
+  }]]);
   await assert.rejects(
     () => service.createInspectionForAdmin('14', { trayCondition: 'x'.repeat(501) }, '3'),
     { statusCode: 400, message: 'trayCondition must be at most 500 characters' },
@@ -137,23 +178,28 @@ test('validates daily inspection input and passes the Farm Operator ID', async (
 });
 
 test('validates and updates an existing daily tray inspection', async () => {
-  const { service, calls } = loadService();
+  const { service, calls, events } = loadService();
   const result = await service.updateInspectionForAdmin('14', '20', {
     trayCondition: 'Clean',
     mushroomCondition: 'Healthy',
     notes: 'Corrected observation',
   });
 
+  assert.equal(result.session_id, undefined);
   assert.equal(result.inspection.inspection_id, 20);
   assert.deepEqual(calls, [[14, 20, {
     trayCondition: 'Clean',
     mushroomCondition: 'Healthy',
     notes: 'Corrected observation',
   }]]);
+  assert.deepEqual(events, [[7, 'TRAY_INSPECTION_UPDATED', {
+    inspectionId: 20,
+    inspectionSource: 'MANUAL',
+  }]]);
 });
 
 test('records a daily inspection and uploads each attached image', async () => {
-  const { service, calls, uploads } = loadService();
+  const { service, calls, uploads, events } = loadService();
   const files = [
     { buffer: Buffer.from('image one') },
     { buffer: Buffer.from('image two') },
@@ -175,6 +221,20 @@ test('records a daily inspection and uploads each attached image', async () => {
   assert.equal(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg').length, 2);
   assert.ok(calls.filter(call => call[0] === 1 && call[1] === 'https://images.example.test/cultivation.jpg')
     .every(call => call[2] === 'Daily check'));
+  assert.deepEqual(events, [
+    [7, 'TRAY_INSPECTION_RECORDED', {
+      inspectionId: 1,
+      inspectionSource: 'MANUAL',
+    }],
+    [7, 'TRAY_INSPECTION_IMAGE_ADDED', {
+      inspectionId: 1,
+      inspectionSource: 'MANUAL',
+    }],
+    [7, 'TRAY_INSPECTION_IMAGE_ADDED', {
+      inspectionId: 1,
+      inspectionSource: 'MANUAL',
+    }],
+  ]);
 });
 
 test('accepts either a QR token or a manual session_tray_id and rejects conflicting input', async () => {
@@ -240,6 +300,41 @@ test('validates and delegates explicitly selected floor and trays', async () => 
     () => service.assignTraysForAdmin('7', {}),
     { statusCode: 400 },
   );
+});
+
+test('emits a safe session event after a persisted growth update', async () => {
+  const { service, events } = loadService();
+  await service.updateGrowthForAdmin('7', {
+    growthStatus: 'PINNING',
+    progressPercent: 40,
+    condition: 'NORMAL',
+    notes: 'Private inspection notes',
+  });
+
+  assert.deepEqual(events, [[7, 'GROWTH_UPDATED', {
+    status: 'CULTIVATING',
+    harvestStatus: 'NOT_READY',
+    growthStage: 'PINNING',
+    progressPercent: 40,
+    harvestReady: false,
+    expectedHarvestDate: '2026-11-30',
+  }]]);
+});
+
+test('does not emit when the persisted growth update fails', async () => {
+  const { service, events, failGrowthUpdate } = loadService();
+  const error = new Error('database unavailable');
+  failGrowthUpdate(error);
+
+  await assert.rejects(
+    () => service.updateGrowthForAdmin('7', {
+      growthStatus: 'PINNING',
+      progressPercent: 40,
+      condition: 'NORMAL',
+    }),
+    error,
+  );
+  assert.deepEqual(events, []);
 });
 
 test('lists currently assignable trays and returns immutable cultivation progress history', async () => {

@@ -1,8 +1,11 @@
 require('dotenv').config();
 process.env.TZ = 'Asia/Ho_Chi_Minh';
 
+const http = require('node:http');
 const app = require('./app');
 const env = require('./config/env');
+const { initializeSocketServer } = require('./socket');
+const paymentRealtime = require('./services/paymentRealtime.service');
 const iotMqtt = require('./services/iotMqtt.service');
 const paymentModel = require('./models/payment.model');
 const pool = require('./config/db');
@@ -18,11 +21,23 @@ const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const payosPaymentExpiryInterval = setInterval(() => {
   paymentModel.expireStalePayosPayments()
+    .then(({ statusChanges }) => {
+      for (const change of statusChanges) {
+        paymentRealtime.publishOrderPaymentStatus(
+          change.user_id,
+          change.order_id,
+          change.status,
+          change.payment_status,
+        );
+      }
+    })
     .catch((error) => console.error('Không thể xử lý thanh toán PayOS hết hạn:', error));
 }, 60_000);
 payosPaymentExpiryInterval.unref();
 
-const server = app.listen(env.port, () => {
+const server = http.createServer(app);
+const io = initializeSocketServer(server);
+server.listen(env.port, () => {
   console.log(`
 =================================
 Máy chủ đang chạy trên cổng ${env.port}
@@ -46,7 +61,7 @@ async function shutdown(signal) {
     await deviceIncidents.stop();
     await environmentHistory.stop();
     await Promise.all([
-      new Promise((resolve) => server.close(resolve)),
+      new Promise((resolve) => io.close(resolve)),
       iotMqtt.stop(),
     ]);
     await pool.end();
