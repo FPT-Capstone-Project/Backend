@@ -93,3 +93,57 @@ test('rejects invalid JWTs before looking up a user', async () => {
     await new Promise((resolve) => io.close(resolve));
   }
 });
+
+test('tracks online users across multiple sockets and exposes presence only to admins', async () => {
+  const server = http.createServer();
+  const users = {
+    1: { user_id: 1, role_id: 1, status: 'ACTIVE', role_name: 'Admin' },
+    7: { user_id: 7, role_id: 3, status: 'ACTIVE', role_name: 'Customer' },
+  };
+  const io = createSocketServer(server, {
+    jwtSecret: JWT_SECRET,
+    corsOrigins: ['*'],
+    findUserById: async (userId) => users[userId] || null,
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const url = `http://127.0.0.1:${server.address().port}`;
+  const clients = [];
+  const makeClient = (userId) => {
+    const client = connect(url, {
+      auth: { token: createToken(userId) },
+      transports: ['websocket'],
+      reconnection: false,
+    });
+    clients.push(client);
+    return client;
+  };
+
+  try {
+    const customer = makeClient(7);
+    await waitForConnection(customer);
+    const admin = makeClient(1);
+    const snapshot = new Promise((resolve) => admin.once('user:presence.snapshot', resolve));
+    await waitForConnection(admin);
+    assert.deepEqual((await snapshot).userIds.sort((a, b) => a - b), [1, 7]);
+
+    let customerReceivedPresence = false;
+    customer.on('user:presence.updated', () => { customerReceivedPresence = true; });
+    const offline = new Promise((resolve) => {
+      admin.on('user:presence.updated', (event) => {
+        if (event.userId === 7 && event.online === false) resolve(event);
+      });
+    });
+    const secondCustomerSocket = makeClient(7);
+    await waitForConnection(secondCustomerSocket);
+    customer.close();
+    await new Promise(setImmediate);
+    assert.equal(customerReceivedPresence, false);
+
+    secondCustomerSocket.close();
+    assert.deepEqual(await offline, { userId: 7, online: false });
+    assert.equal(customerReceivedPresence, false);
+  } finally {
+    for (const client of clients) client.close();
+    await new Promise((resolve) => io.close(resolve));
+  }
+});

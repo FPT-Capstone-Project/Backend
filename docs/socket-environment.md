@@ -6,6 +6,8 @@ Socket.IO is attached to the same HTTP server as Express. It uses the API host, 
 
 Inspection realtime uses the existing cultivation Socket.IO event and requires no additional environment variables.
 
+IoT Socket.IO broadcasts reuse the MQTT connection settings below. Leaving `MQTT_HOST` empty disables MQTT reception and its Socket.IO events; room authorization still applies.
+
 | Variable | Required | Use |
 | --- | --- | --- |
 | `PORT` | No | Shared HTTP/Socket.IO port; defaults to `3000` |
@@ -18,6 +20,11 @@ Inspection realtime uses the existing cultivation Socket.IO event and requires n
 | `DB_NAME` | If no `DATABASE_URL` | PostgreSQL database; defaults to `capstone` |
 | `DB_USER` | If no `DATABASE_URL` | PostgreSQL username; defaults to `postgres` |
 | `DB_PASSWORD` | If no `DATABASE_URL` | PostgreSQL password |
+| `MQTT_HOST` | No | MQTT broker hostname; empty disables MQTT |
+| `MQTT_PORT` | No | MQTT over TLS port; defaults to `8883` |
+| `MQTT_USERNAME` | When `MQTT_HOST` is set | Broker username |
+| `MQTT_PASSWORD` | When `MQTT_HOST` is set | Broker password |
+| `MQTT_CLIENT_ID` | No | Base ID; backend appends a random per-process suffix |
 
 Example production configuration:
 
@@ -27,6 +34,11 @@ PORT=3000
 CORS_ORIGINS=https://app.example.com,https://admin.example.com
 JWT_SECRET=replace-with-a-long-random-secret
 DATABASE_URL=postgresql://user:password@db.example.com:5432/capstone
+MQTT_HOST=your-deployment-hostname
+MQTT_PORT=8883
+MQTT_USERNAME=backend-client
+MQTT_PASSWORD=replace-with-broker-password
+MQTT_CLIENT_ID=smartmush-backend
 ```
 
 `CORS_ORIGINS` entries must be origins (scheme, host, and optional port), not full page URLs with paths. The backend splits the value on commas and trims whitespace. In development, an unset value defaults to `*`; outside development, it defaults to no allowed origins, so configure it explicitly.
@@ -34,6 +46,8 @@ DATABASE_URL=postgresql://user:password@db.example.com:5432/capstone
 `JWT_SECRET` must match the secret used to sign API access tokens. Production startup rejects the development fallback secret. Keep this secret and database credentials on the server; never expose them in frontend configuration.
 
 The Socket.IO handshake uses the existing HTTP server and checks the account status against PostgreSQL. The database must be reachable for a new socket to authenticate and for protected room subscriptions to be authorized.
+
+The MQTT client uses TLS certificate and hostname verification. A registered IoT master must be assigned to the target cultivation room for telemetry to be emitted to that room. MQTT events are sent after persistence; they do not contain broker credentials.
 
 ## Frontend configuration
 
@@ -50,5 +64,6 @@ In production, use HTTPS for the API origin so the browser uses a secure Socket.
 ## Deployment notes
 
 - The current server uses Socket.IO's in-memory room adapter. Multiple backend instances do not share room membership or cross-instance emits; use a compatible shared adapter and deployment configuration before scaling horizontally.
+- User presence is also process-local. For multiple instances, use shared presence coordination in addition to a Socket.IO adapter.
 - CORS is not authorization. The backend still authenticates the JWT and checks resource ownership/assignment before joining protected rooms.
 - REST endpoints remain the source of truth. Reconnect and refresh application state over REST if an event may have been missed.

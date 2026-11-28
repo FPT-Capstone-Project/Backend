@@ -28,6 +28,7 @@ function createSocketServer(httpServer, {
       origin: corsOrigins.includes('*') ? '*' : corsOrigins,
     },
   });
+  const onlineUsers = new Map();
 
   io.use(async (socket, next) => {
     const token = getToken(socket);
@@ -72,6 +73,21 @@ function createSocketServer(httpServer, {
   });
 
   io.on('connection', (socket) => {
+    const { userId, roleId } = socket.data.user;
+    let userSockets = onlineUsers.get(userId);
+    if (!userSockets) {
+      userSockets = new Set();
+      onlineUsers.set(userId, userSockets);
+    }
+    const wasOffline = userSockets.size === 0;
+    userSockets.add(socket.id);
+    if (wasOffline) {
+      io.to('admin').emit('user:presence.updated', { userId, online: true });
+    }
+    if (roleId === 1) {
+      socket.emit('user:presence.snapshot', { userIds: [...onlineUsers.keys()] });
+    }
+
     function acknowledge(callback, response) {
       if (typeof callback === 'function') callback(response);
       else if (!response.ok) socket.emit('room:subscription:error', response);
@@ -109,6 +125,20 @@ function createSocketServer(httpServer, {
 
     socket.on('room:join', joinRoom);
     socket.on('room:leave', leaveRoom);
+    socket.on('error', (error) => {
+      logger.error('Lỗi kết nối socket:', { userId, error });
+    });
+    socket.on('disconnect', (reason) => {
+      const activeSockets = onlineUsers.get(userId);
+      if (activeSockets) {
+        activeSockets.delete(socket.id);
+        if (activeSockets.size === 0) {
+          onlineUsers.delete(userId);
+          io.to('admin').emit('user:presence.updated', { userId, online: false });
+        }
+      }
+      logger.info?.('Socket đã ngắt kết nối:', { userId, reason });
+    });
   });
 
   return io;
@@ -149,10 +179,22 @@ function emitToSession(sessionId, event, payload) {
   getSocketServer().to(`session:${parsedSessionId}`).emit(event, payload);
 }
 
+function emitToRoom(roomId, event, payload) {
+  const parsedRoomId = Number(roomId);
+  if (!Number.isSafeInteger(parsedRoomId) || parsedRoomId <= 0) {
+    throw new TypeError('roomId must be a positive integer');
+  }
+  if (typeof event !== 'string' || !event.trim()) {
+    throw new TypeError('event must be a non-empty string');
+  }
+  getSocketServer().to(`room:${parsedRoomId}`).emit(event, payload);
+}
+
 module.exports = {
   createSocketServer,
   initializeSocketServer,
   getSocketServer,
   emitToUser,
   emitToSession,
+  emitToRoom,
 };

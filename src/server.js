@@ -12,11 +12,6 @@ const pool = require('./config/db');
 const autoMisting = require('./services/autoMisting.worker');
 const deviceIncidents = require('./services/deviceIncident.worker');
 const environmentHistory = require('../jobs/environmentHistory.job');
-// One MQTT connection per process; importing Express does not open a connection.
-iotMqtt.start();
-autoMisting.start();
-deviceIncidents.start();
-environmentHistory.start();
 const baseUrl = process.env.SERVER_URL || `http://localhost:${env.port}`;
 
 const payosPaymentExpiryInterval = setInterval(() => {
@@ -37,6 +32,11 @@ payosPaymentExpiryInterval.unref();
 
 const server = http.createServer(app);
 const io = initializeSocketServer(server);
+// Initialize Socket.IO before MQTT can receive a persisted message to broadcast.
+iotMqtt.start();
+autoMisting.start();
+deviceIncidents.start();
+environmentHistory.start();
 server.listen(env.port, () => {
   console.log(`
 =================================

@@ -32,6 +32,22 @@ Possible error codes: `INVALID_ROOM_REQUEST`, `ROOM_ACCESS_DENIED`, `ROOM_SUBSCR
 
 Request and successful acknowledgment have the same shapes as `room:join`. Leaving does not require access to the resource.
 
+### User presence events (Admin only)
+
+`user:presence.snapshot` is sent to an Admin after connection:
+
+```json
+{ "userIds": [1, 7, 18] }
+```
+
+`user:presence.updated` is sent to the `admin` role room when a user's first socket connects or last socket disconnects:
+
+```json
+{ "userId": 7, "online": false }
+```
+
+Multiple tabs/connections count as one online user. Presence is kept in process memory, so a reconnect updates presence and a multi-instance deployment needs shared presence coordination. These events are not sent to Customers or Experts.
+
 ## Server to client
 
 ### `notification:new`
@@ -152,6 +168,52 @@ Automatic camera inspection uses the same event with `"inspectionSource": "AUTO"
 }
 ```
 
+### IoT/MQTT events
+
+MQTT data is broadcast only after its database write succeeds and only to `room:{roomId}` for the room currently assigned to that registered IoT master. Clients must join the room through the authorized `room:join` request. An unassigned master is persisted where applicable but is not broadcast. The backend does not send MQTT credentials or raw MQTT topics.
+
+#### `iot:sensor.updated`
+
+```json
+{
+  "masterId": "master01",
+  "nodeId": 1,
+  "sensorId": 2,
+  "ok": true,
+  "temperature": 27.5,
+  "humidity": 85.2,
+  "receivedAt": "2026-11-28T05:30:00.000Z",
+  "retained": false
+}
+```
+
+Failed readings have `ok: false` and null `temperature`/`humidity`. `receivedAt` is the backend's MQTT arrival time; `retained: true` means the broker replayed a retained message and the reading may not be current.
+
+#### `iot:master.status.updated`
+
+```json
+{
+  "masterId": "master01",
+  "status": "online",
+  "receivedAt": "2026-11-28T05:30:00.000Z",
+  "retained": false
+}
+```
+
+#### `iot:ssr.state.updated`
+
+```json
+{
+  "masterId": "master01",
+  "channel": 4,
+  "state": "ON",
+  "receivedAt": "2026-11-28T05:30:00.000Z",
+  "retained": false
+}
+```
+
+SSR state is reported device state, not confirmation that a physical valve/light/fan operated or acknowledgment of a specific command. Use REST to load full sensor/SSR state and history; the Socket.IO event is a best-effort update signal.
+
 ## Rooms and authorization
 
 The server automatically assigns `user:{userId}` to every authenticated socket, `admin` to role ID `1`, and `expert` to Expert accounts. Resource rooms are joined only through `room:join`.
@@ -160,4 +222,19 @@ The server automatically assigns `user:{userId}` to every authenticated socket, 
 - Customers can join their own session, issue, or consultation; they can join a physical room only while they have an active tray there.
 - Experts can join only issues and consultations assigned to them.
 
-The backend does not currently expose IoT/MQTT data as Socket.IO events.
+## Core guarantees and limits
+
+| Requirement | Current behavior |
+| --- | --- |
+| Shared HTTP server | Socket.IO attaches to the Express HTTP server on the same origin/port. |
+| Authentication | JWT is verified at handshake and the active account/role is loaded from PostgreSQL. |
+| Room authorization | The client submits only resource type and ID; the server authorizes access and constructs the room name. |
+| Connection lifecycle | Socket.IO reconnects at the client; after reconnect the client must rejoin authorized resource rooms. |
+| Online users | The server tracks active socket IDs per user and reports first-connect/last-disconnect to Admins only. This is process-local. |
+| Event distribution | User/private, role and authorized resource rooms are used according to the event's audience. |
+| Payload safety | Application services build explicit allowlisted payloads; do not send complete database or MQTT objects. |
+| Error handling | Authentication, room authorization and realtime delivery failures are logged; delivery failures do not undo committed business writes. |
+| Persistence ordering | Business writes finish successfully before their realtime event is published. Failed/rejected persistence does not broadcast the update. |
+| Delivery model | Events are best-effort, not a durable queue. REST remains the source of truth; clients refresh after reconnect. |
+
+Room membership and online presence use the in-memory Socket.IO adapter/map. For multiple backend instances, configure a shared adapter and shared presence coordination; do not assume events or online state are synchronized between processes.

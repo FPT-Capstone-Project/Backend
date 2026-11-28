@@ -24,6 +24,10 @@ const socket = io(API_URL, {
 
 socket.on('connect', () => {
   console.info('Socket connected', socket.id);
+  // Socket.IO reconnects automatically, but server-owned resource rooms must be rejoined.
+  for (const room of activeRooms) {
+    socket.emit('room:join', room);
+  }
 });
 
 socket.on('connect_error', (error) => {
@@ -43,6 +47,8 @@ socket.disconnect();
 socket.auth = { token: newAccessToken };
 socket.connect();
 ```
+
+Socket.IO reconnects automatically after transient network failures. Resource room membership is server-side and does not survive reconnection; keep track of the resource subscriptions required by the current UI and request them again on each `connect`. Refresh current state through REST because events may have been missed while disconnected.
 
 ## Subscribe to a resource room
 
@@ -115,6 +121,24 @@ socket.off('cultivation:session.updated', onSessionUpdated);
 ```
 
 `notification:new` currently covers notifications sent through the cultivation-session notification API. Notifications inserted directly by other backend workflows do not currently emit this Socket.IO event.
+
+## IoT/MQTT updates
+
+Join the physical room using the same authorized room API. The server broadcasts IoT updates only to the room assigned to the registered master:
+
+```js
+socket.emit('room:join', { type: 'room', id: roomId }, (result) => {
+  if (!result.ok) return console.error('Room subscription rejected:', result.code);
+});
+
+socket.on('iot:sensor.updated', (reading) => refreshRoomSensors(reading.masterId));
+socket.on('iot:master.status.updated', (status) => refreshMasterStatus(status.masterId));
+socket.on('iot:ssr.state.updated', (state) => refreshRoomSsrState(state.masterId));
+```
+
+Events are emitted only after MQTT data is persisted. Check `retained`; retained broker messages may be old. SSR reports show device-reported state and do not prove physical actuation. Fetch authoritative/latest details through REST.
+
+Admins receive `user:presence.snapshot` and `user:presence.updated`; other roles do not receive presence data. Presence is process-local and intended for a single backend instance.
 
 ## Connection errors
 
